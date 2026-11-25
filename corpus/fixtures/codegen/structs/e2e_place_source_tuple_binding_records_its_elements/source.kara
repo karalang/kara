@@ -11,7 +11,7 @@ fn u4()      { let g = G { h: H { pe: (mk(44), 0) } }; let x = g.h.pe; println(f
 fn u5()      { let t = (mk(45), 0); let x = t; println(f"  b{x.0.id}/{x.0.tag}") }
 fn u6()      { let h = H { pe: (mk(46), 0) }; println(f"  b{h.pe.0.id}/{h.pe.0.tag}") }
 fn u7(h: own H)  { let x = h.pe; println(f"  b{x.0.id}/{x.0.tag}") }
-fn u8()      { let h = H { pe: (mk(48), 0) }; let x = h.pe; let y = x; println(f"  b{y.0.id}/{y.0.tag}") }
+fn u8_fn()      { let h = H { pe: (mk(48), 0) }; let x = h.pe; let y = x; println(f"  b{y.0.id}/{y.0.tag}") }
 
 fn main() {
     println("bound");     u1();                      println("bound end");
@@ -21,6 +21,6 @@ fn main() {
     println("literal");   u5();                      println("literal end");
     println("nobind");    u6();                      println("nobind end");
     println("paramroot"); u7(H { pe: (mk(47), 0) }); println("paramroot end");
-    println("rebound");   u8();                      println("rebound end");
+    println("rebound");   u8_fn();                      println("rebound end");
     println("done")
 }

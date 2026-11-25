@@ -22,7 +22,7 @@ fn u1(x: own EArr) -> Array[R, 2] { match x { EArr.A(v) => { return v; } EArr.B 
 fn u2(x: own EArr) -> Array[R, 2] { match x { EArr.A(v) => { let u = v; return u; } EArr.B => { return z(); } } }
 fn u3(x: own EArr) -> Array[R, 2] { match x { EArr.A(v) => v, EArr.B => z() } }
 fn u4(x: own EArr) -> i64 { match x { EArr.A(v) => { return eat(v); } EArr.B => { return 0; } } }
-fn u8(x: own E2) -> Array[R, 2] { match x { E2.A(v, n) => { return v; } E2.B => { return z(); } } }
+fn u8_fn(x: own E2) -> Array[R, 2] { match x { E2.A(v, n) => { return v; } E2.B => { return z(); } } }
 fn u9(x: own Esx) -> Array[R, 2] { match x { Esx.A { a } => { return a; } Esx.B => { return z(); } } }
 fn u10(x: own EArr) -> Option[Array[R, 2]] { match x { EArr.A(v) => { return Some(v); } EArr.B => { return None; } } }
 fn u11(x: own EArr, c: bool) -> Array[R, 2] { match x { EArr.A(v) => { if c { return v; } return z(); } EArr.B => { return z(); } } }
@@ -46,7 +46,7 @@ fn main() {
   let a12 = u2(EArr.A([mk(23), mk(24)])); println(f"u2 {a12[0].id}");
   let a13 = u3(EArr.A([mk(25), mk(26)])); println(f"u3 {a13[0].id}");
   println(f"u4 {u4(EArr.A([mk(27), mk(28)]))}");
-  let a14 = u8(E2.A([mk(29), mk(30)], 3)); println(f"u8 {a14[0].id}");
+  let a14 = u8_fn(E2.A([mk(29), mk(30)], 3)); println(f"u8 {a14[0].id}");
   let a15 = u9(Esx.A { a: [mk(31), mk(32)] }); println(f"u9 {a15[0].id}");
   let a16 = u10(EArr.A([mk(33), mk(34)])); println("u10");
   let a17 = u11(EArr.A([mk(35), mk(36)]), true); println(f"u11 {a17[0].id}");

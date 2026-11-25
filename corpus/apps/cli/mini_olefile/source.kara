@@ -413,15 +413,16 @@ fn le_u64(b: ref Vec[u8], o: i64) -> u64 {
     u
 }
 
-// olefile's i16(c, o) and i32(c, o): struct.unpack of c[o:o+n].
-fn i16(b: ref Vec[u8], o: i64) -> Result[i64, PyErr] {
+// olefile's i16(c, o) and i32(c, o), here read_i16 and read_i32 (a primitive
+// type name cannot name a function): struct.unpack of c[o:o+n].
+fn read_i16(b: ref Vec[u8], o: i64) -> Result[i64, PyErr] {
     if o < 0 or o + 2 > b.len() {
         return Err(struct_err(2));
     }
     Ok(le_u16(b, o))
 }
 
-fn i32(b: ref Vec[u8], o: i64) -> Result[i64, PyErr] {
+fn read_i32(b: ref Vec[u8], o: i64) -> Result[i64, PyErr] {
     if o < 0 or o + 4 > b.len() {
         return Err(struct_err(4));
     }
@@ -1294,8 +1295,8 @@ fn drop_nuls(b: ref Vec[u8]) -> Vec[u8] {
 }
 
 fn filetime_at(s: ref Vec[u8], o: i64) -> Result[u64, PyErr] {
-    let lo = i32(s, o)?;
-    let hi = i32(s, o + 4)?;
+    let lo = read_i32(s, o)?;
+    let hi = read_i32(s, o + 4)?;
     Ok((lo as u64) + ((hi as u64) << 32))
 }
 
@@ -1323,30 +1324,30 @@ fn byte_at(s: ref Vec[u8], o: i64) -> Result[i64, PyErr] {
 // _parse_property_basic(): the value and the size it took.
 fn parse_basic(s: ref Vec[u8], offset: i64, pid: i64, t: i64, convert: bool, no_conversion: ref Vec[i64]) -> Result[(Val, i64), PyErr] {
     if t == VT_I2 {
-        let mut v = i16(s, offset)?;
+        let mut v = read_i16(s, offset)?;
         if v >= 32768 {
             v -= 65536;
         }
         return Ok((Val.Int(v), 2));
     }
     if t == VT_UI2 {
-        return Ok((Val.Int(i16(s, offset)?), 2));
+        return Ok((Val.Int(read_i16(s, offset)?), 2));
     }
     if t == VT_I4 or t == VT_INT or t == VT_ERROR or t == VT_UI4 or t == VT_UINT {
-        return Ok((Val.Int(i32(s, offset)?), 4));
+        return Ok((Val.Int(read_i32(s, offset)?), 4));
     }
     if t == VT_BSTR or t == VT_LPSTR {
-        let count = i32(s, offset)?;
+        let count = read_i32(s, offset)?;
         let v = drop_nuls(sub_bytes(s, offset + 4, offset + 4 + count - 1));
         return Ok((Val.Bytes(v), 4 + count));
     }
     if t == VT_BLOB or t == VT_CF {
-        let count = i32(s, offset)?;
+        let count = read_i32(s, offset)?;
         return Ok((Val.Bytes(sub_bytes(s, offset + 4, offset + 4 + count)), 4 + count));
     }
     if t == VT_LPWSTR {
         // olefile reads the count from the string's first four bytes
-        let count = i32(s, offset + 4)?;
+        let count = read_i32(s, offset + 4)?;
         let v = decode_utf16(sub_bytes(s, offset + 4, offset + 4 + count * 2));
         return Ok((Val.Text(v), 4 + count * 2));
     }
@@ -1361,7 +1362,7 @@ fn parse_basic(s: ref Vec[u8], offset: i64, pid: i64, t: i64, convert: bool, no_
         return Ok((Val.Text(clsid_text(sub_bytes(s, offset, offset + 16))?), 16));
     }
     if t == VT_BOOL {
-        return Ok((Val.Bool(i16(s, offset)? != 0), 2));
+        return Ok((Val.Bool(read_i16(s, offset)? != 0), 2));
     }
     Ok((Val.Nothing, 0))
 }
@@ -1374,11 +1375,11 @@ fn parse_property(s: ref Vec[u8], offset: i64, pid: i64, t: i64, convert: bool, 
     }
     if t == VT_VECTOR | VT_VARIANT {
         let mut off = 4;
-        let count = i32(s, offset)?;
+        let count = read_i32(s, offset)?;
         let mut values: Vec[Val] = Vec.new();
         let mut k = 0;
         while k < count {
-            let t2 = i32(s, offset + off)?;
+            let t2 = read_i32(s, offset + off)?;
             let (v, sz) = parse_basic(s, offset + off + 4, pid, t2, convert, no_conversion)?;
             values.push(v);
             off += sz + 4;
@@ -1389,7 +1390,7 @@ fn parse_property(s: ref Vec[u8], offset: i64, pid: i64, t: i64, convert: bool, 
     if t & VT_VECTOR != 0 {
         let base = t ^ VT_VECTOR;
         let mut off = 4;
-        let count = i32(s, offset)?;
+        let count = read_i32(s, offset)?;
         let mut values: Vec[Val] = Vec.new();
         let mut k = 0;
         while k < count {
@@ -1410,19 +1411,19 @@ fn section_of(fp: mut ref Rd) -> Result[Vec[u8], PyErr] {
     clsid_text(sub_bytes(s, 8, 24))?;
     let s2 = fp.read(20);
     clsid_text(sub_bytes(s2, 0, 16))?;
-    fp.pos = i32(s2, 16)?;
+    fp.pos = read_i32(s2, 16)?;
     let n = fp.read(4);
-    let size = i32(n, 0)?;
+    let size = read_i32(n, 0)?;
     let body = fp.read(size - 4);
     let sec = concat("****".bytes().to_vec(), body);
-    i32(sec, 4)?;
+    read_i32(sec, 4)?;
     Ok(sec)
 }
 
 fn one_property(s: ref Vec[u8], i: i64, pid: mut ref i64, convert: bool, no_conversion: ref Vec[i64]) -> Result[Val, PyErr] {
-    *pid = i32(s, 8 + i * 8)?;
-    let offset = i32(s, 12 + i * 8)?;
-    let t = i32(s, offset)?;
+    *pid = read_i32(s, 8 + i * 8)?;
+    let offset = read_i32(s, 12 + i * 8)?;
+    let t = read_i32(s, offset)?;
     parse_property(s, offset + 4, *pid, t, convert, no_conversion)
 }
 
@@ -1487,7 +1488,7 @@ impl Ole {
         let mut data: Vec[(String, Val)] = Vec.new();
         let s = fp.read(28);
         clsid_text(sub_bytes(s, 8, 24))?;
-        let sections_count = i32(s, 24)?;
+        let sections_count = read_i32(s, 24)?;
         if let Err(exc) = self.user_sections(mut fp, sections_count, user_fmtid, mut data, filename, convert, no_conversion) {
             let msg = f"Error while parsing properties header in stream {repr_str(filename)}: {exc.msg}";
             self.defect_as(DEFECT_INCORRECT, msg, exc.kind)?;
@@ -1504,18 +1505,18 @@ impl Ole {
             let s = fp.read(20);
             let fmtid = clsid_text(sub_bytes(s, 0, 16))?;
             if fmtid == *user_fmtid {
-                fp.pos = i32(s, 16)?;
+                fp.pos = read_i32(s, 16)?;
                 let head = fp.read(4);
-                let size = i32(head, 0)?;
+                let size = read_i32(head, 0)?;
                 let body = fp.read(size - 4);
                 let s = concat("****".bytes().to_vec(), body);
-                let mut num_props = i32(s, 4)?;
+                let mut num_props = read_i32(s, 4)?;
                 let mut index = 8 + 8 * num_props;
-                let entry_count = i32(sub_bytes(s, index, index + 4), 0)?;
+                let entry_count = read_i32(sub_bytes(s, index, index + 4), 0)?;
                 index += 4;
                 let mut k = 0;
                 while k < entry_count {
-                    let str_size = i32(sub_bytes(s, index + 4, index + 8), 0)?;
+                    let str_size = read_i32(sub_bytes(s, index + 4, index + 8), 0)?;
                     let raw = sub_bytes(s, index + 8, index + 8 + str_size);
                     let name = decode(raw, "utf-8", "strict".to_string())?;
                     data.push((strip_nul(name), Val.Nothing));
@@ -1555,36 +1556,36 @@ impl Ole {
 // One property of a user-defined section, with the offsets olefile
 // uses there.
 fn user_property(s: ref Vec[u8], i: i64, pid: mut ref i64, convert: bool, no_conversion: ref Vec[i64]) -> Result[Val, PyErr] {
-    *pid = i32(s, 8 + i * 8)?;
-    let offset = i32(s, 12 + i * 8)?;
-    let t = i32(s, offset)?;
+    *pid = read_i32(s, 8 + i * 8)?;
+    let offset = read_i32(s, 12 + i * 8)?;
+    let t = read_i32(s, offset)?;
     if t == VT_I2 {
-        let mut v = i16(s, offset + 4)?;
+        let mut v = read_i16(s, offset + 4)?;
         if v >= 32768 {
             v -= 65536;
         }
         return Ok(Val.Int(v));
     }
     if t == 1 {
-        let str_size = i32(s, offset + 8)?;
+        let str_size = read_i32(s, offset + 8)?;
         return Ok(Val.Bytes(sub_bytes(s, offset + 12, offset + 12 + str_size - 1)));
     }
     if t == VT_UI2 {
-        return Ok(Val.Int(i16(s, offset + 4)?));
+        return Ok(Val.Int(read_i16(s, offset + 4)?));
     }
     if t == VT_I4 or t == VT_INT or t == VT_ERROR or t == VT_UI4 or t == VT_UINT {
-        return Ok(Val.Int(i32(s, offset + 4)?));
+        return Ok(Val.Int(read_i32(s, offset + 4)?));
     }
     if t == VT_BSTR or t == VT_LPSTR {
-        let count = i32(s, offset + 4)?;
+        let count = read_i32(s, offset + 4)?;
         return Ok(Val.Bytes(drop_nuls(sub_bytes(s, offset + 8, offset + 8 + count - 1))));
     }
     if t == VT_BLOB or t == VT_CF {
-        let count = i32(s, offset + 4)?;
+        let count = read_i32(s, offset + 4)?;
         return Ok(Val.Bytes(sub_bytes(s, offset + 8, offset + 8 + count)));
     }
     if t == VT_LPWSTR {
-        let count = i32(s, offset + 4)?;
+        let count = read_i32(s, offset + 4)?;
         return Ok(Val.Text(decode_utf16(sub_bytes(s, offset + 8, offset + 8 + count * 2))));
     }
     if t == VT_FILETIME {
@@ -1598,7 +1599,7 @@ fn user_property(s: ref Vec[u8], i: i64, pid: mut ref i64, convert: bool, no_con
         return Ok(Val.Text(clsid_text(sub_bytes(s, offset + 4, offset + 20))?));
     }
     if t == VT_BOOL {
-        return Ok(Val.Bool(i16(s, offset + 4)? != 0));
+        return Ok(Val.Bool(read_i16(s, offset + 4)? != 0));
     }
     Ok(Val.Nothing)
 }

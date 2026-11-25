@@ -397,6 +397,8 @@ impl SymbolTable {
     /// Reserved identifiers that cannot be used as user-defined names.
     pub(crate) const RESERVED_IDENTIFIERS: &'static [(&'static str, &'static str)] = &[
         ("Fn", "reserved for closure/function type constructor"),
+        ("MutFn", "reserved for closure/function type constructor"),
+        ("OnceFn", "reserved for closure/function type constructor"),
         (
             "split_by_variant",
             "reserved as a contextual keyword in layout blocks",

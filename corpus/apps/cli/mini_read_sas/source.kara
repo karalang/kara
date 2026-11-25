@@ -232,16 +232,16 @@ fn crc32(t: ref Vec[i64], data: ref Vec[u8]) -> i64 {
     c ^ 0xFFFFFFFF
 }
 
-fn u16(b: ref Vec[u8], i: i64) -> i64 {
+fn read_u16(b: ref Vec[u8], i: i64) -> i64 {
     b[i] as i64 | (b[i + 1] as i64) << 8
 }
 
-fn u32(b: ref Vec[u8], i: i64) -> i64 {
-    u16(b, i) | u16(b, i + 2) << 16
+fn read_u32(b: ref Vec[u8], i: i64) -> i64 {
+    read_u16(b, i) | read_u16(b, i + 2) << 16
 }
 
-fn u64(b: ref Vec[u8], i: i64) -> i64 {
-    u32(b, i) | u32(b, i + 4) << 32
+fn read_u64(b: ref Vec[u8], i: i64) -> i64 {
+    read_u32(b, i) | read_u32(b, i + 4) << 32
 }
 
 fn zeros(n: i64) -> Vec[i64] {
@@ -444,8 +444,8 @@ fn inflate(data: own Vec[u8]) -> (Vec[u8], bool) {
             if br.pos + 4 > br.data.len() {
                 return (out, false);
             }
-            let n = u16(br.data, br.pos);
-            let nn = u16(br.data, br.pos + 2);
+            let n = read_u16(br.data, br.pos);
+            let nn = read_u16(br.data, br.pos + 2);
             if n != (nn ^ 0xFFFF) or br.pos + 4 + n > br.data.len() {
                 return (out, false);
             }
@@ -685,9 +685,9 @@ fn open_zip(data: own Vec[u8]) -> Result[Zip, PyErr] {
     if at < 0 {
         return Err(bad_zip("File is not a zip file"));
     }
-    let count = u16(data, at + 10);
-    let cd_size = u32(data, at + 12);
-    let cd_off = u32(data, at + 16);
+    let count = read_u16(data, at + 10);
+    let cd_size = read_u32(data, at + 12);
+    let cd_off = read_u32(data, at + 16);
     // bytes before the archive (a self-extractor's stub) shift every offset
     let concat = at - cd_size - cd_off;
     if concat < 0 {
@@ -701,20 +701,20 @@ fn open_zip(data: own Vec[u8]) -> Result[Zip, PyErr] {
         if p + 46 > n {
             return Err(bad_zip("Truncated central directory"));
         }
-        if u32(data, p) != 0x02014B50 {
+        if read_u32(data, p) != 0x02014B50 {
             return Err(bad_zip("Bad magic number for central directory"));
         }
-        let nlen = u16(data, p + 28);
-        let xlen = u16(data, p + 30);
-        let klen = u16(data, p + 32);
+        let nlen = read_u16(data, p + 28);
+        let xlen = read_u16(data, p + 30);
+        let klen = read_u16(data, p + 32);
         entries.push(ZEntry {
             name: lossy(bytes_of(data, p + 46, p + 46 + nlen)),
-            flags: u16(data, p + 8),
-            method: u16(data, p + 10),
-            crc: u32(data, p + 16),
-            csize: u32(data, p + 20),
-            usize: u32(data, p + 24),
-            offset: u32(data, p + 42) + concat,
+            flags: read_u16(data, p + 8),
+            method: read_u16(data, p + 10),
+            crc: read_u32(data, p + 16),
+            csize: read_u32(data, p + 20),
+            usize: read_u32(data, p + 24),
+            offset: read_u32(data, p + 42) + concat,
         });
         p += 46 + nlen + xlen + klen;
     }
@@ -749,11 +749,11 @@ impl Zip {
         if p + 30 > d.len() {
             return Err(bad_zip("Truncated file header"));
         }
-        if u32(d, p) != 0x04034B50 {
+        if read_u32(d, p) != 0x04034B50 {
             return Err(bad_zip("Bad magic number for file header"));
         }
-        let nlen = u16(d, p + 26);
-        let xlen = u16(d, p + 28);
+        let nlen = read_u16(d, p + 26);
+        let xlen = read_u16(d, p + 28);
         let local = lossy(bytes_of(d, p + 30, p + 30 + nlen));
         if local != e.name {
             return Err(bad_zip(f"File name in directory {py_repr(e.name)} and header {bytes_repr(to_bytes(local))} differ."));
@@ -932,7 +932,7 @@ fn gunzip(d: own Vec[u8]) -> Result[Vec[u8], PyErr] {
     let flags = d[3];
     let mut p: i64 = 10;
     if (flags & 4) != 0 {
-        p += 2 + u16(d, p);
+        p += 2 + read_u16(d, p);
     }
     if (flags & 8) != 0 {
         while p < n and d[p] != 0 {
@@ -952,8 +952,8 @@ fn gunzip(d: own Vec[u8]) -> Result[Vec[u8], PyErr] {
     if p + 8 > n {
         return Err(py_err("EOFError", "Compressed file ended before the end-of-stream marker was reached"));
     }
-    let crc = u32(d, n - 8);
-    let size = u32(d, n - 4);
+    let crc = read_u32(d, n - 8);
+    let size = read_u32(d, n - 4);
     let (out, whole) = inflate(bytes_of(d, p, n - 8));
     if not whole {
         return Err(py_err("EOFError", "Compressed file ended before the end-of-stream marker was reached"));

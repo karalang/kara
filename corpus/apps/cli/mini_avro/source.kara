@@ -1048,7 +1048,7 @@ fn sha256_family(msg: ref Vec[u8], is224: bool) -> Vec[u8] {
 
 // ------------------------------------------------------------ inflate
 
-fn u16(b: ref Vec[u8], i: i64) -> i64 {
+fn read_u16(b: ref Vec[u8], i: i64) -> i64 {
     b[i] as i64 | (b[i + 1] as i64) << 8
 }
 
@@ -1216,8 +1216,8 @@ fn inflate(data: own Vec[u8]) -> (Vec[u8], bool) {
             if br.pos + 4 > br.data.len() {
                 return (out, false);
             }
-            let n = u16(br.data, br.pos);
-            let nn = u16(br.data, br.pos + 2);
+            let n = read_u16(br.data, br.pos);
+            let nn = read_u16(br.data, br.pos + 2);
             if n != (nn ^ 0xFFFF) or br.pos + 4 + n > br.data.len() {
                 return (out, false);
             }

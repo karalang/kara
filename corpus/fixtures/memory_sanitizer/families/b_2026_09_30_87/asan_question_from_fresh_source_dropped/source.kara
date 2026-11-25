@@ -39,7 +39,7 @@ fn f8(k: i64) -> Result[i64, Q8] { let x = e_str(k)?; Result.Ok(x) }
 fn f13(k: i64) -> Result[i64, Q13] { let x = e_e1(k)?; Result.Ok(x) }
 fn f14(k: i64) -> Result[i64, Q14] { let x = e_vec(k)?; Result.Ok(x) }
 fn f15(k: i64) -> Result[i64, Q15] { let x = e_str(k)?; Result.Ok(x) }
-fn f16(k: i64) -> Result[i64, Q16] { let x = e_s6(k)?; Result.Ok(x) }
+fn f16_fn(k: i64) -> Result[i64, Q16] { let x = e_s6(k)?; Result.Ok(x) }
 fn main() {
     match f1(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) }
     match f1(2) { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) }
@@ -51,6 +51,6 @@ fn main() {
     match f13(8) { Result.Ok(v) => println(v), Result.Err(e) => match e.e { E1.A(s) => println(s), E1.B(k) => println(k) } }
     match f14(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) }
     match f15(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.msg) }
-    match f16(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.inner.v) }
+    match f16_fn(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.inner.v) }
     println("end")
 }

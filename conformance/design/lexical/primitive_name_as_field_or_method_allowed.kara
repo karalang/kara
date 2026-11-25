@@ -1,0 +1,11 @@
+// design.md §3 (224, review ruling 2026-11-25 on B-2026-11-25-10): a field
+// or method may use a primitive type name, since it is reached after `.`
+// and never sits in a path's first position.
+struct S { char: i64 }
+impl S {
+    fn u8(self) -> i64 { self.char + 1 }
+}
+fn main() {
+    let s = S { char: 3 };
+    println(f"{s.char} {s.u8()} {u8.MAX}");
+}

@@ -125,3 +125,33 @@ fn opaque_type_struct_pattern_is_refused() {
     assert!(out.contains("E_OPAQUE_TYPE_NO_FIELDS"), "{out}");
     assert!(!out.contains("E0516"), "{out}");
 }
+
+/// B-2026-11-25-10: a primitive type name cannot name an item, since
+/// `u8(..)` in first position names the type (design.md §3, 224).
+#[test]
+fn primitive_type_name_cannot_name_a_function() {
+    let out = check("lexical", "primitive_name_as_fn_refused");
+    assert!(out.contains("error[E0102]"), "{out}");
+    assert!(out.contains("`u8` is a primitive type name"), "{out}");
+    assert!(out.contains("read_u8"), "{out}");
+}
+
+/// B-2026-11-25-10: `MutFn` and `OnceFn` are reserved like `Fn`.
+#[test]
+fn mutfn_and_oncefn_are_reserved_type_names() {
+    for (cell_name, name) in [
+        ("mutfn_type_name_reserved_enum", "MutFn"),
+        ("oncefn_type_name_reserved_trait", "OnceFn"),
+    ] {
+        let out = check("lexical", cell_name);
+        assert!(out.contains("error[E0102]"), "{out}");
+        assert!(out.contains(&format!("'{name}' is reserved")), "{out}");
+    }
+}
+
+/// B-2026-11-25-10, review ruling 2026-11-25: a field or method may use a
+/// primitive type name, since it is reached after `.`.
+#[test]
+fn primitive_type_name_may_name_a_field_or_method() {
+    runs("lexical", "primitive_name_as_field_or_method_allowed");
+}

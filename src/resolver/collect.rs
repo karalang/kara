@@ -556,10 +556,38 @@ impl<'a> super::Resolver<'a> {
         }
     }
 
+    /// `fn u16(b: ref Vec[u8], i: i64)`: a primitive type name cannot name
+    /// an item, because a primitive name as a path's first segment always
+    /// names the type, decided by grammar with no scope lookup, and
+    /// `u16(data, p)` would need one (design.md § Primitive type names;
+    /// review ruling 2026-11-25 on B-2026-11-25-10). A method or a field may
+    /// use the name: it is reached after `.`, never in first position.
+    fn reject_primitive_item_name(&mut self, name: &str, span: crate::token::Span, what: &str) {
+        if !crate::parser::is_primitive_type_name(name) {
+            return;
+        }
+        self.errors.push(ResolveError {
+            message: format!(
+                "`{name}` is a primitive type name and cannot name a {what}: as a path's \
+                 first segment it always names the type, so `{name}(..)` cannot call an \
+                 item (design.md § Primitive type names). A method or field may use the \
+                 name, since it is reached after `.`"
+            ),
+            span,
+            kind: ResolveErrorKind::ReservedIdentifier,
+            suggestion: Some(format!(
+                "rename the {what} and its calls, for example `read_{name}` or `to_{name}`"
+            )),
+            replacement: None,
+            stub_hint: None,
+        });
+    }
+
     fn collect_function(&mut self, f: &Function) {
         self.check_compiler_builtin_attr(&f.attributes, f.stdlib_origin);
         self.reject_non_exhaustive_attr(&f.attributes, "function");
         self.validate_profile_names(f);
+        self.reject_primitive_item_name(&f.name, f.span, "function");
         let param_names: Vec<String> = f
             .params
             .iter()
@@ -2270,6 +2298,7 @@ impl<'a> super::Resolver<'a> {
         // Codegen hints have no Kāra-side body to attach to on a foreign
         // import — reject them with the extern-specific diagnostic.
         self.reject_codegen_hint_on_extern(&e.attributes);
+        self.reject_primitive_item_name(&e.name, e.span, "foreign function");
         if let Err(err) =
             self.table
                 .define(e.name.clone(), SymbolKind::ExternFunction, e.span, true)

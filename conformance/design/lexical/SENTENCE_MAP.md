@@ -2,7 +2,7 @@
 
 Status: covered, partial, FAILS (a cell fails; the row named), not testable, not drafted. Cell names without a prefix are in `conformance/design/lexical/`; `tests/` names a Rust test as `file::test`. Line numbers are docs/design.md lines (§ 3 is lines 168 to 561).
 
-**Totals (2026-11-25, after the gap audit and its fixes):** 172 normative sentences, 152 covered, 7 partial, 3 FAILS (filed as B-2026-11-25-9 and -10; -3 to -7 found and fixed by the audit), 6 not testable, 4 not drafted (`karac doc` rendering and `karac fix --edition`: a cell cannot hold a project, and the flag does not exist yet). Before the audit (estimated from which rows cite a pre-existing cell or test): about 76 covered, 25 partial, 61 gaps. `(new)` marks a cell the audit added; every new refusal has a control beside it where one exists. Lane run of this directory (interp,build): 140 passed, 0 failed before; 342 passed, 10 failed after the new cells (139 new); 348 passed, 5 failed after the fixes (the 5 cells of -7 and -8).
+**Totals (2026-11-25, after the gap audit and its fixes):** 173 normative sentences, 156 covered, 6 partial, 1 FAILS (filed as B-2026-11-25-9 and -10; -3 to -7 found and fixed by the audit; -10 fixed, its field half dropped by the review ruling that a field or method may use a primitive name), 6 not testable, 4 not drafted (`karac doc` rendering and `karac fix --edition`: a cell cannot hold a project, and the flag does not exist yet). Before the audit (estimated from which rows cite a pre-existing cell or test): about 76 covered, 25 partial, 61 gaps. `(new)` marks a cell the audit added; every new refusal has a control beside it where one exists. Lane run of this directory (interp,build): 140 passed, 0 failed before; 342 passed, 10 failed after the new cells (139 new); 348 passed, 5 failed after the fixes (the 5 cells of -7 and -8).
 
 ## Identifiers and naming
 
@@ -31,9 +31,10 @@ Status: covered, partial, FAILS (a cell fails; the row named), not testable, not
 | 211 | CN-8: a foreign name may be any ASCII at the boundary, but the Kāra-visible name must follow the rules | covered | cn8_ffi_names (new: `abs`), cn8_ffi_fn_without_rename_refused, cn8_ffi_type_without_rename_refused (new) |
 | 211 | `#[kara_name("...")]` rebinds a non-conforming foreign name | covered | cn8_ffi_names (new: `type xcb_window_t` used as `XcbWindow`) |
 | 224 | Primitive type names cannot be bound: `let i64 = 3;` is an error | covered | primitive_name_as_binding, primitive_name_as_param_refused (new) |
-| 224 | Primitive type names cannot be declared as names | FAILS, B-2026-11-25-10 | primitive_name_as_fn_refused (new: `fn u8()` accepted, and `u8()` calls it), primitive_name_as_field_refused (new: field `char` accepted); control reserved_type_names_control (new) |
-| 224 | As a path's first segment a primitive name always names the type (`i64.MAX`, `u32.size_of()`, `char.try_from(n)`) | partial | primitive_type_paths (new); primitive_name_as_fn_refused shows `u8()` reaching a user fn instead |
-| 224 | `Fn`, `MutFn` and `OnceFn` are reserved type names too | FAILS, B-2026-11-25-10 | fn_type_name_reserved_struct (new, passes), mutfn_type_name_reserved_enum, oncefn_type_name_reserved_trait (new, both accepted); control reserved_type_names_control (new) |
+| 224 | Primitive type names cannot be declared as items | covered | primitive_name_as_fn_refused (new; B-2026-11-25-10); control reserved_type_names_control (new) |
+| 224 | A field or method may use a primitive type name, since it is reached after `.` (review ruling 2026-11-25) | covered | primitive_name_as_field_or_method_allowed (new) |
+| 224 | As a path's first segment a primitive name always names the type (`i64.MAX`, `u32.size_of()`, `char.try_from(n)`) | covered | primitive_type_paths (new); primitive_name_as_fn_refused (an item can no longer take the name, B-2026-11-25-10) |
+| 224 | `Fn`, `MutFn` and `OnceFn` are reserved type names too | covered | fn_type_name_reserved_struct, mutfn_type_name_reserved_enum, oncefn_type_name_reserved_trait (new; B-2026-11-25-10); control reserved_type_names_control (new) |
 | 228 | Rationale: how a path's first segment is read | not testable | rationale |
 | 238 | Identifiers are ASCII; a non-ASCII identifier is a parse error | covered | non_ascii_identifier; tests/lexer.rs test_non_ascii_identifier_mid_word_emits_one_error |
 

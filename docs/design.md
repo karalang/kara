@@ -221,7 +221,7 @@ let user_count = 0;
    }
    ```
 
-**Primitive type names.** `i8` … `i128`, `u8` … `u128`, `f32`, `f64`, `bool`, `char` and the other primitive type names of [§5](#5-types) are lowercase, but they are reserved type names, not Value-class identifiers. They cannot be declared or bound as names: `let i64 = 3;` is an error. As the first segment of a path they always name the type: `i64.MAX`, `u32.size_of()`, `char.try_from(n)`. `Fn`, `MutFn` and `OnceFn` are reserved type names too.
+**Primitive type names.** `i8` … `i128`, `u8` … `u128`, `f32`, `f64`, `bool`, `char` and the other primitive type names of [§5](#5-types) are lowercase, but they are reserved type names, not Value-class identifiers. They cannot be declared as items or bound as names: `let i64 = 3;` and `fn u16(b: ref Vec[u8], i: i64)` are errors. A field or method may use one, since it is reached after `.` and never sits in first position (review ruling 2026-11-25 on B-2026-11-25-10). As the first segment of a path they always name the type: `i64.MAX`, `u32.size_of()`, `char.try_from(n)`. `Fn`, `MutFn` and `OnceFn` are reserved type names too.
 
 #### Rationale
 
