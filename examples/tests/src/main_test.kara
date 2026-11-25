@@ -1,44 +1,5 @@
-// examples/tests/user_db_test.kara
-//
-// Demonstrates the three forms of provider injection from design.md:
-//
-//   1. `#[with_provider(R, ctor)]`         — per-test fixture sugar
-//   2. `with_provider[R](p, || body)`      — runtime primitive
-//   3. `providers { R => p, ... } in { body }` — multi-provider block
-//
-// NOT A 0.8 PROGRAM: this is a syntax sketch written before the D5 receiver
-// and parameter modes (`mut self` is now `mut ref self`, and a bare parameter
-// borrows), so it does not check today. examples/phase0/dashboard.kara is a
-// `providers { ... } in` program that checks and runs on 0.8.
-
-trait DatabaseProvider {
-    fn insert(self, key: String, value: String) -> Result[(), String];
-    fn get(self, key: String) -> Option[String];
-}
-
-effect resource UserDB: DatabaseProvider;
-effect resource AuditDB: DatabaseProvider;
-
-shared struct InMemoryUserDB {
-    rows: Map[String, String],
-}
-
-impl InMemoryUserDB {
-    fn new() -> InMemoryUserDB {
-        InMemoryUserDB { rows: Map.new() }
-    }
-}
-
-impl DatabaseProvider for InMemoryUserDB {
-    fn insert(mut self, key: String, value: String) -> Result[(), String] {
-        self.rows.insert(key, value);
-        Ok(())
-    }
-
-    fn get(self, key: String) -> Option[String] {
-        self.rows.get(key)
-    }
-}
+// examples/tests/src/main_test.kara: the three forms of provider injection,
+// run by `karac test` from examples/tests/.
 
 // ── Form 1: #[with_provider] attribute (slice 3 target) ─────────────
 //

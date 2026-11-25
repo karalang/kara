@@ -72,8 +72,8 @@ const EXCLUDED_DIRS: &[&str] = &[
     // machine-fix harness (`examples/mend/harness/mend_batch.py`). A Mend
     // fixture that compiles is a broken fixture.
     "mend",
-    // Programs on a library that arrives after 0.8 (`Tensor`, with
-    // `kara-data`): examples/deferred/README.md.
+    // Programs waiting for something scheduled after 0.8 (`Tensor` with
+    // `kara-data`, the exported C ABI): examples/deferred/README.md.
     "deferred",
 ];
 
@@ -108,31 +108,15 @@ const KNOWN_BROKEN_PACKAGES: &[(&str, &str)] = &[];
 /// Single files that do not currently check, with the first reported error.
 const KNOWN_BROKEN_FILES: &[(&str, &str)] = &[
     (
-        "interop/kernel.kara",
-        "typecheck: `pub extern \"C\" fn` is the exported C ABI, which went to \
-         the archive with the legacy backend at M3 and `karac check` refuses by name.",
-    ),
-    (
         "fathom/mandelbrot.kara",
-        "effect: target `native` does not provide resource 'Timer'.",
+        "effect: target `native` does not provide resource 'Timer'. A \
+         browser-only demo: it needs `--target=wasm_browser`, which is not in \
+         0.8 (deferred.md § Web), and its README says so.",
     ),
     (
         "plume/plume.kara",
         "effect: target `native` does not provide resource 'Timer' (same \
          cause as fathom/mandelbrot.kara).",
-    ),
-    (
-        "tests/user_db_test.kara",
-        "parse: `mut self` is Rust syntax (now `mut ref self`). The file is \
-         a pre-D5 syntax sketch of provider injection, and its header says \
-         it is not a 0.8 program.",
-    ),
-    (
-        "std_net/ws_echo_freespawn.kara",
-        "typecheck: free `spawn` is removed (§11.1, E0520). The file is the \
-         legacy probe for the free-spawn coroutine leak \
-         (docs/spikes/windows-iocp-scale-investigation.md), and \
-         ws_echo_spawn.kara is the TaskGroup form.",
     ),
 ];
 

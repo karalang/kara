@@ -1,6 +1,6 @@
 // Consume-direction FFI: bind a real C library (zlib) and use it.
 //
-// The sibling examples/interop/ shows the *produce* direction (a Kāra kernel
+// examples/deferred/interop/ shows the *produce* direction (a Kāra kernel
 // linked into a C host). This is the other half: Kāra as the host, calling
 // into the system's zlib through an `unsafe extern "C" { }` block, linked by
 // the manifest's `[link] libs = ["z"]`.

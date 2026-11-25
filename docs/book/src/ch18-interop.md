@@ -45,6 +45,6 @@ In outline:
 - **What crosses.** Primitives, raw pointers and `#[repr(C)]` structs by value. Owned `String` and `Vec` results are boxed behind an opaque pointer with a generated `karac_free_<name>` destructor. Anything else (an `enum`, an `Option`, a plain struct) is refused at build time, with the `#[repr(C)]` fix when that is the fix.
 - **Effects are part of the contract.** A `suspends` function cannot be exported, since a foreign thread has no scheduler to yield to. `blocks` is fine, and a panic aborts rather than unwind across the C frame.
 
-The worked example (kernel, C host, Rust host) is in `examples/interop/` in the source tree, and runs once the exported C ABI lands.
+The worked example (kernel, C host, Rust host) is in `examples/deferred/interop/` in the source tree, and runs once the exported C ABI lands.
 
 The pitch stays simple: you don't have to adopt Kāra all at once. Start by calling the C you already have.

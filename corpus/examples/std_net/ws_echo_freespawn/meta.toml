@@ -1,4 +1,4 @@
-source = "examples/std_net/ws_echo_freespawn.kara"
+source = "docs/legacy/examples/std_net/ws_echo_freespawn.kara"
 dedup_of = []
 expect = "error:E0520"
 exit = 1

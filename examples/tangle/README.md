@@ -83,7 +83,9 @@ both directions print `3`. In Rust the doubly-linked list is the textbook
 and the splice juggles several `RefCell` borrows at once; in Kāra it is a
 `shared struct` with `mut prev` / `mut next` fields and no `Weak`. The honest
 cost — strong `prev` forms an RC cycle that plain RC won't reclaim — is the kind
-of thing Tangle exists to surface rather than hide.
+of thing Tangle exists to surface rather than hide. The example keeps the strong
+`prev` to show that cycle; a list that outlives a short run declares the back-edge
+`weak`, as `parent_tree.kara` does (design.md § Cycles and `weak`).
 
 > **Bug found *and fixed* by this structure.** The `Vec.new()` + `push` + return
 > idiom inside `to_vec_forward` / `to_vec_backward` triggered a spurious

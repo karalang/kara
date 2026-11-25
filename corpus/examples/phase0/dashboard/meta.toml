@@ -1,4 +1,4 @@
-source = "examples/phase0/dashboard.kara"
+source = "docs/legacy/examples/phase0/dashboard.kara"
 dedup_of = []
 expect = "stdout"
 exit = 0

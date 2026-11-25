@@ -1,5 +1,8 @@
 # Phase 0: Proof of Value
 
+> **Legacy.** Moved from `examples/phase0/` on 2026-11-25: a design-era mockup,
+> kept for its history rather than beside the live examples.
+
 **Effect types + auto-concurrency: the design-phase pitch.**
 
 > **What this is today.** This directory predates the compiler. `parallel.rs`
@@ -17,7 +20,7 @@
 > early, and running the later ones anyway would perform effects the
 > sequential program never reaches. Writing the three fetches as a
 > `par { ... }` block is the explicit form
-> ([Chapter 14](../../docs/book/src/ch14-concurrency.md)).
+> ([Chapter 14](../../../book/src/ch14-concurrency.md)).
 
 ## The Pitch (5 minutes)
 

@@ -1,3 +1,5 @@
+// LEGACY (moved from examples/std_net/ 2026-11-25): free `spawn` was removed by design, so
+// this waits for nothing; it stays as the probe the IOCP spike cites.
 // NOT A 0.8 PROGRAM: free `spawn` was removed (design.md §11.1, E0520), so
 // this file does not check. It is kept as the historical probe that
 // docs/spikes/windows-iocp-scale-investigation.md cites; ws_echo_spawn.kara

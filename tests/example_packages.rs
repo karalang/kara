@@ -87,6 +87,15 @@ const PACKAGES: &[Package] = &[
         codegen: Expect::AllPass,
         note: "",
     },
+    // The three forms of provider injection (design.md § Providers):
+    // `#[with_provider]`, `with_provider[R](p, || ..)` and `providers { } in`.
+    Package {
+        dir: "tests",
+        expected_tests: 5,
+        interp: Expect::AllPass,
+        codegen: Expect::AllPass,
+        note: "",
+    },
 ];
 
 fn package_dir(dir: &str) -> PathBuf {

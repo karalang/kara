@@ -101,7 +101,7 @@ runs as-is on Windows.
 - Server: `examples/std_net/ws_echo.kara` (the existing serial echo server) plus
   two new variants written for this investigation:
   `examples/std_net/ws_echo_spawn.kara` (`TaskGroup.spawn(|| echo(ws))` per
-  connection) and `examples/std_net/ws_echo_freespawn.kara` (free
+  connection) and `docs/legacy/examples/std_net/ws_echo_freespawn.kara` (free
   `spawn(|| echo(ws))`), all AOT-built with the native Windows toolchain.
 - Client: `examples/std_net/ws_loop_client_soak.py` — a bounded-worker-pool
   harness (fixed `conc` threads, no unbounded futures), RST/abortive close
@@ -472,7 +472,7 @@ in this same change.
 # build (native Windows toolchain; LLVM 18.1 at C:\llvm18, clang on PATH)
 karac build examples/std_net/ws_echo.kara          # serial (leak-free, ~1.3k/s)
 karac build examples/std_net/ws_echo_spawn.kara     # TaskGroup.spawn (leaks)
-karac build examples/std_net/ws_echo_freespawn.kara # free spawn (leaks)
+karac build docs/legacy/examples/std_net/ws_echo_freespawn.kara # free spawn (leaks)
 
 # drive (host port count concurrency)
 python examples/std_net/ws_loop_client_soak.py 127.0.0.1 8080 1000000 16

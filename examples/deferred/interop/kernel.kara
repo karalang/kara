@@ -1,3 +1,4 @@
+// Waits for docs/deferred.md § Exported C ABI (`--crate-type staticlib` / `cdylib`); see README.md.
 // Additive interop — a Kāra kernel built as a linkable C-ABI library.
 //
 // This is the *producer* half of the adoption story (design.md § Exported

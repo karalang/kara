@@ -7,6 +7,12 @@ sequential code, the compiler runs it concurrently.
 > the four fetches in order** in this version of the example: each provider's
 > `fetch_*` prints a "loaded ..." line, and two statements that both write
 > `Stdout` must keep their order, or the output would change from run to run.
+> That is the specified rule, not a compiler gap: automatic parallelism runs
+> pieces in parallel only where the conflict test `par` uses proves them
+> independent ([design.md](../../docs/design.md), "The compiler also
+> parallelizes loops and statements on its own"; core-semantics.md §11.5),
+> and two `writes(Stdout)` conflict. [parallax_lite](../parallax_lite/README.md),
+> whose fetches print nothing, runs its three calls in parallel.
 > `karac query concurrency` (on the flattened package, as in
 > [parallax_lite](../parallax_lite/README.md#what-it-demonstrates)) reports
 > the four `let`s as one parallel group, then `tasks: false` with the reason

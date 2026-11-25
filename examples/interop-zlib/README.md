@@ -1,6 +1,6 @@
 # Consume-direction FFI — binding a real C library (zlib)
 
-The sibling [`examples/interop/`](../interop/) is the **produce** direction: a
+[`examples/deferred/interop/`](../deferred/interop/) is the **produce** direction: a
 Kāra kernel built as a library and linked into a C or Rust host. This example
 is the other half — the **consume** direction: Kāra as the host program,
 calling into the system's zlib through the shipped FFI surface. Together they

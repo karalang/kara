@@ -1,13 +1,15 @@
 # Additive interop — a Kāra kernel in a C and a Rust program
 
+> Waits for deferred.md § Exported C ABI (moved to `examples/deferred/` 2026-11-25).
+
 > **Not buildable on 0.8.** `--crate-type staticlib` / `cdylib` build the
 > exported C ABI, which is scheduled after v1
-> ([deferred.md § Exported C ABI](../../docs/deferred.md#exported-c-abi)); on
+> ([deferred.md § Exported C ABI](../../../docs/deferred.md#exported-c-abi)); on
 > 0.8 `karac build` answers "`--crate-type` builds the exported C ABI, which is
 > not in 0.8", and `karac check` refuses each `pub extern "C" fn` with
 > E_ARCHIVED. This README describes the walkthrough as it ran on the pre-M3
 > backend. Calling C *from* Kāra works on 0.8: see
-> [interop-zlib](../interop-zlib/).
+> [interop-zlib](../../interop-zlib/).
 
 The adoption pitch for a language with no ecosystem yet: **be additive, not
 a replacement.** Write the hot / parallel kernel in Kāra, build it as a
@@ -15,8 +17,8 @@ linkable library with a C ABI, and drop it into an existing C or Rust
 program that keeps everything else — the Rust-in-Firefox / Zig-alongside-C
 playbook. This directory is the worked proof-point.
 
-Spec: [`docs/deferred.md` § Exported C ABI](../../docs/deferred.md#exported-c-abi).
-Spike: [`docs/spikes/additive-interop-adoption.md`](../../docs/spikes/additive-interop-adoption.md).
+Spec: [`docs/deferred.md` § Exported C ABI](../../../docs/deferred.md#exported-c-abi).
+Spike: [`docs/spikes/additive-interop-adoption.md`](../../../docs/spikes/additive-interop-adoption.md).
 
 ## The kernel
 

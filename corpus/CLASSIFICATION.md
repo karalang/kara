@@ -655,7 +655,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `examples/leetcode/course_schedule`
 - `examples/mend/examples/concurrent_emails/solution`
 - `examples/mend/examples/link_registry/solution`
-- `examples/phase0/dashboard`
+- `examples/phase0/dashboard` (source moved to docs/legacy/examples/phase0)
 - `examples/word_count`
 - `fixtures/cli/a_pinned_fx_hasher_stops_the_order_moving_while_the_default_keeps_moving`
 - `fixtures/cli/map_iteration_order_varies_per_process_and_a_pinned_seed_reproduces`
