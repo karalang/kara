@@ -1858,6 +1858,7 @@ impl Pipeline {
         // passes (phase-8-stdlib-floor items 4–5).
         let mut profile_config = self.profile_config.clone();
         profile_config.profile = self.profile;
+        self.parsed.program.renamed_types = self.renames.clone();
         self.typed = Some(if self.library_len.is_some() {
             crate::typecheck_with_lint_overrides_profile_and_library(
                 &self.parsed.program,

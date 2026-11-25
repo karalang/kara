@@ -844,6 +844,12 @@ pub struct PrefixLiteralFix {
 #[derive(Debug, Clone, Default)]
 pub struct Program {
     pub items: Vec<Item>,
+    /// The program's own types that were renamed apart because the compiler
+    /// spells their names (`Optio_` for a declared `Option`), as `(new, old)`
+    /// pairs: what `rename_compiler_name_shadows` returned for this text.
+    /// Empty unless the pipeline set it. A lint that judges a declaration by
+    /// its name reads the old one here (B-2026-11-25-38).
+    pub renamed_types: Vec<(String, String)>,
     /// Script mode (design.md § Script mode): the last item is the `main`
     /// the parser synthesized around the file's top-level statements. The
     /// formatter writes those statements back where they were, never the

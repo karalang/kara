@@ -43,6 +43,26 @@ const MODULE_CELL_TYPES: [&str; 10] = [
     "Receiver",
 ];
 
+/// The types library/README.md § The prelude lists: in scope in every
+/// module without an import. The primitive types are keywords.
+const DOCUMENTED_PRELUDE_TYPES: &[&str] = &[
+    "Option",
+    "Result",
+    "Ordering",
+    "String",
+    "Str",
+    "Array",
+    "Vec",
+    "Slice",
+    "Map",
+    "Set",
+    "SortedMap",
+    "SortedSet",
+    "VecDeque",
+    "PriorityQueue",
+    "Entry",
+];
+
 /// A program's own `Response` in the shape io.md § HTTP server documents
 /// for sending headers, `struct Response { status: i64, body: String,
 /// headers: Vec[(String, String)] }` (or the library's own two fields): the
@@ -115,6 +135,23 @@ impl<'a> super::TypeChecker<'a> {
         span: crate::token::Span,
         lint_overrides: &[crate::lints::LintLevelOverride],
     ) {
+        // A program's own `Option` reaches here renamed apart (`Optio_`, see
+        // `rename_compiler_name_shadows`), so it is judged, and named, by the
+        // name it was written with (B-2026-11-25-38). Renamed apart, no
+        // built-in path claims it, so what is left to flag is shadowing a
+        // name library/README.md § The prelude lists; a program's own
+        // `Client` or `IoError` (domain names under `std.*`, "never in the
+        // prelude") stays silent, as it was.
+        let renamed = self
+            .program
+            .renamed_types
+            .iter()
+            .find(|(new, _)| new == name)
+            .map(|(_, old)| old.as_str());
+        if renamed.is_some_and(|old| !DOCUMENTED_PRELUDE_TYPES.contains(&old)) {
+            return;
+        }
+        let name = renamed.unwrap_or(name);
         // An item of an imported library module (`std.regex`, `std.json`)
         // is not in a program's scope until it imports it (B-2026-10-21-56).
         if stdlib_origin
