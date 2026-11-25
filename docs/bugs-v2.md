@@ -64,7 +64,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | perf | 204 |
 | other | 149 |
 | soundness | 132 |
-| miscompile | 108 |
+| miscompile | 109 |
 | run-vs-build | 72 |
 | crash | 68 |
 | codegen-gap | 47 |
@@ -82,7 +82,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | cli | 314 |
 | parser | 162 |
 | ownership | 138 |
-| runtime | 111 |
+| runtime | 112 |
 | interp | 108 |
 | effect | 67 |
 | resolver | 57 |
@@ -2305,6 +2305,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-25-32 | interp | medium | The interpreter stopped with `expected a sequence, found Agg([..])` when a fixed `Array[u8, N]` reached a library native by value (`f.write(b"hello")… | 1dee859327 |
 | B-2026-11-25-33 | effect | medium | I/O natives that return a new heap value are not charged `allocates(Heap)`: `#[no_effect(allocates(Heap))]` accepts a function that calls `fs.read_to… | 1dee859327 |
 | B-2026-11-25-34 | interp | low | `Stdio.from_file` of a file a `FileSystem` fake opened stopped the interpreted program with an internal `error[mir]: run:` and exit 3; the build prin… | 1dee859327 |
+| B-2026-11-25-37 | runtime | low | A `Json` read through `Json.deserialize` kept a repeated key twice: `{"id":7,"x":1,"id":8}` in a `data: Json` field became a three-entry `Json.Object… | 93508495cd |
 
 </details>
 
