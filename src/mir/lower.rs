@@ -12009,7 +12009,20 @@ impl<'l, 'a> Bx<'l, 'a> {
         let rp = self.expr_place(right, false)?;
         let (lp, lt) = self.strip_refs(lp);
         let (rp, _) = self.strip_refs(rp);
-        let (ot, [less, _, greater]) = self.ordering_ty(left.span)?;
+        self.ordered_places(left.span, lp, bin, rp, lt, dest)
+    }
+
+    /// [`Self::ordered_exprs`] on two places of type `lt`.
+    fn ordered_places(
+        &mut self,
+        span: Span,
+        lp: Place,
+        bin: BinOp,
+        rp: Place,
+        lt: Ty,
+        dest: Place,
+    ) -> R<()> {
+        let (ot, [less, _, greater]) = self.ordering_ty(span)?;
         let (want, eq) = match bin {
             BinOp::Lt => (less, true),
             BinOp::Gt => (greater, true),
@@ -12026,7 +12039,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         };
         if let Some((d, args)) = partial {
             let Some(opt_t) = self.option_of(ot) else {
-                return self.unsupported(left.span, "a `partial_cmp` with no `Option`");
+                return self.unsupported(span, "a `partial_cmp` with no `Option`");
             };
             let some = self
                 .tys()
@@ -12034,7 +12047,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 .adt_of(opt_t)
                 .and_then(|(a, _)| a.variants.iter().position(|v| v.name == "Some"));
             let Some(some) = some else {
-                return self.unsupported(left.span, "a `partial_cmp` with no `Option`");
+                return self.unsupported(span, "a `partial_cmp` with no `Option`");
             };
             let lo = self.ref_to(lp, lt);
             let ro = self.ref_to(rp, lt);
@@ -12111,7 +12124,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         self.assign(flag, Rvalue::Use(bool_const(bool_t, false)));
         let o = self.temp(ot);
         let outer = self.unordered.replace(flag);
-        let res = self.cmp_places(left.span, lp, rp, lt, Place::local(o));
+        let res = self.cmp_places(span, lp, rp, lt, Place::local(o));
         self.unordered = outer;
         res?;
         let disc = self.temp(isize_t);
@@ -24671,10 +24684,14 @@ impl<'l, 'a> Bx<'l, 'a> {
     }
 
     /// The prelude's `min(a, b)`, `max(a, b)` and `clamp(v, low, high)` on
-    /// integers, chars and bools, in place until the library's Kāra bodies
-    /// are lowered: `min` is `b` when `a > b`, else `a`; `max` is `b` when
-    /// `a < b`, else `a`; `clamp` is `low` below it, `high` above it, else
-    /// `v` (the bodies in `ordering.kara`). `false` for anything else.
+    /// integers, chars and bools, and `min` / `max` on floats, in place
+    /// until the library's Kāra bodies are lowered: `min` is `b` when
+    /// `a > b`, else `a`; `max` is `b` when `a < b`, else `a`; `clamp` is
+    /// `low` below it, `high` above it, else `v` (the bodies in
+    /// `ordering.kara`). Two floats follow IEEE 754 `minNum` / `maxNum`, as
+    /// `f64.min` does: a NaN `a` yields `b`, and a NaN `b` fails the
+    /// comparison and yields `a` (B-2026-11-24-48). `false` for anything
+    /// else.
     fn scalar_min_max(
         &mut self,
         e: &'a Expr,
@@ -24692,32 +24709,39 @@ impl<'l, 'a> Bx<'l, 'a> {
             _ => return Ok(false),
         };
         let t = self.expr_ty(e)?;
-        if !matches!(
+        let float = matches!(self.tys().tcx().kind(t), HK::Float(_));
+        if !(matches!(
             self.tys().tcx().kind(t),
             HK::Int(_) | HK::UInt(_) | HK::Char | HK::Bool
-        ) {
+        ) || float && name != "clamp")
+        {
             return Ok(false);
         }
         let bool_t = self.tys().bool();
         let x = self.temp(t);
         let (o, _) = self.scalar_operand(&value.value)?;
         self.assign(x, Rvalue::Use(retype_const(o, t)));
+        // `(op, rhs, taken)`: `x <op> rhs` takes `taken`.
         let mut bounds = Vec::new();
         for (op, b) in steps {
             let y = self.temp(t);
             let (o, _) = self.scalar_operand(&b.value)?;
             self.assign(y, Rvalue::Use(retype_const(o, t)));
-            bounds.push((op, y));
+            // A NaN `a` is not compared: `x != x` takes `b` first.
+            if float {
+                bounds.push((BinOp::Ne, x, y));
+            }
+            bounds.push((op, y, y));
         }
         let join = self.b.new_block();
-        for (op, y) in bounds {
+        for (op, rhs, y) in bounds {
             let c = self.temp(bool_t);
             self.assign(
                 c,
                 Rvalue::BinaryOp(
                     op,
                     Operand::Copy(Place::local(x)),
-                    Operand::Copy(Place::local(y)),
+                    Operand::Copy(Place::local(rhs)),
                 ),
             );
             let take_bound = self.b.new_block();
@@ -24739,7 +24763,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         Ok(true)
     }
 
-    /// The library's `min`, `max` and `clamp` on any other `Ord` type, as
+    /// The library's `min`, `max` and `clamp` on any other ordered type, as
     /// their bodies in `ordering.kara` are: `min` keeps `a` unless `a > b`,
     /// `max` keeps `a` unless `a < b`, and `clamp` takes `low` below it and
     /// `high` above it. The argument not returned is dropped.
@@ -24763,6 +24787,29 @@ impl<'l, 'a> Bx<'l, 'a> {
         };
         let join = self.b.new_block();
         match args {
+            // A type with its own `partial_cmp` and no `cmp` is compared
+            // by it, as `a > b` is: an unordered pair keeps `a` (the
+            // free `min` / `max` take any `PartialOrd`, B-2026-11-24-48).
+            [a, b]
+                if self.user_impl_method(t, "Ord", "cmp").is_none()
+                    && self
+                        .user_impl_method(t, "PartialOrd", "partial_cmp")
+                        .is_some() =>
+            {
+                let x = self.temp_of(&a.value, t)?;
+                let y = self.temp_of(&b.value, t)?;
+                let op = if name == "min" { BinOp::Gt } else { BinOp::Lt };
+                let c = self.temp(self.tys().bool());
+                self.ordered_places(
+                    e.span,
+                    Place::local(x),
+                    op,
+                    Place::local(y),
+                    t,
+                    Place::local(c),
+                )?;
+                self.pick(c, y, x, &dest, join);
+            }
             [a, b] => {
                 let x = self.temp_of(&a.value, t)?;
                 let y = self.temp_of(&b.value, t)?;

@@ -3710,6 +3710,12 @@ pub struct TypeChecker<'a> {
     /// literal takes its type when its body ends, and the call's frames are
     /// recorded then (`default_literal_vars`, B-2026-11-08-44).
     pub(super) pending_literal_call_subs: Vec<(Span, String, TypeVarId)>,
+    /// A call's bounds on a type parameter a literal's variable solves,
+    /// still open at the call: `(call span, parameter, variable, bounds)`.
+    /// `min(1.5, 2.5)` under `T: Ord` binds `T` to the two literals'
+    /// variable, which takes `f64` only when the body ends; the bounds are
+    /// checked then, as a typed `f64` is at the call (B-2026-11-25-36).
+    pub(super) pending_literal_bounds: Vec<(Span, String, TypeVarId, Vec<crate::ast::TraitBound>)>,
     /// `let` bindings whose type is an EXISTENTIAL: `(pattern span,
     /// existential origin)`. Same deferral, same reason, as
     /// `pending_existential_call_subs` — resolved into `pattern_binding_types`
@@ -5147,6 +5153,7 @@ impl<'a> TypeChecker<'a> {
             impl_trait_return_witnesses: FxHashMap::default(),
             pending_existential_call_subs: Vec::new(),
             pending_literal_call_subs: Vec::new(),
+            pending_literal_bounds: Vec::new(),
             pending_existential_projections: Vec::new(),
             pending_existential_method_callees: Vec::new(),
             pending_existential_pattern_bindings: Vec::new(),
@@ -12294,6 +12301,22 @@ impl<'a> TypeChecker<'a> {
             for (id, n, span) in std::mem::take(&mut self.pending_const_shifts) {
                 let t = resolve(self, &Type::TypeVar(id));
                 self.check_shift_amount_value(n, &t, &span);
+            }
+            for (span, name, id, bounds) in std::mem::take(&mut self.pending_literal_bounds) {
+                let t = resolve(self, &Type::TypeVar(id));
+                if matches!(t, Type::TypeVar(_)) {
+                    continue;
+                }
+                for bound in &bounds {
+                    let Some(trait_name) = bound.path.last() else {
+                        continue;
+                    };
+                    if !self.type_satisfies_bound(&t, trait_name) {
+                        let message =
+                            self.render_unsatisfied_bound_message(&name, trait_name, &t, bound);
+                        self.type_error(message, span, TypeErrorKind::TypeMismatch);
+                    }
+                }
             }
             for (span, name, id) in std::mem::take(&mut self.pending_literal_call_subs) {
                 let t = resolve(self, &Type::TypeVar(id));

@@ -1161,7 +1161,7 @@ So: round toward zero; if the result is outside the target's range, saturate to 
 
 #### Floats
 
-**`f32` and `f64` follow IEEE 754 exactly.** `NaN != NaN`. They implement `PartialEq` and `PartialOrd` but **not** `Eq`, `Ord` or `Hash`: NaN breaks the reflexivity `Eq` requires (`a == a` for every `a`) and the totality `Ord` requires. So `f64` cannot be a `Map` or `Set` key, or appear anywhere `Ord` is required. This keeps FFI simple: `f32` and `f64` cross `extern` boundaries and behave the same on both sides.
+**`f32` and `f64` follow IEEE 754 exactly.** `NaN != NaN`. They implement `PartialEq` and `PartialOrd` but **not** `Eq`, `Ord` or `Hash`: NaN breaks the reflexivity `Eq` requires (`a == a` for every `a`) and the totality `Ord` requires. So `f64` cannot be a `Map` or `Set` key, or appear anywhere `Ord` is required. This keeps FFI simple: `f32` and `f64` cross `extern` boundaries and behave the same on both sides. The free `min` and `max` ask only `PartialOrd`, and on two floats follow IEEE 754 `minNum` and `maxNum` as the methods `f64.min` and `f64.max` do, so `min(a, b)` with a NaN argument is the other one ([library/core-types.md](library/core-types.md#min-max-and-clamp), review-thread ruling 2026-11-25, B-2026-11-24-48).
 
 **Printing.** A float prints as the shortest decimal that reads back as the same value, always with a `.` or an exponent, so `1.0` never prints as `1`. `to_string()`, `println` and f-string interpolation all use this rendering; the exponent and special-value rules are in [library/core-types.md](library/core-types.md#printing).
 

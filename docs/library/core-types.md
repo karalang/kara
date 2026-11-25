@@ -98,6 +98,18 @@ ps.sort_by(|a, b| a.score.cmp(b.score).reverse().then(a.name.cmp(b.name)));
 
 Use `then_with` when the second key is costly to compute: `a.len().cmp(b.len()).then_with(|| expensive(a).cmp(expensive(b)))`.
 
+### `min`, `max` and `clamp`
+
+The prelude's free functions compare two or three values of one type and return one of them:
+
+| Function | Signature | Notes |
+|---|---|---|
+| `min` | `fn min[T: PartialOrd](a: own T, b: own T) -> T` | `b` when `a > b`, otherwise `a` |
+| `max` | `fn max[T: PartialOrd](a: own T, b: own T) -> T` | `b` when `a < b`, otherwise `a` |
+| `clamp` | `fn clamp[T: Ord](value: own T, low: own T, high: own T) -> T` | `low` below it, `high` above it, otherwise `value`; `low` wins when `low > high` |
+
+A tie returns the first argument, for `min` and `max` alike. An unordered pair also returns the first argument. Two floats follow IEEE 754 `minNum` and `maxNum`, as the methods `f64.min` and `f64.max` do: a NaN argument yields the other one, so `min(gap, 360.0 - gap)` and `gap.min(360.0 - gap)` agree, and `min(nan, 1.0)` is `1.0` (review-thread ruling 2026-11-25, B-2026-11-24-48). `clamp` takes `Ord`, so on floats it is the method `x.clamp(lo, hi)`.
+
 ### `Reverse`
 
 `std.cmp.Reverse[T]` reverses the order of one key inside a larger one, where a comparator cannot reach: a heap's item, or a `sort_by_key` / `max_by_key` key. It is declared `struct Reverse[T] { pub value: T }` and imported with `import std.cmp.Reverse;`.

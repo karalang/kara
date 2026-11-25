@@ -10647,6 +10647,19 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 }
             }
+            // A literal's variable, still open (`min(1.5, 2.5)`), takes its
+            // type when the body ends, and the bounds are checked then
+            // (`default_literal_vars`, B-2026-11-25-36).
+            if let Type::TypeVar(id) = concrete_ty {
+                if self.is_open_literal_var(*id) {
+                    self.pending_literal_bounds.push((
+                        *discharge_span,
+                        type_name.clone(),
+                        *id,
+                        bounds.clone(),
+                    ));
+                }
+            }
             if matches!(concrete_ty, Type::TypeVar(_) | Type::Error)
                 || self.type_param_name(concrete_ty).is_some()
                 || self.projection_declares_all(concrete_ty, bounds)
@@ -11417,6 +11430,17 @@ impl<'a> super::TypeChecker<'a> {
     /// ` ; note: ...` clauses. Absent fields fall back to the default
     /// phrasing for that clause; an entirely absent payload reproduces
     /// the pre-slice-6 message verbatim.
+    /// Whether `id` is, or is unified with, the variable of a literal in
+    /// an open body, which takes `i64` or `f64` when the body ends.
+    fn is_open_literal_var(&self, id: TypeVarId) -> bool {
+        let root = |v: TypeVarId| {
+            super::inference::resolve_type_var_top(&Type::TypeVar(v), &self.env.substitutions)
+        };
+        let mine = root(id);
+        matches!(mine, Type::TypeVar(_))
+            && self.body_literal_vars.iter().any(|s| root(s.id) == mine)
+    }
+
     pub(super) fn render_unsatisfied_bound_message(
         &self,
         type_name: &str,

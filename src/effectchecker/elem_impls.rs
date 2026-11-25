@@ -611,7 +611,8 @@ pub const BY_KEY: &[&str] = &["sort_by_key", "min_by_key", "max_by_key"];
 
 /// The built-in functions that run a trait on each argument: the print
 /// family renders through `Display` (design.md § Display), `assert_eq`
-/// compares and, when it fails, renders through `Debug`.
+/// compares and, when it fails, renders through `Debug`, and the free
+/// `min`, `max` and `clamp` compare.
 pub const FUNCTIONS: &[(&str, &[ElemTrait])] = &[
     ("println", &[ElemTrait::Display]),
     ("print", &[ElemTrait::Display]),
@@ -621,6 +622,11 @@ pub const FUNCTIONS: &[(&str, &[ElemTrait])] = &[
     ("assert_ne", &[ElemTrait::Eq, ElemTrait::Debug]),
     ("dbg", &[ElemTrait::Debug]),
     ("repeat", &[ElemTrait::Clone]),
+    // The free `min` and `max` compare by `partial_cmp`, `clamp` by `cmp`
+    // (library/core-types.md § `min`, `max` and `clamp`).
+    ("min", &[ElemTrait::PartialOrd]),
+    ("max", &[ElemTrait::PartialOrd]),
+    ("clamp", &[ElemTrait::Ord]),
 ];
 
 /// The associated functions of a built-in type that run a trait on an

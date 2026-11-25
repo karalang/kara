@@ -27,8 +27,9 @@ impl Ordering {
 
 // ── std.cmp free functions (roadmap Phase 8 § std.cmp) ──────────────
 //
-// `min` / `max` / `clamp` over any `Ord` type. Pure (no effect clause):
-// `Ord.cmp` is side-effect free, so these carry the empty effect set.
+// `min` / `max` over any `PartialOrd` type, `clamp` over any `Ord` one.
+// Pure (no effect clause): the comparisons are side-effect free, so
+// these carry the empty effect set.
 // Ties return the *first* argument for both `min` and `max` — a single
 // consistent rule rather than Rust's min-first / max-second asymmetry.
 //
@@ -40,16 +41,24 @@ impl Ordering {
 // other's buffer — fixed in both the non-generic and generic/monomorphized
 // paths (B-2026-07-08-6).
 
-pub fn min[T: Ord](a: own T, b: own T) -> T {
-    match a.cmp(b) {
-        Ordering.Greater => b,
+//
+// `min` and `max` take any `PartialOrd` pair of one type, floats included
+// (review-thread ruling 2026-11-25, B-2026-11-24-48): an unordered pair
+// keeps the first argument, and two floats follow IEEE 754 `minNum` /
+// `maxNum`, as `f64.min` does, so a NaN operand yields the other one. The
+// compiler lowers the float case itself; this body is the order for every
+// other type.
+
+pub fn min[T: PartialOrd](a: own T, b: own T) -> T {
+    match a.partial_cmp(b) {
+        Some(Ordering.Greater) => b,
         _ => a,
     }
 }
 
-pub fn max[T: Ord](a: own T, b: own T) -> T {
-    match a.cmp(b) {
-        Ordering.Less => b,
+pub fn max[T: PartialOrd](a: own T, b: own T) -> T {
+    match a.partial_cmp(b) {
+        Some(Ordering.Less) => b,
         _ => a,
     }
 }
