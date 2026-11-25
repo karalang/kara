@@ -61,7 +61,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | diagnostics | 765 |
 | false-positive | 375 |
 | missing-feature | 256 |
-| perf | 203 |
+| perf | 204 |
 | other | 149 |
 | soundness | 131 |
 | miscompile | 108 |
@@ -78,11 +78,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 911 |
 | mir | 336 |
-| mir-llvm | 329 |
+| mir-llvm | 330 |
 | cli | 314 |
 | parser | 162 |
 | ownership | 138 |
-| runtime | 110 |
+| runtime | 111 |
 | interp | 106 |
 | effect | 65 |
 | resolver | 57 |
@@ -115,7 +115,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-109 | 2026-11-20 | mir-llvm | low | `v.windows(2)` builds a `Vec` of slices on every call, and each `w[0]`, `w[1]` is bounds-checked: kata 1752's drop count `nums.windows(2).into_iter().filter(|w| w[0] > w[1]).count()` runs 1.25x Rust (0.165 s vs 0.132 s, 1.96G vs 0.86G instructions) since the cursor `into_iter` (f686592c10); it was 2.0x | — |
 | B-2026-11-24-38 | 2026-11-24 | typecheck+cli | medium | `a === b` on two handles of a `shared struct`, JavaScript's identity test, became a structural comparison under `karac fix`: the `===` habit mends it to `==`, and the refusal that follows said only "add #[derive(PartialEq)]" and applied that derive whenever every field compares, so the program then printed true for two distinct handles with equal fields; neither message named `a.ref_eq(b)`, a handle's identity | — |
 | B-2026-11-24-39 | 2026-11-24 | cli | low | `karac fix`'s `#[derive(PartialEq)]` (and PartialOrd, Hash) line for a `pub struct` or `shared struct` at the top level is indented by the width of `pub ` or `shared `: derive_line takes the `struct` keyword's column as the item's indentation | — |
-| B-2026-11-24-41 | 2026-11-24 | mir-llvm+runtime | medium | Counting 10^5 random keys into a compiled `SortedMap` takes about 3.4x Rust's `BTreeMap` (`*count.entry(x).or_insert(0) += 1`, 100 rounds: 5.5 to 5.8 s against 1.6 s), and plain `insert(x, 1)` about 2.8x (4.6 s against 1.6 s), so kata 1296's bench runs 2x Rust's | — |
 | B-2026-11-24-42 | 2026-11-24 | typecheck+cli | low | `half.find(|c: char| c != 'a')` on `half = s[..n / 2]`, Rust's `str::find` over a string's first half, got only the bare "'find' takes a `Str` pattern, found 'Fn(char) -> bool'" with no fix: the `char_indices().find(..).map(|(i, _)| i)` fix (B-2026-11-20-140) reached only a `String` receiver with an unannotated closure, and a `Str` view or a `c: char` parameter missed it | — |
 | B-2026-11-24-43 | 2026-11-24 | typecheck | medium | `let mat: Vec[Vec[i32]] = [[3, 3, 1, 1].to_vec(), ..].to_vec();`, a list of integer literals turned `.to_vec()` as Rust writes a `Vec`, is refused with "expected 'Vec[Vec[i32]]', found 'Vec[Vec[i64]]'" and the advice to annotate the binding, which is annotated: the wanted element type reaches a list behind `.to_vec()` only when it holds a `Str` (B-2026-11-09-49), so the literals keep the default `i64` | — |
 | B-2026-11-24-46 | 2026-11-24 | cli | low | `karac explain` on a function in a recursive group gives each effect's call chain but not the fixpoint chain design.md § Effects promises (`∅ = φ₀ ⊊ φ₁ ⊊ … ⊊ φ*`, with the callee or operation that added atoms at each step) | — |
@@ -136,6 +135,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-25-25 | 2026-11-25 | mir-llvm | low | A `shared` field's borrow conflict panics with panic-record kind `explicit`, not `borrow_conflict`, on the JIT and the MIR interpreter | — |
 | B-2026-11-25-26 | 2026-11-25 | mir | low | `..mut ref rest` over a `mut ref Array[T, N]` is refused E0516 ('not lowered yet'): the checker types `rest` as `mut ref Array[T, K]`, which needs a sub-array place (remainder of B-2026-11-25-1) | — |
 | B-2026-11-25-27 | 2026-11-25 | interp | medium | `karac run --interp` aborts with a Rust stack overflow (exit 134, 'thread has overflowed its stack') dropping a 1,000,000-node `shared` chain; `karac run` (JIT) and a built binary drop it, as design.md §16 promises (no frames per level, B-2026-11-16-311) | — |
+| B-2026-11-25-31 | 2026-11-25 | mir-llvm+runtime | low | Inserting 10^5 random `i64` keys into a compiled `SortedMap` still takes about 1.5x Rust's `BTreeMap` (100 rounds: 1.5 s against 1.0 s; `entry(k).or_insert(0) += 1` 1.6 s against 0.97 s), after B-2026-11-24-41 | — |
 
 ### Relocated
 
@@ -2276,6 +2276,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-24-36 | typecheck+mir | medium | A `mut ref` element binding in a slice pattern (`[mut ref first, ..]`) cannot write through the element: over a local Array it is bound as `ref` (E02… | f0fd3f3144 |
 | B-2026-11-24-37 | mir | medium | A closure's disjoint capture goes only one field deep: a closure reading `u.address.city` captures `u.address` whole, so writing `u.address.zip` whil… | f0fd3f3144 |
 | B-2026-11-24-40 | typecheck | low | `(0..5).scan(v, \|x, _\| Some((x * x, x)))` with `v` the `ref i64` that iterating a `Set` gives is refused with a bare E0200 "expected 'Option[(ref i64… | 6d730ff01b |
+| B-2026-11-24-41 | mir-llvm+runtime | medium | Counting 10^5 random keys into a compiled `SortedMap` takes about 3.4x Rust's `BTreeMap` (`*count.entry(x).or_insert(0) += 1`, 100 rounds: 5.5 to 5.8… | 0288a5a07a |
 | B-2026-11-24-44 | mir | high | Two `par` branches that each sort, clone or dedup a `Vec` of a program type, or file or look up its key in a `Map` / `Set`, are accepted with no E041… | c8cca30308 |
 | B-2026-11-24-45 | mir | medium | A function declaring a keyed resource (`fn save(i: u64) with writes(UserDb[i])`, over the deferred `effect resource UserDb[id: u64];`) is charged not… | f2af9c2119 |
 | B-2026-11-24-47 | parser | low | Kotlin and Swift first-day habits had no Kāra form or a misleading one: `val`, `fun f(): T = e`, `Int` / `Double` / `Bool`, `T?`, `?:`, `!!` / `!`, `… | 6be22cb42b |
