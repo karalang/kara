@@ -1429,12 +1429,21 @@ impl Deserialize for Json {
         }
         d.deserialize_reset(m);
         d.deserialize_map_begin()?;
+        // A repeated key keeps its first place and takes the last value, as
+        // `Json.parse` reads it (json.md § A `Json` inside a typed value).
         let mut fields: Vec[(String, Json)] = Vec.new();
+        let mut at: Map[String, i64] = Map.new();
         while d.deserialize_key()? {
             let k = d.deserialize_string()?;
             d.deserialize_value()?;
             let v: Json = serde_next(d)?;
-            fields.push((k, v));
+            match at.get(k) {
+                Some(i) => fields[i] = (k, v),
+                None => {
+                    at.insert(k.clone(), fields.len());
+                    fields.push((k, v));
+                }
+            }
         }
         Ok(Json.Object(fields))
     }
