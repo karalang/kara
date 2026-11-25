@@ -583,6 +583,15 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Added
 
+- `..mut ref rest` over a `mut ref Array[T, N]` binds `rest` as a
+  `mut ref Array[T, K]` into the array itself (design.md § Slice and array
+  patterns): writes through it, element by element, through `iter_mut`,
+  `sort` or a whole `*rest = [..]`, land in the caller's array, and the
+  elements the pattern binds beside it stay usable alongside it. MIR has a
+  sub-array place (`_1[1..4]`) that borrowck treats as disjoint from the
+  elements outside it. It was refused as "not lowered yet"; a copied
+  element in the same pattern (`let [h, ..mut ref r] = a`) also no longer
+  counts as moving `a` (B-2026-11-25-26).
 - `karac explain <file>.<fn>` on a function in a recursive group, or one
   that calls itself, adds a `Fixpoint:` section: the group, then the
   chain `φ0 = ∅`, `φ1`, … up to `φ*`, each step with the atoms it added

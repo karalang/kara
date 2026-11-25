@@ -95,6 +95,22 @@ pub(super) fn project(
             }
             element(tys, cur)
         }
+        ProjElem::Subarray { .. } if tys.is_vector(cur.ty) => {
+            Err(format!("sub-array of the vector {}", tys.display(cur.ty)))
+        }
+        ProjElem::Subarray { from, len } => match kind {
+            TyKind::Array(e, n) if from.checked_add(len).is_some_and(|end| end <= n) => {
+                Ok(PlaceTy {
+                    ty: tys.intern(TyKind::Array(e, len)),
+                    variant: None,
+                })
+            }
+            TyKind::Array(..) => Err(format!(
+                "sub-array [{from}, {from} + {len}) out of bounds for {}",
+                tys.display(cur.ty)
+            )),
+            _ => Err(format!("sub-array of non-array {}", tys.display(cur.ty))),
+        },
         ProjElem::ConstIndex(i) => {
             if let TyKind::Array(_, n) = kind {
                 if i >= n {

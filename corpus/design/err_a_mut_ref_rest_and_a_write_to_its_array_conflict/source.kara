@@ -1,0 +1,14 @@
+// design.md § Slice and array patterns: `..mut ref rest` borrows the
+// sub-array mutably, so writing the array while `rest` is still used is a
+// borrow conflict (core-semantics.md §5.6).
+fn clash(a: mut ref Array[i64, 4]) {
+    let [_, ..mut ref r] = a;
+    a[2] = 7;
+    r[0] = 1;
+}
+
+fn main() {
+    let mut a: Array[i64, 4] = [1, 2, 3, 4];
+    clash(mut a);
+    println(f"{a}");
+}

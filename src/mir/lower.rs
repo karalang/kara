@@ -21434,8 +21434,27 @@ impl<'l, 'a> Bx<'l, 'a> {
                 }
                 if let Some(ast::RestPattern::Bound(name, mut_ref)) = rest {
                     let mut_ref = *mut_ref;
-                    if mut_ref && known.is_some() {
-                        return self.unsupported(pat.span, "`..mut ref rest` over an array");
+                    // Over an array, `..mut ref rest` borrows the middle in
+                    // place, a `mut ref Array[T, K]` disjoint from the
+                    // elements the pattern binds around it (B-2026-11-25-26).
+                    if let (true, Some(n)) = (mut_ref, known) {
+                        let Some(len) = n.checked_sub(k + j) else {
+                            return self
+                                .unsupported(pat.span, "a slice pattern longer than its array");
+                        };
+                        if self.tys().is_vector(t) {
+                            return self.unsupported(pat.span, "`..mut ref rest` over a vector");
+                        }
+                        let at = self.tys().tcx().intern(HK::Array {
+                            elem,
+                            len: crate::ty::ArrayLen::Known(len),
+                        });
+                        let rt = self.tys().tcx().reference(at, true);
+                        let l = self.user_local(name, rt, pat.id);
+                        let mid = place.project(ProjElem::Subarray { from: k, len });
+                        self.assign(l, Rvalue::Ref(BorrowKind::Mut, mid));
+                        out.push((l, rt));
+                        return Ok(());
                     }
                     // Over an array, `..rest` is the middle as an array; a
                     // middle of `Copy` elements is copied, which reads the

@@ -240,6 +240,17 @@ impl<'a> super::OwnershipChecker<'a> {
                     || (crate::ownership::core_rules()
                         && !pattern.binding_names().is_empty()
                         && !self.pattern_binds_anything(pattern))
+                    // Destructuring a reference (`let [h, ..mut ref r] = a`
+                    // with `a: mut ref Array[i64, 4]`) copies or borrows its
+                    // parts; the reference itself stays usable.
+                    || (crate::ownership::core_rules()
+                        && matches!(
+                            pattern.kind,
+                            PatternKind::Slice { .. }
+                                | PatternKind::Tuple(_)
+                                | PatternKind::Struct { .. }
+                        )
+                        && self.is_borrow_typed_scrutinee(value, param_types))
                 {
                     self.check_expr_reading(value, states, param_types, param_usage);
                 } else if let Some(parts) = self.core_copied_parts(pattern, value) {
@@ -717,6 +728,46 @@ impl super::OwnershipChecker<'_> {
             (PatternKind::Tuple(items), Type::Tuple(elems)) if items.len() == elems.len() => {
                 for (item, elem) in items.iter().zip(elems) {
                     self.record_let_binding_types(item, elem);
+                }
+            }
+            // A slice pattern's elements take the element type, through a
+            // reference too: `let [h, ..mut ref r] = a` over a
+            // `mut ref Array[i64, 4]` copies `h` out as an `i64`, which a
+            // loop may read again; a non-`Copy` element is bound by
+            // reference (B-2026-11-25-26). The rest keeps the value's type.
+            (
+                PatternKind::Slice {
+                    prefix,
+                    rest,
+                    suffix,
+                },
+                _,
+            ) if matches!(
+                ty,
+                Type::Array { .. } | Type::Slice { .. } | Type::Ref(_) | Type::MutRef(_)
+            ) =>
+            {
+                let (inner, wrap): (&Type, fn(Box<Type>) -> Type) = match ty {
+                    Type::Ref(t) => (t, Type::Ref),
+                    Type::MutRef(t) => (t, Type::MutRef),
+                    t => (t, |t| *t),
+                };
+                let (Type::Array { element, .. } | Type::Slice { element, .. }) = inner else {
+                    for name in pattern.binding_names() {
+                        self.binding_types.insert(name.clone(), ty.clone());
+                    }
+                    return;
+                };
+                let elem = if self.is_copy_type(element) {
+                    (**element).clone()
+                } else {
+                    wrap(element.clone())
+                };
+                for item in prefix.iter().chain(suffix) {
+                    self.record_let_binding_types(item, &elem);
+                }
+                if let Some(RestPattern::Bound(name, _)) = rest {
+                    self.binding_types.insert(name.clone(), ty.clone());
                 }
             }
             _ => {

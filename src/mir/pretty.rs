@@ -181,6 +181,7 @@ pub fn place(body: &Body, tys: &TyInterner, p: &Place) -> String {
             ProjElem::Deref => format!("(*{s})"),
             ProjElem::Index(l) => format!("{s}[{l}]"),
             ProjElem::ConstIndex(i) => format!("{s}[{i}]"),
+            ProjElem::Subarray { from, len } => format!("{s}[{from}..{}]", from + len),
         };
         cur = cur.project(*elem);
     }

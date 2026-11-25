@@ -1059,6 +1059,7 @@ fn run_with(
         parked_flags: Vec::new(),
         held_locks: Vec::new(),
         tracing_min: 0,
+        window_hit: None,
         debug_render: false,
         panic_message: None,
         panic_kind: None,
@@ -1932,6 +1933,11 @@ struct Interp<'a> {
     held_locks: Vec<Addr>,
     /// `std.tracing`'s minimum level, by rank (trace 0 .. error 4).
     tracing_min: i128,
+    /// Set by a resolution that ended on a whole sub-array reached through
+    /// its reference (`*rest`): the array's place and the view's start and
+    /// length, which a read, a write, a reborrow or a `Len` of it takes
+    /// from here, element by element (B-2026-11-25-26).
+    window_hit: Option<(Addr, u64, u64)>,
     /// Set while `dbg` renders its value: the `Debug` form, which quotes
     /// strings and characters and ignores a user `Display`.
     debug_render: bool,
@@ -14615,6 +14621,11 @@ impl<'a> Interp<'a> {
                 }
                 self.display_typed(&inner, t)?
             }
+            // A reference to a sub-array (`..mut ref rest`) is a view.
+            (TyKind::Ref(t) | TyKind::MutRef(t), Value::Slice { base, lo, len }) => {
+                let whole = self.read_window(((**base).clone(), *lo, *len))?;
+                self.display_typed(&whole, t)?
+            }
             (TyKind::Array(e, _), Value::Agg(fs)) => {
                 let tys = vec![e; fs.len()];
                 let shown = list(self, fs, &tys)?.join(", ");
@@ -15876,6 +15887,10 @@ impl<'a> Interp<'a> {
         let mut behind_handle = false;
         let tys = self.tys;
         let mut boxed_at: Option<Addr> = None;
+        // A reference to a sub-array is a view of its array
+        // (`Value::Slice`): through it, the next index counts from the
+        // view's start and stops at its length (B-2026-11-25-26).
+        let mut window: Option<(u64, u64)> = None;
         let uninit = |what: &str| -> R<Option<(Addr, Ty, Option<Addr>)>> {
             if mode == Mode::Probe {
                 Ok(None)
@@ -15979,6 +15994,16 @@ impl<'a> Interp<'a> {
                 ProjElem::Deref => {
                     match self.slot_ref(&addr)? {
                         Value::Ref(a) => addr = a.clone(),
+                        Value::Slice { base, lo, len }
+                            if matches!(
+                                self.tys.kind(ty),
+                                TyKind::Ref(t) | TyKind::MutRef(t)
+                                    if matches!(self.tys.kind(t), TyKind::Array(..))
+                            ) =>
+                        {
+                            window = Some((*lo, *len));
+                            addr = (**base).clone();
+                        }
                         Value::Uninit => return uninit("deref"),
                         other => return err(format!("deref of non-reference {other:?}")),
                     }
@@ -16001,6 +16026,13 @@ impl<'a> Interp<'a> {
                         ProjElem::ConstIndex(i) => i,
                         _ => unreachable!(),
                     };
+                    let i = match window.take() {
+                        Some((lo, len)) if i < len => lo + i,
+                        Some((_, len)) => {
+                            return err(format!("index {i} out of bounds for length {len}"))
+                        }
+                        None => i,
+                    };
                     addr.path.push(i);
                     ty = match self.tys.kind(ty) {
                         TyKind::Array(e, _) | TyKind::Slice(e) => e,
@@ -16010,7 +16042,26 @@ impl<'a> Interp<'a> {
                     // Bounds are checked when the slot is reached.
                     self.slot_mut(&addr)?;
                 }
+                ProjElem::Subarray { .. } => {
+                    return err(format!(
+                        "{} is a sub-array, which is only borrowed",
+                        pretty::place(body, tys, place)
+                    ))
+                }
             }
+            if window.is_some() && !matches!(elem, ProjElem::Deref) {
+                return err(format!(
+                    "{} steps into a sub-array other than by an index",
+                    pretty::place(body, tys, place)
+                ));
+            }
+        }
+        if let Some((lo, len)) = window {
+            self.window_hit = Some((addr, lo, len));
+            return err(format!(
+                "{} is a whole sub-array, read only through its elements",
+                pretty::place(body, tys, place)
+            ));
         }
         Ok(Some((addr, ty, boxed_at)))
     }
@@ -16193,6 +16244,76 @@ impl<'a> Interp<'a> {
         Some(addr)
     }
 
+    /// A reference to the sub-array `p` (its last step a `Subarray`): a
+    /// view of the array's elements `[from, from + len)`, or of a view's,
+    /// as a `Slice[T]` is (B-2026-11-25-26).
+    fn subarray_view(&mut self, body: &Body, p: &Place) -> R<Value> {
+        let Some((&ProjElem::Subarray { from, len }, prefix)) = p.projection.split_last() else {
+            return err("a sub-array view of a place that is not one");
+        };
+        // A sub-array of a sub-array reached through its reference.
+        if let Some((ProjElem::Deref, inner)) = prefix.split_last() {
+            let inner = Place {
+                local: p.local,
+                projection: inner.to_vec(),
+            };
+            let (a, _) = self.resolve_read(body, &inner)?;
+            if let Value::Slice { base, lo, len: n } = self.slot_ref(&a)? {
+                if from + len > *n {
+                    return err(format!(
+                        "sub-array [{from}, {}) of a view of {n}",
+                        from + len
+                    ));
+                }
+                return Ok(Value::Slice {
+                    base: base.clone(),
+                    lo: lo + from,
+                    len,
+                });
+            }
+        }
+        let prefix = Place {
+            local: p.local,
+            projection: prefix.to_vec(),
+        };
+        let (base, _) = self.resolve_read(body, &prefix)?;
+        Ok(Value::Slice {
+            base: Box::new(base),
+            lo: from,
+            len,
+        })
+    }
+
+    /// The elements of the sub-array view `(base, lo, len)`, copied.
+    fn read_window(&mut self, (base, lo, len): (Addr, u64, u64)) -> R<Value> {
+        let mut vals = Vec::with_capacity(len as usize);
+        for i in lo..lo + len {
+            let mut at = base.clone();
+            at.path.push(i);
+            vals.push(self.slot_ref(&at)?.copy());
+        }
+        Ok(Value::Agg(vals))
+    }
+
+    /// Writes the array `v` over the sub-array view `(base, lo, len)`.
+    fn write_window(&mut self, (base, lo, len): (Addr, u64, u64), v: Value) -> R<()> {
+        let Value::Agg(vals) = v else {
+            return err("a sub-array assigned a value that is not an array");
+        };
+        if vals.len() as u64 != len {
+            return err(format!(
+                "a sub-array of {len} assigned {} elements",
+                vals.len()
+            ));
+        }
+        for (i, x) in (lo..).zip(vals) {
+            let mut at = base.clone();
+            at.path.push(i);
+            *self.slot_mut(&at)? = x;
+        }
+        Ok(())
+    }
+
     fn resolve_read(&mut self, body: &Body, place: &Place) -> R<(Addr, Ty)> {
         Ok(self
             .resolve(body, place, Mode::Read)?
@@ -16264,9 +16385,16 @@ impl<'a> Interp<'a> {
                 } else if let Some((at, t)) = self.native_target(body, p) {
                     self.native_store(at, t, v)?;
                 } else {
-                    let (addr, ty) = self
-                        .resolve(body, p, Mode::Write)?
-                        .expect("write mode never probes");
+                    let (addr, ty) = match self.resolve(body, p, Mode::Write) {
+                        Ok(at) => at.expect("write mode never probes"),
+                        Err(e) => match self.window_hit.take() {
+                            Some(w) => {
+                                self.write_window(w, v)?;
+                                return Ok(());
+                            }
+                            None => return Err(e),
+                        },
+                    };
                     // `p.write(v)` overwrites without dropping, as Rust's
                     // `ptr::write` does: the bits it replaces were read out
                     // (`p.read()`) and live on elsewhere, which the `unsafe`
@@ -16540,9 +16668,19 @@ impl<'a> Interp<'a> {
                     };
                     (v, ty)
                 } else {
-                    let (addr, ty, boxed) = self
-                        .resolve_boxed(body, p, Mode::Read)?
-                        .expect("read mode never probes");
+                    let (addr, ty, boxed) = match self.resolve_boxed(body, p, Mode::Read) {
+                        Ok(at) => at.expect("read mode never probes"),
+                        // A whole sub-array read through its reference
+                        // (`let c = *rest`) is a copy of its elements.
+                        Err(e) => match self.window_hit.take() {
+                            Some(w) => {
+                                let ty = place_ty(body, self.tys, p).map_err(Stop::Error)?.ty;
+                                self.give_back(buf);
+                                return Ok((self.read_window(w)?, ty));
+                            }
+                            None => return Err(e),
+                        },
+                    };
                     let slot = self.slot_mut(&addr)?;
                     if !slot.init_for_read() && !unwinding {
                         return err(format!("read of uninitialized {}", self.place_str(body, p)));
@@ -16602,6 +16740,9 @@ impl<'a> Interp<'a> {
     fn rvalue(&mut self, body: &Body, rv: &Rvalue) -> R<Value> {
         match rv {
             Rvalue::Use(o) => Ok(self.operand(body, o)?.0),
+            Rvalue::Ref(_, p) if matches!(p.projection.last(), Some(ProjElem::Subarray { .. })) => {
+                self.subarray_view(body, p)
+            }
             Rvalue::Ref(_, p) => match self.fast_addr(body, p) {
                 Some(addr) => Ok(Value::Ref(addr)),
                 // A reference to what a native pointer points at (an
@@ -16610,7 +16751,18 @@ impl<'a> Interp<'a> {
                 // ruling 2026-11-16).
                 None => match self.native_ref_target(body, p) {
                     Some(at) => Ok(Value::Int(i128::from(at))),
-                    None => Ok(Value::Ref(self.resolve_read(body, p)?.0)),
+                    None => match self.resolve_read(body, p) {
+                        Ok((at, _)) => Ok(Value::Ref(at)),
+                        // A reborrow of a whole sub-array is its view.
+                        Err(e) => match self.window_hit.take() {
+                            Some((base, lo, len)) => Ok(Value::Slice {
+                                base: Box::new(base),
+                                lo,
+                                len,
+                            }),
+                            None => Err(e),
+                        },
+                    },
                 },
             },
             Rvalue::Retain(p) => {
@@ -16797,7 +16949,13 @@ impl<'a> Interp<'a> {
             Rvalue::Len(p) => {
                 // Read in place: an `Array` local is not copied to count it
                 // (B-2026-10-19-70).
-                let (addr, _) = self.resolve_read(body, p)?;
+                let (addr, _) = match self.resolve_read(body, p) {
+                    Ok(at) => at,
+                    Err(e) => match self.window_hit.take() {
+                        Some((_, _, len)) => return Ok(Value::Int(len as i128)),
+                        None => return Err(e),
+                    },
+                };
                 match self.slot_ref(&addr)? {
                     Value::Agg(fs) => Ok(Value::Int(fs.len() as i128)),
                     _ => err("Len of a non-array value"),
@@ -17472,7 +17630,29 @@ impl<'a> Interp<'a> {
                 target,
                 unwind: UnwindAction::Abort,
             } => {
-                let Some((addr, ty, boxed)) = self.resolve_boxed(body, place, Mode::Probe)? else {
+                let probed = match self.resolve_boxed(body, place, Mode::Probe) {
+                    Ok(at) => at,
+                    // A whole sub-array (`*rest = ..` drops the old one
+                    // first) drops its elements in place.
+                    Err(e) => match self.window_hit.take() {
+                        Some((base, lo, len)) => {
+                            let ty = place_ty(body, self.tys, place).map_err(Stop::Error)?.ty;
+                            let TyKind::Array(el, _) = self.tys.kind(ty) else {
+                                return err("a sub-array place that is not an array");
+                            };
+                            for i in lo..lo + len {
+                                let at = base.child(i);
+                                if self.slot_ref(&at)?.any_init() {
+                                    self.drop_at(&at, el)?;
+                                    *self.slot_mut(&at)? = Value::Uninit;
+                                }
+                            }
+                            return Ok(Some(*target));
+                        }
+                        None => return Err(e),
+                    },
+                };
+                let Some((addr, ty, boxed)) = probed else {
                     if strict {
                         return err(format!(
                             "drop of {}, which is not initialized",

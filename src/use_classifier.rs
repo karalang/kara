@@ -2241,6 +2241,43 @@ impl<'a> UseClassifier<'a> {
                     }
                 }
             }
+            // A slice pattern's elements take the element type, through a
+            // reference too: `let [h, ..mut ref r] = a` over a
+            // `mut ref Array[i64, 4]` copies `h` out as an `i64`; a
+            // non-`Copy` element is bound by reference. The rest keeps the
+            // value's type (B-2026-11-25-26; mirrors the ownership
+            // checker's `record_let_binding_types`).
+            (
+                PatternKind::Slice {
+                    prefix,
+                    rest,
+                    suffix,
+                },
+                Type::Array { .. } | Type::Slice { .. } | Type::Ref(_) | Type::MutRef(_),
+            ) => {
+                let (inner, wrap): (&Type, fn(Box<Type>) -> Type) = match ty {
+                    Type::Ref(t) => (t, Type::Ref),
+                    Type::MutRef(t) => (t, Type::MutRef),
+                    t => (t, |t| *t),
+                };
+                let (Type::Array { element, .. } | Type::Slice { element, .. }) = inner else {
+                    for name in pattern.binding_names() {
+                        self.local_types.insert(name, ty.clone());
+                    }
+                    return;
+                };
+                let elem = if self.is_copy_type(element) {
+                    (**element).clone()
+                } else {
+                    wrap(element.clone())
+                };
+                for item in prefix.iter().chain(suffix) {
+                    self.assign_binding_types(item, &elem);
+                }
+                if let Some(RestPattern::Bound(name, _)) = rest {
+                    self.local_types.insert(name.clone(), ty.clone());
+                }
+            }
             (
                 PatternKind::AtBinding {
                     name,
@@ -2818,7 +2855,15 @@ impl<'a> UseClassifier<'a> {
             && (matches!(&pattern.kind, PatternKind::AtBinding { by_ref: true, .. })
                 || (crate::ownership::core_rules()
                     && !pattern.binding_names().is_empty()
-                    && !self.pattern_binds_anything(pattern)))
+                    && !self.pattern_binds_anything(pattern))
+                // Destructuring a reference copies or borrows its parts;
+                // the reference stays usable (mirrors block_stmt's let).
+                || (crate::ownership::core_rules()
+                    && matches!(
+                        pattern.kind,
+                        PatternKind::Slice { .. } | PatternKind::Tuple(_) | PatternKind::Struct { .. }
+                    )
+                    && self.is_borrow_typed_expr(value)))
         {
             Mode::Reading
         } else {
@@ -2855,7 +2900,11 @@ impl<'a> UseClassifier<'a> {
                 rest,
                 suffix,
             } => {
-                matches!(rest, Some(RestPattern::Bound(..)))
+                // `..mut ref rest` borrows its sub-array (B-2026-11-25-26);
+                // a plain `..rest` binds it by value.
+                matches!(rest, Some(RestPattern::Bound(_, false)))
+                    || (matches!(rest, Some(RestPattern::Bound(_, true)))
+                        && !crate::ownership::core_rules())
                     || prefix
                         .iter()
                         .chain(suffix.iter())

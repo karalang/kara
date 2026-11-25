@@ -1119,11 +1119,10 @@ fn places_overlap(a: &Place, b: &Place, origins: &Origins) -> bool {
             );
     }
     for (x, y) in a.projection.iter().zip(&b.projection) {
-        match (x, y) {
-            (ProjElem::Field(f, _), ProjElem::Field(g, _)) if f != g => return false,
-            (ProjElem::Downcast(v), ProjElem::Downcast(w)) if v != w => return false,
-            (ProjElem::ConstIndex(m), ProjElem::ConstIndex(n)) if m != n => return false,
-            _ => {}
+        match crate::mir::syntax::step_overlap(x, y) {
+            crate::mir::syntax::StepOverlap::Disjoint => return false,
+            crate::mir::syntax::StepOverlap::Overlap => return true,
+            crate::mir::syntax::StepOverlap::Continue => {}
         }
     }
     true
@@ -1140,6 +1139,7 @@ fn place_name(body: &Body, p: &Place) -> String {
         match e {
             ProjElem::Field(f, _) => s.push_str(&format!(".{}", f.0)),
             ProjElem::ConstIndex(n) => s.push_str(&format!("[{n}]")),
+            ProjElem::Subarray { from, len } => s.push_str(&format!("[{from}..{}]", from + len)),
             ProjElem::Index(_) => s.push_str("[_]"),
             ProjElem::Deref | ProjElem::Downcast(_) => {}
         }
@@ -4434,7 +4434,9 @@ fn place_key_in(body: &Body, defs: &BTreeMap<u32, Place>, place: &Place, temps: 
             ProjElem::Field(f, _) if path.len() < MAX_PATH => path.push(f.0),
             ProjElem::Field(..) => {}
             ProjElem::Deref | ProjElem::Downcast(_) => {}
-            ProjElem::Index(_) | ProjElem::ConstIndex(_) => return Key::Any,
+            ProjElem::Index(_) | ProjElem::ConstIndex(_) | ProjElem::Subarray { .. } => {
+                return Key::Any
+            }
         }
     }
     let root = cur.local.0;

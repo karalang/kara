@@ -210,7 +210,11 @@ impl<'a> super::OwnershipChecker<'a> {
                 rest,
                 suffix,
             } => {
-                matches!(rest, Some(RestPattern::Bound(..)))
+                // `..mut ref rest` borrows its sub-array (B-2026-11-25-26);
+                // a plain `..rest` binds it by value.
+                matches!(rest, Some(RestPattern::Bound(_, false)))
+                    || (matches!(rest, Some(RestPattern::Bound(_, true)))
+                        && !crate::ownership::core_rules())
                     || prefix
                         .iter()
                         .chain(suffix.iter())
@@ -228,7 +232,7 @@ impl<'a> super::OwnershipChecker<'a> {
     /// falls back to `param_types` when the scrutinee is a bare
     /// parameter identifier (the span table can lag in synthesised
     /// expressions, but param_types is authoritative for parameters).
-    fn is_borrow_typed_scrutinee(
+    pub(super) fn is_borrow_typed_scrutinee(
         &self,
         scrutinee: &Expr,
         param_types: &HashMap<String, Type>,

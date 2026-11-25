@@ -942,7 +942,17 @@ impl Parser {
                 let e = if c.peek() == Some('_') {
                     ProjElem::Index(c.local()?)
                 } else {
-                    ProjElem::ConstIndex(c.number()?)
+                    let i = c.number()?;
+                    // `[from..end]`: a sub-array (B-2026-11-25-26).
+                    if c.eat("..") {
+                        let end = c.number()?;
+                        let len = end.checked_sub(i).ok_or_else(|| {
+                            format!("sub-array [{i}..{end}] ends before it starts")
+                        })?;
+                        ProjElem::Subarray { from: i, len }
+                    } else {
+                        ProjElem::ConstIndex(i)
+                    }
                 };
                 c.expect("]")?;
                 p = p.project(e);
@@ -1653,6 +1663,7 @@ fn f(_1: E, _2: ref R, _3: mut ref P, _4: Array[i64, 3]) -> (i64, char) {
         _5 = copy (*_2).0;
         _5 = copy _4[_7];
         _5 = copy _4[2];
+        _5 = copy _4[1..3][0];
         _8 = CheckedMul(copy _5, const 9223372036854775807_i64);
         _6 = Not(copy _8.1);
         _6 = Eq(copy (*_3).0, const 0_i64);
@@ -1709,6 +1720,7 @@ fn g(_1: E, _2: mut ref P, _3: (), _4: bool) -> bool {
             "let _6: bool; // drop flag",
             "_5 = Add(copy (_1 as A).1, const -5_i64);",
             "_11 = const -1.5e-7_f64;",
+            "_5 = copy _4[1..3][0];",
             "_0 = (copy _5, const '\\'');",
             "_13 = E.C { const 255_u8, move _9 };",
             "_9 = shared Node { move _10, const \"a \\\"b\\\" // c\\n\" };",

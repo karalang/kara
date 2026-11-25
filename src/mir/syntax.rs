@@ -246,6 +246,60 @@ pub enum ProjElem {
     Index(Local),
     /// An array element at a constant index.
     ConstIndex(u64),
+    /// The elements `[from, from + len)` of an array, in place, as an
+    /// `Array[T, len]`: the middle a `..mut ref rest` pattern borrows
+    /// (B-2026-11-25-26). The builder only borrows it, as the last step of
+    /// the borrowed place, so nothing moves out of or drops through it.
+    Subarray {
+        from: u64,
+        len: u64,
+    },
+}
+
+/// How two projection steps at the same depth of two places on one local
+/// relate ([`step_overlap`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepOverlap {
+    /// They reach disjoint parts: the places do not overlap.
+    Disjoint,
+    /// They reach the same part, or might: compare the next steps.
+    Continue,
+    /// They overlap, and the steps after them count from different
+    /// starts, so no later step can set them apart.
+    Overlap,
+}
+
+/// Distinct fields, distinct variants and distinct constant indices are
+/// disjoint; an element outside a sub-array, and two sub-arrays that share
+/// no element, are too (B-2026-11-25-26). An element inside a sub-array, or
+/// two sub-arrays that share elements from different starts, overlap
+/// whatever follows, since a later index counts from each one's own start.
+pub fn step_overlap(x: &ProjElem, y: &ProjElem) -> StepOverlap {
+    let outside = |i: u64, from: u64, len: u64| i < from || i - from >= len;
+    match (x, y) {
+        (ProjElem::Field(f, _), ProjElem::Field(g, _)) if f != g => StepOverlap::Disjoint,
+        (ProjElem::Downcast(v), ProjElem::Downcast(w)) if v != w => StepOverlap::Disjoint,
+        (ProjElem::ConstIndex(i), ProjElem::ConstIndex(j)) if i != j => StepOverlap::Disjoint,
+        (ProjElem::ConstIndex(i), ProjElem::Subarray { from, len })
+        | (ProjElem::Subarray { from, len }, ProjElem::ConstIndex(i)) => {
+            if outside(*i, *from, *len) {
+                StepOverlap::Disjoint
+            } else {
+                StepOverlap::Overlap
+            }
+        }
+        (ProjElem::Subarray { from: a, len: m }, ProjElem::Subarray { from: b, len: n }) => {
+            if a == b {
+                StepOverlap::Continue
+            } else if a.saturating_add(*m) <= *b || b.saturating_add(*n) <= *a {
+                StepOverlap::Disjoint
+            } else {
+                StepOverlap::Overlap
+            }
+        }
+        (ProjElem::Subarray { .. }, _) | (_, ProjElem::Subarray { .. }) => StepOverlap::Overlap,
+        _ => StepOverlap::Continue,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

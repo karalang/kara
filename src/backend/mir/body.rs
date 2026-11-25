@@ -363,6 +363,16 @@ impl<'ctx> Cx<'ctx, '_> {
                     ty = t;
                     variant = None;
                 }
+                // The array's element `from`, which is where the
+                // `Array[T, len]` of its elements from there starts (at most
+                // one past the end, for an empty one) (B-2026-11-25-26).
+                ProjElem::Subarray { from, len } => {
+                    let (p, el) = self.index(ptr, ty, self.i64(from))?;
+                    slot = None;
+                    ptr = p;
+                    ty = self.tys.intern(TyKind::Array(el, len));
+                    variant = None;
+                }
             }
         }
         Ok((ptr, slot))

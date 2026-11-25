@@ -1,0 +1,9 @@
+source = "B-2026-11-25-26"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "types", "patterns"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Slice and array patterns (s5.589): written `..mut ref rest` over a `mut ref Array[T, N]`, the rest is a `mut ref Array[T, K]` into the array itself. Writes through it (index, `+=`, `iter_mut`, `sort`, `reverse`, a whole `*r = [..]` that drops the old Strings) land in the caller's array; it reads whole (`r.clone()`, `len`, passed on as a `ref Array[T, K]`); a rest of a rest nests; an empty rest has length 0; the elements bound beside it (`mut ref first`, a copied `h`) stay usable alongside it. Refused E0516 'not lowered yet' before the fix."

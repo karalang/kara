@@ -1,0 +1,9 @@
+source = "B-2026-11-25-26"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["design", "types", "patterns", "borrows"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Slice and array patterns with core-semantics.md §5.6: `..mut ref r` borrows the sub-array mutably, so writing the array (`a[2] = 7`) while `r` is used after it is a conflict. The expected.out wording of an error pin is guidance, not a byte oracle."

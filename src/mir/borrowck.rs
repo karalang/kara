@@ -1458,7 +1458,9 @@ fn source_place(body: &Body, tys: &TyInterner, p: &Place) -> Option<String> {
                 }?;
                 s = format!("{s}.{name}");
             }
-            ProjElem::Index(_) | ProjElem::ConstIndex(_) => return None,
+            ProjElem::Index(_) | ProjElem::ConstIndex(_) | ProjElem::Subarray { .. } => {
+                return None
+            }
         }
         cur = cur.project(*elem);
     }
@@ -3419,11 +3421,10 @@ fn overlaps(a: &Place, b: &Place) -> bool {
         return false;
     }
     for (x, y) in a.projection.iter().zip(&b.projection) {
-        match (x, y) {
-            (ProjElem::Field(f, _), ProjElem::Field(g, _)) if f != g => return false,
-            (ProjElem::Downcast(v), ProjElem::Downcast(w)) if v != w => return false,
-            (ProjElem::ConstIndex(i), ProjElem::ConstIndex(j)) if i != j => return false,
-            _ => {}
+        match crate::mir::syntax::step_overlap(x, y) {
+            crate::mir::syntax::StepOverlap::Disjoint => return false,
+            crate::mir::syntax::StepOverlap::Overlap => return true,
+            crate::mir::syntax::StepOverlap::Continue => {}
         }
     }
     true
@@ -3521,6 +3522,48 @@ fn main() -> () {{
     fn one(errs: &[String], starts: &str) {
         assert_eq!(errs.len(), 1, "{errs:?}");
         assert!(errs[0].starts_with(starts), "{errs:?}");
+    }
+
+    /// A sub-array borrow (`..mut ref rest`, B-2026-11-25-26) is disjoint
+    /// from the elements outside it and from a sub-array beside it, and
+    /// conflicts with an element inside it and with the whole array.
+    #[test]
+    fn mir_borrowck_sub_array_borrows_are_disjoint_from_their_neighbours() {
+        let locals = "    let mut _1: Array[i64, 5];\n    let _2: mut ref Array[i64, 3];\n    \
+                      let _3: mut ref i64;\n    let _4: mut ref Array[i64, 1];\n";
+        let ok = main_with(
+            locals,
+            "        _1 = [const 1_i64, const 2_i64, const 3_i64, const 4_i64, const 5_i64];
+        _2 = &mut _1[1..4];
+        _3 = &mut _1[0];
+        _4 = &mut _1[4..5];
+        (*_2)[0] = const 9_i64;
+        (*_3) = const 8_i64;
+        (*_4)[0] = const 7_i64;
+",
+        );
+        assert!(ok.is_empty(), "{ok:?}");
+        let inside = main_with(
+            locals,
+            "        _1 = [const 1_i64, const 2_i64, const 3_i64, const 4_i64, const 5_i64];
+        _2 = &mut _1[1..4];
+        _3 = &mut _1[3];
+        (*_2)[0] = const 9_i64;
+",
+        );
+        one(
+            &inside,
+            "bb0[2]: mutable borrow of _1[3] while it is borrowed mutably",
+        );
+        let whole = main_with(
+            locals,
+            "        _1 = [const 1_i64, const 2_i64, const 3_i64, const 4_i64, const 5_i64];
+        _2 = &mut _1[1..4];
+        _1 = [const 1_i64, const 2_i64, const 3_i64, const 4_i64, const 5_i64];
+        (*_2)[0] = const 9_i64;
+",
+        );
+        one(&whole, "bb0[2]: write of _1 while it is borrowed");
     }
 
     #[test]
