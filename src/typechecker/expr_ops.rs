@@ -6441,6 +6441,41 @@ impl<'a> super::TypeChecker<'a> {
                             );
                             self.type_error(msg, *span, TypeErrorKind::InvalidBinaryOp)
                         }
+                        // A `shared` handle (`a === b`, JavaScript's identity
+                        // test, mends to `a == b`): identity and structure
+                        // are both readings, and the source does not say
+                        // which, so the refusal names both and applies
+                        // neither (design.md § Shared types, B-2026-11-24-38).
+                        None if self.is_shared_handle(cmp_left) => {
+                            let side = |e: &Expr| {
+                                let text = crate::formatter::render_expr_one_line(e);
+                                match e.kind {
+                                    ExprKind::Identifier(_)
+                                    | ExprKind::FieldAccess { .. }
+                                    | ExprKind::TupleIndex { .. }
+                                    | ExprKind::MethodCall { .. }
+                                    | ExprKind::Call { .. }
+                                    | ExprKind::Index { .. } => text,
+                                    _ => format!("({text})"),
+                                }
+                            };
+                            let (l, r) =
+                                (side(left), crate::formatter::render_expr_one_line(right));
+                            let not = if matches!(op, BinOp::NotEq) {
+                                "not "
+                            } else {
+                                ""
+                            };
+                            let shown = type_display(cmp_left);
+                            let msg = format!(
+                                "type '{shown}' is a `shared` handle with no `==` or `!=` \
+                                 (design.md § Shared types): `{not}{l}.ref_eq({r})` asks whether \
+                                 the two are one value, and `#[derive(PartialEq)]` on '{shown}' \
+                                 compares their fields; the source does not say which is meant, \
+                                 so write the one you mean"
+                            );
+                            self.type_error(msg, *span, TypeErrorKind::InvalidBinaryOp)
+                        }
                         None => {
                             let msg = format!(
                                 "type '{}' does not implement PartialEq; add \
