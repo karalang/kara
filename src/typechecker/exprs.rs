@@ -12412,9 +12412,10 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 return;
             };
-            if !matches!(start.kind, ExprKind::Integer(_, None))
-                || Self::int_literal_range(&elem).is_some_and(|(lo, hi)| v < lo || v > hi)
-            {
+            // A negated literal (`scan(-1, ..)`, a running maximum's start)
+            // takes the suffix as a bare one does: `-1i32` (kata 1299's Rust
+            // arm, B-2026-11-25-18).
+            if Self::int_literal_range(&elem).is_some_and(|(lo, hi)| v < lo || v > hi) {
                 return;
             }
             let t = type_display(&elem);
