@@ -47196,21 +47196,20 @@ fn unsatisfied_bound_never_lists_the_failing_type_as_its_own_candidate() {
     // and the list of types that would work pointed back at the one just
     // refused.
     //
-    // Originally written against `Hash` and `Eq`. Both now accept a hand-written
-    // impl (the containers dispatch to it), so neither reaches this message any
-    // more and the test moved to `PartialOrd`, which still answers from the
-    // derive tables — the ordering OPERATORS route around that predicate through
-    // a gate of their own, but a bare `T: PartialOrd` BOUND does not. The defect
-    // being pinned is unchanged: whatever the trait, the failing type must not
-    // appear in its own candidate list.
+    // Originally written against `Hash` and `Eq`, then `PartialOrd`. All three
+    // now accept a hand-written impl (B-2026-11-26-15), so the one way left to
+    // fail a bound with an impl written is that impl's own bounds:
+    // `impl[T: Ord] PartialOrd for Item[T]` does not order `Item[f64]`. The
+    // defect being pinned is unchanged: whatever the trait, the failing type
+    // must not appear in its own candidate list.
     let errs = typecheck_errors(
         r#"
-struct Item { id: i64 }
-impl PartialEq for Item { fn eq(ref self, other: ref Item) -> bool { self.id == other.id } }
-impl PartialOrd for Item { fn partial_cmp(ref self, other: ref Item) -> Option[Ordering] { Some(self.id.cmp(other.id)) } }
+struct Item[T] { id: T }
+impl[T: Ord] PartialEq for Item[T] { fn eq(ref self, other: ref Item[T]) -> bool { self.id == other.id } }
+impl[T: Ord] PartialOrd for Item[T] { fn partial_cmp(ref self, other: ref Item[T]) -> Option[Ordering] { Some(self.id.cmp(other.id)) } }
 fn needs_po[T: PartialOrd](x: T) -> i64 { 1 }
 fn main() {
-    println(f"{needs_po(Item { id: 1 })}");
+    println(f"{needs_po(Item { id: 1.5 })}");
 }
 "#,
     );
@@ -47230,14 +47229,14 @@ fn main() {
         let listed = msg
             .split("is implemented by: ")
             .nth(1)
-            .map(|tail| tail.split(", ").any(|c| c.trim() == "Item"))
+            .map(|tail| tail.split(", ").any(|c| c.trim().starts_with("Item")))
             .unwrap_or(false);
         assert!(
             !listed,
             "`Item` is named as a candidate for the bound it just failed: {msg}"
         );
         assert!(
-            msg.contains("that verdict is about the derive, not your impl"),
+            msg.contains("does not apply to `Item[f64]`"),
             "the message should reconcile the denial with the impl the author wrote: {msg}"
         );
     }

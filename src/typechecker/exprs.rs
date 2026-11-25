@@ -11597,11 +11597,28 @@ impl<'a> super::TypeChecker<'a> {
         // type in this list, so the branch cannot misfire on one. `Ord` is the
         // live proof — `type_supports_ord` accepts a user `impl Ord`, so an
         // `Ord` bound that fails is one with no impl, and this never triggers.
+        // A hand-written ordering impl that calls would reach, refused only
+        // because its own bounds do not hold for these arguments
+        // (B-2026-11-26-15): the derive is not what was asked.
+        let impl_bounds_fail = trait_name == "PartialOrd"
+            && matches!(concrete_ty, Type::Named { name, .. } if self.env.user_ordering_dispatches(name));
         let (self_impls, other_impls): (Vec<String>, Vec<String>) = self
             .impl_candidates_for_trait(trait_name)
             .into_iter()
-            .partition(|c| c == &self_render || c.starts_with(&format!("{self_render}[")));
-        if !self_impls.is_empty() {
+            .partition(|c| {
+                c == &self_render
+                    || c.starts_with(&format!("{self_render}["))
+                    // A generic impl is listed by its type's bare name.
+                    || (impl_bounds_fail
+                        && matches!(concrete_ty, Type::Named { name, .. } if c == name))
+            });
+        if impl_bounds_fail {
+            out.push_str(&format!(
+                "; the `impl {trait_name}` written for it does not apply to \
+                 `{self_render}`, because that impl's own bounds do not hold for \
+                 these type arguments"
+            ));
+        } else if !self_impls.is_empty() {
             // Lead with the reconciliation. Without it the sentence still reads
             // as a contradiction — the headline is the standard "does not
             // implement" phrasing and cannot be reworded per-trait from here —
@@ -13053,7 +13070,7 @@ impl<'a> super::TypeChecker<'a> {
             "Eq" => return self.type_supports_eq(ty),
             "PartialEq" => return self.type_supports_partial_eq(ty),
             "Ord" => return self.type_supports_ord(ty),
-            "PartialOrd" => return self.type_supports_partial_ord(ty),
+            "PartialOrd" => return self.env.satisfies_partial_ord_bound(ty),
             "Display" => return self.type_supports_display(ty),
             "Clone" => return self.type_supports_clone(ty),
             "Copy" => return self.is_type_copy(ty),

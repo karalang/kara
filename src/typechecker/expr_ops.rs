@@ -4744,12 +4744,9 @@ impl<'a> super::TypeChecker<'a> {
     /// keyed `(type, method)` with no impl-block boundary, so asking per-block
     /// here could refuse a spelling lowering would have accepted.
     ///
-    /// `partial_cmp` is deliberately NOT enough. The desugaring it would need,
-    /// `partial_cmp(a, b).is_lt()`, lands on `Option[Ordering].is_lt()`, which
-    /// codegen does not implement at all; accepting on that basis would turn a
-    /// typecheck rejection into a run-vs-build divergence. Since `Ord` requires
-    /// `PartialOrd`, this only excludes a type that wrote `impl PartialOrd`
-    /// alone — and the rejection message says so.
+    /// `partial_cmp` alone is enough since the operators desugar through
+    /// `PartialOrd.partial_cmp` (483fef4dbc). The same question decides a
+    /// `T: PartialOrd` bound ([`super::env::TypeEnv::user_ordering_dispatches`]).
     pub(super) fn ordering_operator_dispatches(&self, ty: &Type) -> bool {
         let name = match ty {
             Type::Named { name, .. } | Type::Shared(name) => name.as_str(),
@@ -4766,24 +4763,7 @@ impl<'a> super::TypeChecker<'a> {
         // Either ordering trait: `target_type_name` accepts both, because the
         // operators desugar through `PartialOrd.partial_cmp` per design.md and
         // fall back to `Ord.cmp` for a type that carries only the latter.
-        let has_ordering_impl = self.env.impls.iter().any(|imp| {
-            matches!(imp.trait_name.as_deref(), Some("PartialOrd") | Some("Ord"))
-                && imp.target_type == name
-        });
-        if !has_ordering_impl {
-            return false;
-        }
-        // Mirror its SECOND question the same way: lowering reads
-        // `trait_impl_methods`, which is built from TRAIT impls only, so an
-        // inherent `fn cmp` must not count here either.
-        let provides = |m: &str| {
-            self.env.impls.iter().any(|imp| {
-                imp.trait_name.is_some() && imp.target_type == name && imp.methods.contains_key(m)
-            })
-        };
-        provides("partial_cmp")
-            || provides("cmp")
-            || ["lt", "le", "gt", "ge"].iter().all(|m| provides(m))
+        self.env.user_ordering_dispatches(name)
     }
 
     /// The rejection message for a comparison operator whose derive-based gate

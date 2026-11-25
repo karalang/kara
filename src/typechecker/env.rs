@@ -1456,7 +1456,7 @@ impl TypeEnv {
             "Debug" => return self.type_supports_debug(ty),
             "PartialEq" => return self.type_supports_partial_eq(ty),
             "Eq" => return self.type_supports_eq(ty),
-            "PartialOrd" => return self.type_supports_partial_ord(ty),
+            "PartialOrd" => return self.satisfies_partial_ord_bound(ty),
             "Ord" => return self.type_supports_ord(ty),
             "Hash" => return self.type_supports_hash(ty),
             "Default" => return self.type_supports_default(ty),

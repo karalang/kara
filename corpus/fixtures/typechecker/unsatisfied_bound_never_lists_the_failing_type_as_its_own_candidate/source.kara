@@ -1,8 +1,7 @@
-
-struct Item { id: i64 }
-impl PartialEq for Item { fn eq(ref self, other: ref Item) -> bool { self.id == other.id } }
-impl PartialOrd for Item { fn partial_cmp(ref self, other: ref Item) -> Option[Ordering] { Some(self.id.cmp(other.id)) } }
+struct Item[T] { id: T }
+impl[T: Ord] PartialEq for Item[T] { fn eq(ref self, other: ref Item[T]) -> bool { self.id == other.id } }
+impl[T: Ord] PartialOrd for Item[T] { fn partial_cmp(ref self, other: ref Item[T]) -> Option[Ordering] { Some(self.id.cmp(other.id)) } }
 fn needs_po[T: PartialOrd](x: own T) -> i64 { 1 }
 fn main() {
-    println(f"{needs_po(Item { id: 1 })}");
+    println(f"{needs_po(Item { id: 1.5 })}");
 }

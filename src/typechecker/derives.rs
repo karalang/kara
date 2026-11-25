@@ -3369,6 +3369,53 @@ impl super::env::TypeEnv {
             .any(|imp| imp.trait_name.as_deref() == Some("Ord") && imp.target_type == name)
     }
 
+    /// Whether the ordering operators on `name` route to a hand-written body:
+    /// a trait impl of `PartialOrd` or `Ord` supplying `partial_cmp`, `cmp`,
+    /// or all four of `lt`/`le`/`gt`/`ge` (see the operator gate,
+    /// `ordering_operator_dispatches`, which asks this).
+    pub(super) fn user_ordering_dispatches(&self, name: &str) -> bool {
+        let has_ordering_impl = self.impls.iter().any(|imp| {
+            matches!(imp.trait_name.as_deref(), Some("PartialOrd") | Some("Ord"))
+                && imp.target_type == name
+        });
+        if !has_ordering_impl {
+            return false;
+        }
+        let provides = |m: &str| {
+            self.impls.iter().any(|imp| {
+                imp.trait_name.is_some() && imp.target_type == name && imp.methods.contains_key(m)
+            })
+        };
+        provides("partial_cmp")
+            || provides("cmp")
+            || ["lt", "le", "gt", "ge"].iter().all(|m| provides(m))
+    }
+
+    /// A `T: PartialOrd` bound: the derive's question
+    /// ([`Self::type_supports_partial_ord`]), or a hand-written ordering impl
+    /// that calls route to (B-2026-11-26-15). The derive predicate stays as
+    /// it is, because a derive over a field of such a type would still order
+    /// it field by field; a bound only hands the value to code that compares
+    /// it through its operators or `partial_cmp`, which reach the body.
+    pub(super) fn satisfies_partial_ord_bound(&self, ty: &Type) -> bool {
+        if self.type_supports_partial_ord(ty) {
+            return true;
+        }
+        match ty {
+            // The impl's own bounds hold too: `impl[T: Ord] PartialOrd for
+            // Pr[T]` orders `Pr[i64]` and not `Pr[f64]`.
+            Type::Named { name, args } => {
+                self.user_ordering_dispatches(name)
+                    && (self.has_applicable_impl("PartialOrd", name, args)
+                        || self.has_applicable_impl("Ord", name, args))
+            }
+            Type::Shared(name) => self.user_ordering_dispatches(name),
+            Type::Ref(inner) | Type::MutRef(inner) => self.satisfies_partial_ord_bound(inner),
+            Type::Refinement { base, .. } => self.satisfies_partial_ord_bound(base),
+            _ => false,
+        }
+    }
+
     /// Whether a named aggregate's DERIVED ordering is one both backends can
     /// actually lower — the typechecker's half of the parity rule the two
     /// backends already enforce independently (B-2026-08-27-47).
