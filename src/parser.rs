@@ -3279,6 +3279,10 @@ impl Parser {
         if matches!(self.peek_token_ref(), Token::RawIdentNotAllowed(_))
             || !crate::token::is_raw_escapable(kw)
             || matches!(kw, "return" | "break" | "continue" | "yield")
+            // `true` and `false` are whole expressions: the bare word is
+            // the literal even beside a binding named `r#true`, since the
+            // escape is purely lexical (design.md § Raw identifiers).
+            || matches!(kw, "true" | "false")
         {
             return false;
         }
