@@ -58,16 +58,16 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 752 |
-| false-positive | 369 |
-| missing-feature | 253 |
+| diagnostics | 756 |
+| false-positive | 373 |
+| missing-feature | 254 |
 | perf | 203 |
 | other | 149 |
-| soundness | 130 |
+| soundness | 131 |
 | miscompile | 107 |
-| run-vs-build | 65 |
+| run-vs-build | 69 |
 | crash | 65 |
-| codegen-gap | 45 |
+| codegen-gap | 46 |
 | use-after-free | 13 |
 | leak | 5 |
 | double-free | 2 |
@@ -76,17 +76,17 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 900 |
+| typecheck | 904 |
 | mir | 333 |
-| mir-llvm | 324 |
-| cli | 308 |
-| parser | 159 |
+| mir-llvm | 325 |
+| cli | 310 |
+| parser | 162 |
 | ownership | 136 |
 | runtime | 110 |
-| interp | 101 |
+| interp | 105 |
 | effect | 64 |
-| resolver | 55 |
-| other | 52 |
+| resolver | 57 |
+| other | 53 |
 | codegen | 22 |
 | autopar | 7 |
 | lexer | 2 |
@@ -122,6 +122,21 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-24-48 | 2026-11-24 | typecheck+cli | low | `min(gap, 360.0 - gap)` on two `f64`s, the free `min` (and `max`), is refused with E0200 "`f64` does not implement `Ord`" and the advice to wrap in `F64` or drop an `Ord` bound the author never wrote; the documented float method `gap.min(360.0 - gap)` (library/core-types.md, Float methods) is not named, and there is no machine fix | — |
 | B-2026-11-24-49 | 2026-11-24 | typecheck+cli | medium | `karac fix` retypes a Rust `usize` index to `i64` and keeps `i.wrapping_sub(1)` as it was, so the idiom `for j in [i.wrapping_sub(1), i + 1] { if j < n { .. arr[j] } }` no longer skips 0 - 1: on `usize` it wrapped past every length, on `i64` it is -1, passes `j < n`, and the fixed program dies with index out of bounds; `checked_sub` and `saturating_sub` get the floor edit, `wrapping_sub` none | — |
 | B-2026-11-25-1 | 2026-11-25 | mir | low | Remainders of B-2026-11-24-36: two `mut ref` elements in one slice pattern over a view (`[mut ref a, .., mut ref b]`) are refused E0516, and `..mut ref rest` over a `mut ref Array[T, N]` is not lowered | — |
+| B-2026-11-25-3 | 2026-11-25 | parser | medium | `let r#true = 18;` makes every bare `true` and `false` before `,` `;` `)` a refused use of that binding (E_RESERVED_KEYWORD, `write r#true`), even in the prelude's `Some(_) => true,`; the escape is purely lexical and the bare word is the literal | — |
+| B-2026-11-25-4 | 2026-11-25 | parser+resolver | low | `const n: i64 = 3;` is refused (right) with help saying a one-letter name 'is always Type-class, so no capitalization change can make it Const-class'; since the 2026-11-19 CN-7 ruling `const N` is valid, so the help should name `N` | — |
+| B-2026-11-25-5 | 2026-11-25 | parser | low | A `\u{...}` escape in a byte literal says `... byte literals — use \xFF for byte 0xFF.`; design.md 492 quotes the error as `Unicode escapes are not permitted in byte literals; use \xFF for byte 0xFF.` | — |
+| B-2026-11-25-6 | 2026-11-25 | interp | medium | `String.from_utf8(b"hi")`, an `Array[u8, N]` by value, fails on the interpreter with `expected a sequence, found Agg([Int(104), Int(105)])`; a build prints `hi` | — |
+| B-2026-11-25-7 | 2026-11-25 | interp | medium | On the interpreter `c"hi"` has no trailing NUL: `*msg.as_ptr().add(2)` is `index 2 out of bounds for length 2`, where a build reads `0` (design.md 501: a literal of N bytes occupies N + 1, the compiler adds the NUL) | — |
+| B-2026-11-25-8 | 2026-11-25 | interp | medium | A `host fn` on native is refused by the interpreter (`labs` is a `host fn`: it runs only in a wasm module whose host provides it); design.md 6869 says on native it lowers to an `extern "C"` call, and a build prints the result | — |
+| B-2026-11-25-9 | 2026-11-25 | typecheck | medium | An associated function named by a keyword and called bare, `Handle.type()` / `Handle.match(2)`, fails with `E0516 a type that failed to check is not lowered yet`; design.md 283 says any keyword may name a method or associated function and is usable after `.` (`Handle.r#type()` and keyword-named methods work) | — |
+| B-2026-11-25-10 | 2026-11-25 | resolver | medium | Reserved type names are not reserved everywhere: `fn u8()` and a field named `char` are accepted (and `u8()` calls the user's fn), and `enum MutFn` / `trait OnceFn` are accepted (only `struct Fn` is E0102); design.md 224 says primitive names and `Fn`/`MutFn`/`OnceFn` cannot be declared or bound as names | — |
+| B-2026-11-25-11 | 2026-11-25 | interp | medium | A pointee-changing raw-pointer cast is ignored by the interpreter: `*(c as *const u8)` with `c: *const u32` at `0x0A0B0C0D` reads `168496141`, not the low byte `13` a build reads, and `offset(1)` on the cast pointer fails (no sequence) | — |
+| B-2026-11-25-12 | 2026-11-25 | typecheck+mir-llvm | medium | `#[repr(transparent)] enum Only { V(u16) }` is 4 bytes, align 2, on every lane, and `extern` takes no such enum (E_EXTERN_TYPE_NOT_FFI_SAFE, 'carries data'); design.md 6616/6628 give a single-variant one-field enum its field's layout at every C-ABI boundary (6694 names only structs and distinct types, so the page also needs a ruling) | — |
+| B-2026-11-25-13 | 2026-11-25 | typecheck | medium | An opaque `extern` type accepts `#[derive(Debug)]` and a struct pattern binding a field it cannot have (`match f { CFile { fileno } => .. }` on `ref CFile`); design.md 6811/6812 refuse both (E_OPAQUE_TYPE_NO_FIELDS for patterns, E_OPAQUE_TYPE_NO_INHERENT_OR_TRAIT_IMPLS for derives) | — |
+| B-2026-11-25-14 | 2026-11-25 | typecheck | low | A method call on an opaque type is E_OPAQUE_TYPE_NO_METHODS; design.md 6808 says it gets 'the same diagnostic' as field access, E_OPAQUE_TYPE_NO_FIELDS. The code or the page has drifted (corpus/diagnostics/e_opaque_type_no_methods pins the code) | — |
+| B-2026-11-25-15 | 2026-11-25 | other | low | `#[allow(undocumented_unsafe)]` on an `unsafe { }` block and `#![allow(undocumented_unsafe)]` on a module do not silence the warning; design.md 6284 promises both levels | — |
+| B-2026-11-25-16 | 2026-11-25 | cli | low | Three §15 refusals promise a fix that `karac fix` does not apply: `&x as *const T` (6360: replace with `ptr.const(..)`), `p as usize` (6428: the fix offers `ptr.addr(p)`), and `extern "C-unwind"` imports (6690: E0415 with `"C"` as the fix) | — |
+| B-2026-11-25-17 | 2026-11-25 | cli | low | `karac explain` of `.discriminant()` on an enum with no `#[repr]` does not say the value is local, not a semver contract (design.md 6563); it prints only the effects lines | — |
 
 ### Relocated
 
