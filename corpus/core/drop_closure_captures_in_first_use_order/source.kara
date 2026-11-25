@@ -1,0 +1,11 @@
+struct T { n: i64 }
+impl Drop for T { fn drop(mut ref self) { println(f"drop {self.n}"); } }
+fn val(t: T) -> i64 { t.n }
+fn make(a: own T, b: own T, c: own T) -> Fn() -> i64 {
+    || val(c) * 100 + val(a) * 10 + val(b)
+}
+fn main() {
+    let g = make(T { n: 1 }, T { n: 2 }, T { n: 3 });
+    println(f"{g()}");
+    println("end");
+}

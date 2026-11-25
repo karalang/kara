@@ -1,0 +1,1 @@
+ERROR at line 6: `CounterT.take` takes `own self`, and a provider is lent to the code that uses `Counter`, never given

@@ -1,0 +1,13 @@
+struct Meters { v: i64 }
+impl Drop for Meters { fn drop(mut ref self) { println(f"drop {self.v}"); } }
+impl Add for Meters {
+    type Output = Meters;
+    fn add(self, rhs: Meters) -> Meters { Meters { v: self.v + rhs.v } }
+}
+fn sum[T: Add[Output = T]](a: own T, b: own T) -> T { a + b }
+fn main() {
+    let a = Meters { v: 1 };
+    let b = Meters { v: 2 };
+    let c = sum(a, b);
+    println(f"sum {c.v}");
+}

@@ -1,0 +1,1 @@
+ERROR at line 7: no bound of `Counter` declares `extra`: Counter's methods are those of `CounterT`, whatever a provider type has

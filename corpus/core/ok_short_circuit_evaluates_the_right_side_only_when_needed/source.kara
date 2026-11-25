@@ -1,0 +1,13 @@
+fn t(s: Str) -> bool { println(f"t {s}"); true }
+fn f(s: Str) -> bool { println(f"f {s}"); false }
+fn d(s: Str) -> i64 { println(f"d {s}"); 7 }
+fn main() {
+    let a = f("1") and t("2");
+    let b = t("3") or t("4");
+    let c = f("5") or t("6");
+    let x: Option[i64] = Some(1);
+    let y = x ?? d("7");
+    let z: Option[i64] = None;
+    let w = z ?? d("8");
+    println(f"{a} {b} {c} {y} {w}");
+}

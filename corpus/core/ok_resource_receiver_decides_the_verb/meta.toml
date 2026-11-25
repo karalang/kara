@@ -1,0 +1,12 @@
+source = "core-semantics sentence map 2026-11-25"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "spec"
+rules = ["14.2"]
+backends = []
+env = {}
+note = "core-semantics 14.2: R.m(args) calls the trait method on the provider bound to R; a borrowed self is reads(R), a mut ref self writes(R) and the writes are seen by later calls."
+bucket = "a"

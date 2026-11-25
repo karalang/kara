@@ -1,0 +1,12 @@
+source = "core-semantics sentence map 2026-11-25"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "spec"
+rules = ["4.7"]
+backends = []
+env = {}
+note = "core-semantics 4.7: an impl may borrow where its trait takes `own`; a call through the generic bound moves the arguments, and the instance's borrowed operands drop as temporaries at the end of the statement."
+bucket = "a"

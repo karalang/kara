@@ -1,0 +1,7 @@
+trait CounterT { fn take(own self) -> i64; }
+effect resource Counter: CounterT;
+struct Mem { n: i64 }
+impl CounterT for Mem { fn take(own self) -> i64 { self.n } }
+fn main() {
+    with_provider[Counter](Mem { n: 5 }, || { println(f"{Counter.take()}"); });
+}

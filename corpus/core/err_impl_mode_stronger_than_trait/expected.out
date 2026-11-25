@@ -1,0 +1,1 @@
+ERROR at line 3: impl method 'P.show' takes its receiver as `own self`, but 'Show.show' declares `self`: an impl's mode may be weaker than the trait's, never stronger

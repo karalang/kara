@@ -1,0 +1,1 @@
+ERROR at line 5: a type annotation does not borrow: this `let` would move the place

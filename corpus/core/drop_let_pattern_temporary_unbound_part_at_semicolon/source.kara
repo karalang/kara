@@ -1,0 +1,7 @@
+struct T { n: i64 }
+impl Drop for T { fn drop(mut ref self) { println(f"drop {self.n}"); } }
+fn pair() -> (T, T) { (T { n: 1 }, T { n: 2 }) }
+fn main() {
+    let (a, _) = pair();
+    println(f"kept {a.n}");
+}

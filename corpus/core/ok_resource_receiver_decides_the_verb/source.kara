@@ -1,0 +1,19 @@
+trait CounterT {
+    fn peek(self) -> i64;
+    fn bump(mut ref self);
+}
+effect resource Counter: CounterT;
+struct Mem { n: i64 }
+impl CounterT for Mem {
+    fn peek(self) -> i64 { self.n }
+    fn bump(mut ref self) { self.n += 1; }
+}
+fn look() -> i64 { Counter.peek() }
+fn step() { Counter.bump(); }
+fn main() {
+    with_provider[Counter](Mem { n: 5 }, || {
+        step();
+        step();
+        println(f"{look()}");
+    });
+}

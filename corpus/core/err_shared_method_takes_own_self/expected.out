@@ -1,0 +1,1 @@
+ERROR at line 2: method 'finish' of the shared type 'Node' takes `own self`, but a shared type's methods take a borrowed `self` only: a call never consumes a handle, and `mut` fields are written through any handle

@@ -1,0 +1,10 @@
+fn main() {
+    let mut v: Vec[Option[String]] = [Some("a".to_string()), None];
+    match v[0] {
+        Some(s) => println(f"got {s} {s.len()}"),
+        None => println("none"),
+    }
+    if let Some(s) = v[0] { println(f"again {s}"); }
+    v.push(Some("b".to_string()));
+    println(f"{v.len()}");
+}

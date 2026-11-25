@@ -1,0 +1,3 @@
+shared struct Node { v: i64 }
+impl Node { fn finish(own self) -> i64 { self.v } }
+fn main() { let n = Node { v: 1 }; println(n.finish()); }

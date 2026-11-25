@@ -4158,6 +4158,14 @@ fn main() -> () {
         // Rules checked before MIR: `par` effects, Drop-type moves, §6.3 and
         // the closure kinds (§9.6).
         let not_mir = [
+            // Refused by front-end checks this harness skips: the trait
+            // impl-mode rule (E0288), the shared/resource receiver rules
+            // (E0200, E0236) and the annotated-let borrow rule (E0200).
+            // `karac check` refuses each (corpus/CORE_SENTENCE_MAP.md).
+            "err_impl_mode_stronger_than_trait",
+            "err_let_annotation_does_not_borrow",
+            "err_resource_own_self_method",
+            "err_shared_method_takes_own_self",
             "err_par_conflict",
             "err_par_user_resource",
             "err_par_pub_clause_contract",
@@ -4267,6 +4275,14 @@ fn main() -> () {
         // The build in `built_core_pins_match_their_expected_output` runs
         // them with the library, through the same move and borrow checks.
         let needs_library = [
+            // `+` on a generic resolves through the library's `Add` trait.
+            // The other two type-check only with the library loaded: the
+            // bare typechecker reports E_INDEX_MOVE_NON_COPY for an indexed
+            // non-Copy scrutinee and E_REF_OPERAND_UNSUPPORTED for the
+            // `mut ref` place write; the full pipeline accepts both.
+            "ok_generic_add_moves_through_the_trait_mode",
+            "ok_index_scrutinee_binds_a_ref",
+            "ok_mut_ref_place_writes_without_let_mut",
             // The adaptors whose stored closure the effect pass traces are
             // the library's `IterMap` and `IterFilterMap` (B-2026-11-23-19).
             "effect_adaptor_closure_par_apart",

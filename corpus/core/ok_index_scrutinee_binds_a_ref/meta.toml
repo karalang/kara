@@ -1,0 +1,12 @@
+source = "core-semantics sentence map 2026-11-25"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "spec"
+rules = ["4.6"]
+backends = []
+env = {}
+note = "core-semantics 4.6: an index place is a ref scrutinee whatever its root; a plain binding of a non-Copy part is a ref into the element and moves nothing (B-2026-11-18-47)."
+bucket = "a"

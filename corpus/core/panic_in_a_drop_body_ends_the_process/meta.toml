@@ -1,0 +1,12 @@
+source = "core-semantics sentence map 2026-11-25"
+dedup_of = []
+expect = "panic:101"
+exit = 101
+tags = ["drop", "panic"]
+class = "a"
+expected_from = "spec"
+rules = ["7.11", "10.2"]
+backends = []
+env = {}
+note = "core-semantics 7.11: a Drop body may panic; the panic ends the process like any other (10.2), so the remaining drops do not run."
+bucket = "a"

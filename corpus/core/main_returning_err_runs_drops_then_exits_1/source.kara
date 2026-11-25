@@ -1,0 +1,10 @@
+struct T { n: i64 }
+impl Drop for T { fn drop(mut ref self) { println(f"drop {self.n}"); } }
+fn step() -> Result[i64, String] { Err("bad".to_string()) }
+fn main() -> Result[(), String] {
+    let _t = T { n: 1 };
+    defer println("defer");
+    let v = step()?;
+    println(f"{v}");
+    Ok(())
+}

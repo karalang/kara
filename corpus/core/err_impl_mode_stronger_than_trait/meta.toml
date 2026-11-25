@@ -1,0 +1,12 @@
+source = "core-semantics sentence map 2026-11-25"
+dedup_of = []
+expect = "error:E0288"
+exit = 1
+tags = []
+class = "a"
+expected_from = "spec"
+rules = ["4.7"]
+backends = []
+env = {}
+note = "core-semantics 4.7: an impl method may never declare a stronger mode than its trait. The expected.out wording of an error pin is guidance, not a byte oracle."
+bucket = "a"

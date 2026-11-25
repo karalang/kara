@@ -1,0 +1,8 @@
+struct P { hits: i64 }
+struct W { p: P }
+fn main() {
+    let mut w = W { p: P { hits: 0 } };
+    let p: mut ref P = w.p;
+    p.hits += 1;
+    println(f"{w.p.hits}");
+}

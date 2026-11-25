@@ -1,0 +1,9 @@
+struct P { hits: i64 }
+struct Pool { members: Vec[P] }
+fn main() {
+    let mut pool = Pool { members: [P { hits: 1 }, P { hits: 5 }] };
+    let up = mut ref pool.members[1];
+    up.hits += 1;
+    let r = ref pool.members[0];
+    println(f"{r.hits} {pool.members[1].hits}");
+}

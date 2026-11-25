@@ -1,0 +1,7 @@
+struct Bomb { n: i64 }
+impl Drop for Bomb { fn drop(mut ref self) { println(f"drop {self.n}"); if self.n == 2 { panic("in drop"); } } }
+fn main() {
+    let _a = Bomb { n: 1 };
+    let _b = Bomb { n: 2 };
+    println("end");
+}

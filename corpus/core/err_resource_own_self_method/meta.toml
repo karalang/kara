@@ -1,0 +1,12 @@
+source = "core-semantics sentence map 2026-11-25"
+dedup_of = []
+expect = "error:E0236"
+exit = 1
+tags = []
+class = "a"
+expected_from = "spec"
+rules = ["14.2"]
+backends = []
+env = {}
+note = "core-semantics 14.2: an own self method cannot be called through a resource (a provider is lent, never given). The expected.out wording of an error pin is guidance, not a byte oracle."
+bucket = "a"

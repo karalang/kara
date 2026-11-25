@@ -1,0 +1,8 @@
+trait CounterT { fn peek(self) -> i64; }
+effect resource Counter: CounterT;
+struct Mem { n: i64 }
+impl CounterT for Mem { fn peek(self) -> i64 { self.n } }
+impl Mem { fn extra(self) -> i64 { self.n * 2 } }
+fn main() {
+    with_provider[Counter](Mem { n: 5 }, || { println(f"{Counter.extra()}"); });
+}
