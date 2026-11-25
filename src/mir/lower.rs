@@ -28863,6 +28863,45 @@ impl<'l, 'a> Bx<'l, 'a> {
         })
     }
 
+    /// Whether `object.method(..)`, called through a trait with no body of
+    /// its own to read (a `dyn W` value, or a `T: W` bound), takes an owned
+    /// receiver: the trait declares `own self` and the receiver is a value,
+    /// not a view. A closure that makes the call moves the receiver in
+    /// (B-2026-11-25-46).
+    fn trait_call_takes_receiver(&self, e: &Expr, object: &Expr, method: &str) -> bool {
+        let Some(&t) = self.lcx.node_types.get(&object.id) else {
+            return false;
+        };
+        let tcx = self.tys().tcx();
+        if matches!(tcx.kind(t), HK::Ref(_) | HK::MutRef(_)) {
+            return false;
+        }
+        if matches!(tcx.kind(t), HK::Dyn { .. }) {
+            return self
+                .dyn_slots(t)
+                .iter()
+                .any(|(_, m)| m.name == method && m.self_is_own);
+        }
+        if !matches!(tcx.kind(t), HK::Param(_)) {
+            return false;
+        }
+        let Some(tr) = self
+            .lcx
+            .tc
+            .method_typeparam_trait_key
+            .get(&SpanKey::from_span(&e.span))
+            .and_then(|k| k.strip_suffix(&format!(".{method}")))
+        else {
+            return false;
+        };
+        let tr = tr.split('[').next().unwrap_or(tr);
+        self.lcx.trait_defs.get(tr).is_some_and(|d| {
+            d.items.iter().any(
+                |it| matches!(it, ast::TraitItem::Method(m) if m.name == method && m.self_is_own),
+            )
+        })
+    }
+
     /// The fields of `sym` the closure body may change: those an
     /// assignment's target, a method call's receiver, a `mut` argument, a
     /// dereference or a pattern's scrutinee reaches. A method call on a
@@ -29095,7 +29134,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                             _ => false,
                         }
                     }
-                    None => false,
+                    None => self.trait_call_takes_receiver(e, object, method),
                 };
                 // A method that writes its receiver mutates the capture
                 // it is rooted at.
