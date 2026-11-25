@@ -59,10 +59,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 767 |
-| false-positive | 382 |
+| false-positive | 384 |
 | missing-feature | 257 |
 | perf | 204 |
-| other | 149 |
+| other | 150 |
 | soundness | 134 |
 | miscompile | 110 |
 | run-vs-build | 75 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 921 |
+| typecheck | 924 |
 | mir | 340 |
 | mir-llvm | 330 |
 | cli | 314 |
@@ -140,6 +140,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-25-50 | 2026-11-25 | mir | medium | A provider method that reaches a resource whose provider can reach it back passes `karac check` and is refused by every backend with an internal `borrow check Cap.write{Stderr=ErrCap, Stdout=Cap}: mutable borrow of (*_3) while it is borrowed mutably [E0516]`, even when the two overrides never nest | — |
 | B-2026-11-25-51 | 2026-11-25 | effect | medium | `.clone()` of a `Vec`, `String`, `Option[Vec[T]]` or a derived-Clone struct holding a `Vec` is not charged `allocates(Heap)`: `#[no_effect(allocates(Heap))]` accepts it, while a `Map`, `Set` or `SortedMap` clone is refused | — |
 | B-2026-11-25-52 | 2026-11-25 | effect | low | `karac check --output=json` lists the standard library's `next_u64` under `public_function_effects` for any program that calls `random.next_u64()`, though that key is only for the program's own pub fns under `public_effects = "inferred"` | — |
+| B-2026-11-25-53 | 2026-11-25 | typecheck | medium | `karac check src/main.kara` inside a package refuses programs that `karac check` (no file), `karac run src/main.kara` and `karac build` all accept: a `pub import` re-export is a different type (`expected 'Raw', found 'Connection__db_conn'`), `a.make()` takes `b.make()`'s return type, an impl in a module nobody imports is unseen, and an error in another module is reported only as a count with empty JSON diagnostics | — |
+| B-2026-11-25-54 | 2026-11-25 | typecheck | medium | Method visibility is not enforced: a non-`pub` method of a dependency's type (`c.inner()`) and a `private fn` method from another directory or another package (`c.very()`) are callable, though a non-`pub` field or free fn in the same place is E0111 | — |
+| B-2026-11-25-55 | 2026-11-25 | typecheck | low | A program's own `enum Ordering` cannot be used: `Ordering.Mine` is E0236 `no associated function 'Mine' on type 'Ordering'` and a match arm is E0273 `Ordering is not an enum`, though the same enum named `Option`, `Result` or `Duration` works | — |
 
 ### Relocated
 
