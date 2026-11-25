@@ -112,7 +112,7 @@ A growable array. It has every [`Slice[T]`](#slicet) method, plus:
 | `dedup` | `fn dedup(mut ref self) where T: PartialEq` | Drops consecutive equal elements |
 | `truncate` | `fn truncate(mut ref self, len: i64)` | Drops the elements from `len` on, first to last ([core semantics §7.8](../core-semantics.md)). Does nothing if `len >= self.len()`; `len < 0` counts as 0, so it clears |
 | `set_len` | `unsafe fn set_len(mut ref self, n: i64)` | Sets the length to `n` and drops nothing: the elements from `n` on are forgotten. `n` must be at most `self.len()`, and the caller must already own what those slots held (it read them out through a raw pointer, as `VecIntoIter` does); otherwise the behaviour is undefined. Called inside `unsafe { }`. Rust's `set_len` may also grow into initialized spare capacity; Kāra has no spare-capacity API to initialize it through, so only shrinking is defined, and the interpreter refuses a larger `n` |
-| `drain` | `fn drain(mut ref self, r: Range[i64]) -> VecIntoIter[T]` | Removes the elements at `start..end` (the end excluded), shifting the rest down, and returns them front to back. They are removed at once, so dropping the iterator unread still removes them. Panics if the range is reversed or past the end. Rust's `drain(a..)`, `drain(..b)`, `drain(a..=b)` and `drain(..)` are refused with the `start..end` that means the same as a fix |
+| `drain` | `fn drain(mut ref self, r: Range[i64]) -> VecIntoIter[T]` | Removes the elements at `start..end` (the end excluded), shifting the rest down, and returns them front to back. They are removed at once, so dropping the iterator unread still removes them; the elements it has not yielded drop front to back when it drops. Panics if the range is reversed or past the end. Rust's `drain(a..)`, `drain(..b)`, `drain(a..=b)` and `drain(..)` are refused with the `start..end` that means the same as a fix |
 | `split_off` | `fn split_off(mut ref self, at: i64) -> Vec[T]` | Moves the elements from `at` on into a new `Vec` and returns it, leaving `[0, at)`. Panics if `at > self.len()` |
 | `clear` | `fn clear(mut ref self)` | Drops every element, first to last (§7.8) |
 | `resize` | `fn resize(mut ref self, n: i64, val: own T) where T: Clone` | Sets the length to exactly `n`: truncates when shrinking, appends copies of `val` when growing. `n < 0` counts as 0. `val` is cloned into every new slot but the last and moved into the last, as Rust's `resize` does, and dropped when there is no new slot (review-thread ruling 2026-11-16) |
@@ -240,7 +240,7 @@ A B-tree map, `K: Ord`. Every operation is O(log n), and iteration is in ascendi
 | `into_keys` | `fn into_keys(own self) -> impl Iterator[Item = K]` | Ascending; values drop |
 | `into_values` | `fn into_values(own self) -> impl Iterator[Item = V]` | In key order; keys drop |
 | `retain` | `fn retain(mut ref self, pred: own MutFn(K, mut ref V) -> bool)` | As `Map.retain`, in key order |
-| `clear` | `fn clear(mut ref self)` | |
+| `clear` | `fn clear(mut ref self)` | Drops every entry in key order |
 | `[]` | `m[key]` | Index operator through `Index`. Panics if the key is missing |
 | `[]=` | `m[key] = val` | Index assignment through `IndexSet`, as for `Map` |
 
@@ -305,13 +305,13 @@ A ring buffer with O(1) push and pop at both ends.
 | `get` | `fn get(self, idx: i64) -> Option[ref T]` | Index 0 is the front |
 | `len` | `fn len(self) -> i64` | |
 | `is_empty` | `fn is_empty(self) -> bool` | |
-| `clear` | `fn clear(mut ref self)` | |
+| `clear` | `fn clear(mut ref self)` | Drops every element front to back, in logical order |
 | `contains` | `fn contains(self, val: T) -> bool where T: PartialEq` | Linear search |
 | `insert` | `fn insert(mut ref self, idx: i64, val: own T)` | Inserts at `idx` (0 is the front), shifting toward the nearer end. Panics if `idx > self.len()` |
 | `remove` | `fn remove(mut ref self, idx: i64) -> T` | Removes at `idx`, shifting from the nearer end. Panics if out of bounds |
 | `swap` | `fn swap(mut ref self, i: i64, j: i64)` | As `Vec.swap` |
 | `retain` | `fn retain(mut ref self, pred: own MutFn(T) -> bool)` | Keeps the elements satisfying `pred`, front to back |
-| `truncate` | `fn truncate(mut ref self, len: i64)` | Drops the elements from index `len` to the back. Does nothing if `len >= self.len()`; `len < 0` counts as 0, so it clears |
+| `truncate` | `fn truncate(mut ref self, len: i64)` | Drops the elements from index `len` to the back, front to back. Does nothing if `len >= self.len()`; `len < 0` counts as 0, so it clears |
 | `extend` | `fn extend[I: IntoIterator[Item = T]](mut ref self, items: own I)` | Pushes every item onto the back, in order |
 
 These are the whole surface, with iteration and the traits below. A `VecDeque` is not contiguous, so the methods that need one slice (`sort`, `dedup`, `binary_search`, `reverse`, ranges and `as_slice`) are refused with a diagnostic; collect into a `Vec` for them (`Vec.from_iter(dq.into_iter())`), as Rust's `make_contiguous` would (review-thread ruling 2026-10-26, from the ADR-3 collections audit).
@@ -335,7 +335,7 @@ A binary heap, `T: Ord`: a `Vec[T]` arranged so that the next element out is at 
 | `pop` | `fn pop(mut ref self) -> Option[T]` | Removes and returns the next element |
 | `len` | `fn len(self) -> i64` | |
 | `is_empty` | `fn is_empty(self) -> bool` | |
-| `clear` | `fn clear(mut ref self)` | Drops every element |
+| `clear` | `fn clear(mut ref self)` | Drops every element, in the order `iter()` visits them |
 | `into_sorted_vec` | `fn into_sorted_vec(own self) -> Vec[T]` | Consumes the queue in pop order: ascending for smallest-first, descending for largest-first |
 | `iter` | `fn iter(self) -> VecIter[T]` | Every element once, in the queue's own order, not pop order |
 | `into_vec` | `fn into_vec(own self) -> Vec[T]` | The backing vector, in `iter`'s order, unsorted |
