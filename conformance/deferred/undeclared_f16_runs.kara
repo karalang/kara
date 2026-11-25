@@ -1,0 +1,4 @@
+fn main() {
+    let x: f16 = 1.5;
+    println(f"{x + x}");
+}

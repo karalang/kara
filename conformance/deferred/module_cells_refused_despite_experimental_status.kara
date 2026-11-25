@@ -1,0 +1,9 @@
+fn build() -> i64 {
+    println("init");
+    42
+}
+let TABLE: LazyLock[i64] = LazyLock.new(|| build());
+fn main() {
+    println(f"{TABLE.get()}");
+    println(f"{TABLE.get()}");
+}

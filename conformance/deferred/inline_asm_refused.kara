@@ -1,0 +1,6 @@
+fn main() {
+    // Safety: none needed.
+    unsafe {
+        asm!("nop");
+    }
+}

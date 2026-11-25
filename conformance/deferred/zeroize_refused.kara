@@ -1,0 +1,5 @@
+struct K {
+    #[zeroize]
+    key: Vec[u8],
+}
+fn main() {}

@@ -1,0 +1,6 @@
+#[repr(C, bitfield)]
+struct R {
+    a: u1,
+    b: u7,
+}
+fn main() {}

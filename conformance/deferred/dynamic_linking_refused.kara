@@ -1,0 +1,2 @@
+import std.dylib;
+fn main() {}

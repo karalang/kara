@@ -5933,6 +5933,12 @@ impl<'a> TypeChecker<'a> {
         let mut seen = FxHashSet::default();
         self.errors
             .retain(|e| seen.insert((e.span.offset, e.span.length, e.message.clone())));
+        // A refusal of a method deferred.md schedules says where it is.
+        for e in &mut self.errors {
+            if crate::deferred_surface::annotate(&mut e.message) {
+                e.fix_it = None;
+            }
+        }
         TypeCheckResult {
             impls: std::mem::take(&mut self.env.impls),
             receiver_methods: std::mem::take(&mut self.receiver_methods),

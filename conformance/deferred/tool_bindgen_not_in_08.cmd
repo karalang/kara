@@ -1,0 +1,2 @@
+bindgen {}
+unknown command 'bindgen'

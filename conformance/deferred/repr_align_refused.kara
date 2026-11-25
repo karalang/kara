@@ -1,0 +1,5 @@
+#[repr(align(64))]
+struct P {
+    a: u8,
+}
+fn main() {}

@@ -1,0 +1,6 @@
+#[inline]
+#[inline(always)]
+fn f() {}
+fn main() {
+    f();
+}

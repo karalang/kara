@@ -1,0 +1,11 @@
+#[inline]
+fn f() -> i64 {
+    2
+}
+#[cold]
+fn g() -> i64 {
+    3
+}
+fn main() {
+    println(f"{f() + g()}");
+}

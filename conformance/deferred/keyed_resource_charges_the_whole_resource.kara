@@ -1,0 +1,6 @@
+effect resource UserDB;
+fn put(id: i64) with writes(UserDB[id]) {}
+fn main() {
+    put(1);
+    put(2);
+}

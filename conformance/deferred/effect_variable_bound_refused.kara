@@ -1,0 +1,4 @@
+fn apply[with E: no writes(Stdout)](f: Fn() with E) with E {
+    f();
+}
+fn main() {}

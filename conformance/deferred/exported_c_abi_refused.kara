@@ -1,0 +1,5 @@
+#[unsafe(no_mangle)]
+pub extern "C" fn kara_f() -> i32 {
+    1
+}
+fn main() {}

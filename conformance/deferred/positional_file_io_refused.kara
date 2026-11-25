@@ -1,0 +1,5 @@
+fn main() {
+    let f = File.open("x").unwrap();
+    let mut buf: Vec[u8] = Vec.filled(4, 0u8);
+    f.read_at(mut buf, 0);
+}

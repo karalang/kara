@@ -1,0 +1,4 @@
+struct Cell2[+T] {
+    x: T,
+}
+fn main() {}

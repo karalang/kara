@@ -1,0 +1,5 @@
+trait A {
+    fn a(self) -> i64;
+}
+type T = impl A;
+fn main() {}

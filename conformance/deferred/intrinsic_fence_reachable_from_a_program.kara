@@ -1,0 +1,7 @@
+fn main() {
+    // Safety: a fence has no precondition.
+    unsafe {
+        fence(MemoryOrdering.SeqCst);
+    }
+    println("ok");
+}

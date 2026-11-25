@@ -1,0 +1,6 @@
+fn main() {
+    let a: Option[i64] = Some(1);
+    if let Some(x) = a and x > 0 {
+        println("y");
+    }
+}

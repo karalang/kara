@@ -58,11 +58,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 773 |
+| diagnostics | 776 |
 | false-positive | 390 |
 | missing-feature | 263 |
 | perf | 205 |
-| other | 153 |
+| other | 157 |
 | soundness | 134 |
 | miscompile | 110 |
 | run-vs-build | 76 |
@@ -76,17 +76,17 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 939 |
-| mir | 344 |
+| typecheck | 943 |
+| mir | 345 |
 | mir-llvm | 334 |
-| cli | 318 |
-| parser | 162 |
+| cli | 320 |
+| parser | 163 |
 | ownership | 138 |
 | runtime | 114 |
 | interp | 112 |
 | effect | 70 |
-| resolver | 57 |
-| other | 54 |
+| resolver | 58 |
+| other | 56 |
 | codegen | 22 |
 | autopar | 7 |
 | lexer | 2 |
@@ -134,6 +134,13 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-25-61 | 2026-11-25 | typecheck | low | Attributes that design.md's attribute list does not have are accepted: `#[unsafe(no_mangle)]`, `#[unsafe(link_section(".."))]`, `#[used]` and `#[profile(..)]` (deferred.md's systems and embedded tracks) check with no diagnostic, `#[profile(kernel)]` is even enforced, the `@deprecated` shorthand works, and `#[with_provider(R, e)]` on a plain `fn` is silent; design.md says the list is generated from the registry and anything else is E_UNKNOWN_ATTRIBUTE | — |
 | B-2026-11-25-62 | 2026-11-25 | typecheck | low | An `impl` that leaves out a trait's required method reports E0203 and then a spurious E0236 `no method 'name' on type 'Rock'` at the trait's default method body that calls it | — |
 | B-2026-11-25-63 | 2026-11-25 | typecheck | low | `String.slice(a, b)` is accepted and returns a `Str` view, but library/strings.md has no `slice`: the documented view is `s[a..b]` (design.md §5) and the copy is `substring`; book ch09b taught `s.slice` (now `s[a..b]`) | — |
+| B-2026-11-25-65 | 2026-11-25 | typecheck+mir+cli | medium | deferred.md's experimental status lines, and `karac explain` for their codes, say module-level cells, `offset_of` and GPU kernels are implemented and run in 0.8; `karac check` refuses a module-level `LazyLock` (E_MODULE_LET), MIR does not lower `offset_of` (E0516), and `gpu.*` is refused (E_ARCHIVED) | — |
+| B-2026-11-25-66 | 2026-11-25 | resolver | medium | Attributes of deferred features are recognised and accepted with no effect: `#[interrupt(..)]` (the function is still called directly), `#[unsafe(link_section(..))]`, `#[used]`, `#[property]` / `#[snapshot]` on a test, `#[with_provider(..)]` on a plain fn; `#[profile(..)]` is enforced while `karac explain` calls its codes deferred | — |
+| B-2026-11-25-67 | 2026-11-25 | typecheck | medium | `Atomic.fetch_and` / `fetch_or` run in 0.8 though library/concurrency.md puts them in the systems track, and a program can call the intrinsic `fence(MemoryOrdering.SeqCst)` though design.md restricts `std.intrinsics` to the standard library | — |
+| B-2026-11-25-68 | 2026-11-25 | other | low | deferred.md has no status line for features 0.8 runs: `Vector[T, N]` portable SIMD (200 corpus programs), `f16` / `bf16` (whose entry says they stay ordinary identifiers, while 0.8 makes them primitive types), codegen hints (explain says not lowered, the validator says lowered) and `#[multiversion]` (its status says it builds no variants; it builds them) | — |
+| B-2026-11-25-69 | 2026-11-25 | typecheck+cli | low | `#[multiversion(baseline, "avx2")] fn addup` draws two undocumented_unsafe warnings naming the compiler's own variant `addup$avx2` (an unsafe block with no Safety comment, an unsafe fn with no Safety section), which the program cannot fix | — |
+| B-2026-11-25-70 | 2026-11-25 | other | medium | The corpus backends `__mir-run` and `__mir-llvm-run` skip `karac check`, so the corpus runs programs every user lane refuses: 1174 of the 18663 corpus entries that expect to run are refused by `karac check`, among them 59 module-level `let` (E_MODULE_LET), 25 E_DEFERRED_TRACK and 37 E_ARCHIVED | — |
+| B-2026-11-25-71 | 2026-11-25 | parser+typecheck | low | Deferred constructs refused without naming deferred.md: let-chains, user variance markers, varargs, call-site spread, bitfields (`u1`), the `exits` effect, effect-variable bounds, `#[wrapping] { }` blocks, non-ASCII identifiers | — |
 | B-2026-11-26-1 | 2026-11-26 | typecheck | low | An `as` cast settles an unsuffixed literal binding to `i64` on the spot, so a later use cannot fix it: `let mid = 5; let x = mid as f64; mid` in a `-> i32` body is refused (and `let x = mid as i64` lints redundant_cast), while the same cast written after the fixing use (`take(mid); mid as f64`) and `let y = mid + 1; y` both check; the refusal blames an operator or a method | — |
 | B-2026-11-26-2 | 2026-11-26 | typecheck | low | A `for` over an array literal settles the array's literals to `i64` before the loop body can fix them: `for (rider, start, end) in [(10, 3, 8), (5, 10, 16)] { b.check_in(rider, "Leyton", start) }` with `check_in(id: i32, .., t: i32)` is refused, as is `for a in [1, 2] { take_i32(a) }` and `for a in [1, 2].iter()`, while the same array bound first (`let pairs = [(1, 2)]; for (a, b) in pairs.iter() { take_i32(a) }`), `let (c, d) = (5, 6); take_i32(c)` and `let x = [1, 2][0]; take_i32(x)` all check | — |
 | B-2026-11-26-3 | 2026-11-26 | typecheck | medium | A type-qualified call of a number's method is refused: `i32.max(a, b)`, `i64.abs(x)`, `i32.pow(a, 2)` and `f64.sqrt(x)` are each 'no associated function', though design.md §9 says `user.validate()` and `User.validate(user)` are the same call, and `karac fix` writes Rust's `i32::max(a, b)` as the refused `i32.max(a, b)` | — |

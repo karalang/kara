@@ -1,0 +1,6 @@
+fn f() -> i64 {
+    1
+}
+fn main() {
+    let x = await f();
+}

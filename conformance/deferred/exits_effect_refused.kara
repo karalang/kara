@@ -1,0 +1,2 @@
+fn f() with exits {}
+fn main() {}

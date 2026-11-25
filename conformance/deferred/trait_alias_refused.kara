@@ -1,0 +1,2 @@
+trait Num = Copy + Add;
+fn main() {}

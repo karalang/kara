@@ -1,0 +1,2 @@
+bench {}
+unknown command 'bench'

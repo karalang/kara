@@ -1,0 +1,11 @@
+#[repr(C)]
+union U {
+    a: u32,
+    b: f32,
+}
+fn main() {
+    let u = U { b: 1.0 };
+    // Safety: both fields are four plain bytes.
+    let x = unsafe { u.a };
+    println(f"{x}");
+}

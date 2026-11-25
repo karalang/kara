@@ -1,0 +1,5 @@
+#[should_panic]
+test "panics" {
+    panic("x");
+}
+fn main() {}

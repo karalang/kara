@@ -1,0 +1,5 @@
+// Safety: no imports are called.
+unsafe extern "stdcall" {
+    fn f();
+}
+fn main() {}

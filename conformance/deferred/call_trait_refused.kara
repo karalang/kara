@@ -1,0 +1,7 @@
+struct F {}
+impl Call for F {
+    fn call(self) -> i64 {
+        1
+    }
+}
+fn main() {}

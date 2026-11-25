@@ -33,8 +33,9 @@ expectation, written from the page it checks (the oracle is the page).
   file (a note or warning the page promises); beside any other kind.
 - `<name>.cmd`: its first line is karac's arguments, run beside the program
   as `main.kara` (`{}` stands for that name, which is otherwise added
-  last), and every further line text its output must hold; beside any
-  other kind.
+  last, and `{-}` keeps it off a command that takes no file, such as
+  `explain`), and every further line text its output must hold; beside
+  any other kind.
 - `<name>.json`: its first line is karac's arguments (as in `.cmd`), and
   every further line a Python expression over `d`, the parsed stdout, that
   must be true.
@@ -110,9 +111,11 @@ def check_effects(src, text, rep):
 def karac_beside(text, args):
     """karac run with `args` in a directory holding the program as
     `main.kara`; `{}` in an argument names it, and it is added last
-    otherwise."""
+    otherwise, unless a `{-}` argument says the command takes no file."""
     argv = shlex.split(args)
-    if not any("{}" in a for a in argv):
+    if "{-}" in argv:
+        argv.remove("{-}")
+    elif not any("{}" in a for a in argv):
         argv.append("{}")
     with tempfile.TemporaryDirectory(prefix="kara-conf-") as td:
         (Path(td) / "main.kara").write_text(text)

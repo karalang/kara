@@ -1764,6 +1764,13 @@ impl<'a> Resolver<'a> {
         // Pass 4: a primitive type name is never a binding's name (design.md
         // § Primitive type names, B-2026-10-24-22).
         self.reject_primitive_bindings();
+        // A refusal of a name deferred.md schedules says where it is.
+        for e in &mut self.errors {
+            if crate::deferred_surface::annotate(&mut e.message) {
+                e.suggestion = None;
+                e.replacement = None;
+            }
+        }
 
         ResolveResult {
             resolutions: self.resolutions,

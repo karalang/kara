@@ -1,0 +1,11 @@
+/// # Safety
+/// The caller checks the CPU has AVX2.
+#[target_feature(enable: "avx2")]
+unsafe fn f() -> i64 {
+    1
+}
+fn main() {
+    // Safety: f does nothing AVX2-specific.
+    let x = unsafe { f() };
+    println(f"{x}");
+}

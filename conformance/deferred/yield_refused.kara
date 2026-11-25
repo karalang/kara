@@ -1,0 +1,4 @@
+fn numbers() {
+    yield 1;
+}
+fn main() {}

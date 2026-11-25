@@ -110,6 +110,7 @@ pub mod ws_frame;
 // on `not(target_arch = "wasm32")` at the function level — see those
 // modules for the wasm32 surface.
 pub mod cross_task_safe;
+pub(crate) mod deferred_surface;
 pub mod deque_head;
 pub mod library_imports;
 pub mod map_entry_lint;

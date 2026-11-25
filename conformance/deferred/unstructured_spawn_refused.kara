@@ -1,0 +1,6 @@
+fn work() {
+    println("w");
+}
+fn main() {
+    let h = spawn(work);
+}

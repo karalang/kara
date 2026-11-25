@@ -1,0 +1,6 @@
+type Even = i64 where self % 2 == 0;
+fn main() {
+    let e: Even = Even.try_from(4).unwrap();
+    println(f"{e}");
+    println(f"{Even.try_from(3).is_err()}");
+}

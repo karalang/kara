@@ -1,0 +1,20 @@
+trait Clock2 {
+    fn now(self) -> i64;
+}
+effect resource Ticks: Clock2;
+struct Fixed {}
+impl Clock2 for Fixed {
+    fn now(self) -> i64 {
+        7
+    }
+}
+fn read() -> i64 with reads(Ticks) {
+    Ticks.now()
+}
+fn main() {
+    providers {
+        Ticks => Fixed {},
+    } in {
+        println(f"{read()}");
+    }
+}

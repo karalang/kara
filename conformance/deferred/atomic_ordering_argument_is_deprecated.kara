@@ -1,0 +1,4 @@
+fn main() {
+    let a = Atomic.new(4);
+    println(f"{a.load(MemoryOrdering.Relaxed)}");
+}

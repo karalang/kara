@@ -1,0 +1,7 @@
+#[gpu]
+fn double(x: f32) -> f32 {
+    x * 2.0
+}
+fn main() {
+    println(f"{double(1.5)}");
+}

@@ -1,0 +1,5 @@
+#[example]
+pub fn f() -> i64 {
+    1
+}
+fn main() {}

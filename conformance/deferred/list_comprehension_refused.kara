@@ -1,0 +1,3 @@
+fn main() {
+    let v = [x * 2 for x in 0..3];
+}

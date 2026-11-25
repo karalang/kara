@@ -1,0 +1,5 @@
+fn main() {
+    let a = Atomic.new(4);
+    let v = a.fetch_or(1);
+    println(f"{v} {a.load()}");
+}

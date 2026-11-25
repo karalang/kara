@@ -1,0 +1,4 @@
+fn main() {
+    let café = 1;
+    println(f"{café}");
+}

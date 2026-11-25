@@ -1,0 +1,4 @@
+fn main() {
+    let s = UdpSocket.bind("127.0.0.1:0").unwrap();
+    s.join_multicast_v4("224.0.0.1", "0.0.0.0");
+}

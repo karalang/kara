@@ -1,0 +1,8 @@
+#[repr(C)]
+struct P {
+    a: u8,
+    b: u32,
+}
+fn main() {
+    println(f"{offset_of[P](b)}");
+}

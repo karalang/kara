@@ -1,0 +1,12 @@
+effect resource Data;
+trait Storage with reads(Data) {
+    fn get(self) -> i64;
+}
+struct M {}
+impl Storage for M {
+    fn get(self) -> i64 {
+        println("x");
+        1
+    }
+}
+fn main() {}

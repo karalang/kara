@@ -1,0 +1,5 @@
+#[clippy::allow(x)]
+fn f() {}
+fn main() {
+    f();
+}

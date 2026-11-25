@@ -1,0 +1,22 @@
+trait Functor {
+    type Mapped[U];
+    fn rewrap(self) -> Self.Mapped[i64];
+}
+struct Pair[A, B] {
+    a: A,
+    b: B,
+}
+struct Wrapper[T] {
+    x: T,
+}
+impl[T: Copy] Functor for Wrapper[T] {
+    type Mapped[U] = Pair[T, U];
+    fn rewrap(self) -> Pair[T, i64] {
+        Pair { a: self.x, b: 99 }
+    }
+}
+fn main() {
+    let w = Wrapper { x: true };
+    let p = w.rewrap();
+    println(f"{p.a} {p.b}");
+}

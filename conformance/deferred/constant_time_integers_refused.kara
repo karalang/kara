@@ -1,0 +1,3 @@
+fn main() {
+    let x = CtU64.from(1);
+}

@@ -1,0 +1,2 @@
+fuzz {}
+unknown command 'fuzz'

@@ -1,0 +1,5 @@
+fn main() {
+    let v = Vector[f32, 4].splat(1.5);
+    let w = v + v;
+    println(f"{w.reduce_sum()}");
+}

@@ -1,0 +1,6 @@
+pub fn f() -> i64 with suspends {
+    1
+}
+fn main() {
+    println(f"{f()}");
+}

@@ -1,0 +1,7 @@
+#[interrupt(TIMER1)]
+fn isr() {
+    println("isr");
+}
+fn main() {
+    isr();
+}

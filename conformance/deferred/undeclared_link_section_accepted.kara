@@ -1,0 +1,7 @@
+#[unsafe(link_section(".text.kara"))]
+fn f() -> i64 {
+    1
+}
+fn main() {
+    println(f"{f()}");
+}

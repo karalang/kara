@@ -1,0 +1,9 @@
+trait Show {
+    fn show(self) -> Str;
+}
+impl[T] Show for *mut T {
+    fn show(self) -> Str {
+        "p"
+    }
+}
+fn main() {}

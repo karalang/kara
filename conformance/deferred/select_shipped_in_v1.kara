@@ -1,0 +1,10 @@
+fn main() {
+    let (tx, rx) = channel(1);
+    let (tx2, rx2): (Sender[i64], Receiver[i64]) = channel(1);
+    let _ = tx.send(1);
+    drop(tx2);
+    select {
+        v = rx.recv() => println(f"{v}"),
+        w = rx2.recv() => println(f"{w}"),
+    }
+}
