@@ -33412,6 +33412,10 @@ const TYPES_THE_COMPILER_SPELLS: &[&str] = &[
     // (design.md § The prelude), never for the library (B-2026-11-17-37).
     "Option",
     "Result",
+    // The prelude's `Ordering`, which `cmp`, `sort_by` and the derived `Ord`
+    // spell: a program's own `enum Ordering` is its own type, as its own
+    // `Option` is (design.md §4, B-2026-11-25-55).
+    "Ordering",
 ];
 
 /// `src` with each of its own top-level types named like one the compiler
