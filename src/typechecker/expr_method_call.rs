@@ -198,6 +198,7 @@ pub(crate) const STRING_BUILTIN_METHODS: &[&str] = &[
     "cmp",
     "contains",
     "ends_with",
+    "eq_ignore_ascii_case",
     "find",
     "is_empty",
     "len",
@@ -2192,6 +2193,9 @@ impl<'a> super::TypeChecker<'a> {
             self.foreign_method_twin(object, method, args, args_close_span, errors_before);
             self.fix_method_typo(object, method, args, args_close_span, errors_before);
         }
+        if self.errors.len() > errors_before && matches!(method, "body" | "with_body") {
+            self.fix_body_bytes(object, method, args, errors_before);
+        }
         if self.errors.len() > errors_before {
             let end = args_close_span.offset + args_close_span.length;
             let whole = Span {
@@ -2335,6 +2339,73 @@ impl<'a> super::TypeChecker<'a> {
     /// `.len(`, and is offered only when the text between the receiver and
     /// the first argument (or the closing `)`) is exactly that, so a call
     /// split over lines or written `?.` keeps its layout and gets no edit.
+    /// `rb.body(bytes)` / `req.with_body(bytes)` with a `Vec[u8]`: the
+    /// byte twin is `body_bytes` / `with_bytes`, which the fix names; a
+    /// `Slice[u8]` or `Array[u8, N]` gets help naming its `.to_vec()`
+    /// (review ruling 2026-11-25, B-2026-11-25-80).
+    fn fix_body_bytes(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        args: &[CallArg],
+        errors_before: usize,
+    ) {
+        let [arg] = args else {
+            return;
+        };
+        let recv = self
+            .expr_types
+            .get(&SpanKey::from_span(&object.span))
+            .map(|t| self.resolved_now(t));
+        let peeled = match recv {
+            Some(Type::Ref(i) | Type::MutRef(i)) => *i,
+            Some(t) => t,
+            None => return,
+        };
+        let twin = match (&peeled, method) {
+            (Type::Named { name, .. }, "body") if name == "RequestBuilder" => "body_bytes",
+            (Type::Named { name, .. }, "with_body") if name == "Request" => "with_bytes",
+            _ => return,
+        };
+        let from = object.span.offset + object.span.length;
+        let to = arg.value.span.offset;
+        let contiguous = to == from + method.len() + 2;
+        for err in &mut self.errors[errors_before..] {
+            if err.fix_it.is_some() || err.span != arg.value.span {
+                continue;
+            }
+            let Some(got) = err.got.as_deref() else {
+                continue;
+            };
+            let got = got.strip_prefix("ref ").unwrap_or(got);
+            if got == "Vec[u8]" {
+                err.message = format!(
+                    "`{method}` takes text (a `String`); bytes go in with `{twin}`, which \
+                     sends them as they are: write `.{twin}(..)`"
+                );
+                if contiguous {
+                    err.fix_it = Some(super::FixIt {
+                        span: Span {
+                            offset: from,
+                            length: to - from,
+                            line: object.span.line,
+                            column: object.span.column,
+                        },
+                        replacement: format!(".{twin}("),
+                    });
+                }
+                return;
+            }
+            if got.starts_with("Slice[u8]") || got.starts_with("Array[u8,") {
+                err.message = format!(
+                    "`{method}` takes text (a `String`); bytes go in with `{twin}`, which takes \
+                     a `Vec[u8]`: write `.{twin}(x.to_vec())`"
+                );
+                return;
+            }
+        }
+    }
+
     fn fix_method_typo(
         &mut self,
         object: &Expr,

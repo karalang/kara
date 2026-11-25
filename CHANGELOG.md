@@ -592,6 +592,15 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   elements outside it. It was refused as "not lowered yet"; a copied
   element in the same pattern (`let [h, ..mut ref r] = a`) also no longer
   counts as moving `a` (B-2026-11-25-26).
+
+- `RequestBuilder.body_bytes(b: Vec[u8])` and `Request.with_bytes(b: Vec[u8])`
+  send a request body that is bytes, as they are, with `Content-Length` their
+  count; `body`/`with_body` take text as before, and `karac fix` turns a
+  `.body(v)` of a `Vec[u8]` into `.body_bytes(v)` (B-2026-11-25-80).
+
+- `String`/`Str` have Rust's `eq_ignore_ascii_case(other: Str) -> bool`, as
+  `char` and `u8` did (B-2026-11-25-81).
+
 - `karac explain <file>.<fn>` on a function in a recursive group, or one
   that calls itself, adds a `Fixpoint:` section: the group, then the
   chain `φ0 = ∅`, `φ1`, … up to `φ*`, each step with the atoms it added

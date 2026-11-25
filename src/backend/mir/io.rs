@@ -1645,7 +1645,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 let d = self.place_ptr(dest)?;
                 self.store(d, id.into())?;
             }
-            ("RequestBuilder", "header" | "body" | "timeout") => {
+            ("RequestBuilder", "header" | "body" | "body_bytes" | "timeout") => {
                 let (at, ty) = self.behind_refs(&args[0])?;
                 let h = self.load_i64(at)?;
                 let void = self.llcx.void_type();
@@ -1674,7 +1674,9 @@ impl<'ctx> Cx<'ctx, '_> {
                             )
                             .map_err(e)?;
                     }
-                    "body" => {
+                    // A `Vec[u8]` is laid out as a `String` is, and the
+                    // runtime keeps the bytes as they are (B-2026-11-25-80).
+                    "body" | "body_bytes" => {
                         let (b, bn) = self.str_parts(&args[1])?;
                         let f = self.extern_fn(
                             "karac_runtime_http_builder_set_body",
@@ -2058,7 +2060,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.drop_moved(args)?;
                 return self.store(d, id.into()).map(Some);
             }
-            "with_header" | "with_body" => {
+            "with_header" | "with_body" | "with_bytes" => {
                 let (at, _) = self.behind_refs(&args[0])?;
                 let id = self.load_i64(at)?;
                 let (a, an) = self.str_parts(&args[1])?;
@@ -2066,7 +2068,7 @@ impl<'ctx> Cx<'ctx, '_> {
                     Some(v) => self.str_parts(v)?,
                     None => (self.ptr_ty().const_null(), self.i64(0)),
                 };
-                let op = u64::from(method == "with_body");
+                let op = u64::from(method != "with_header");
                 let op = self.llcx.i32_type().const_int(op, false);
                 let id = self.rt_named(
                     "karac_mir_http_request_set",

@@ -234,6 +234,24 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 rb_ty
             }
+            // The body as bytes, sent as they are (B-2026-11-25-80).
+            "body_bytes" => {
+                if args.len() != 1 {
+                    self.type_error(
+                        "RequestBuilder.body_bytes() takes 1 argument (body: Vec[u8])".to_string(),
+                        *span,
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                }
+                let bytes = Type::Named {
+                    name: "Vec".to_string(),
+                    args: vec![Type::UInt(UIntSize::U8)],
+                };
+                for arg in args {
+                    self.check_expr(&arg.value, &bytes);
+                }
+                rb_ty
+            }
             "timeout" => {
                 if args.len() != 1 {
                     self.type_error(
@@ -272,7 +290,7 @@ impl<'a> super::TypeChecker<'a> {
             _ => self.require_known_method(
                 "RequestBuilder",
                 method,
-                &["header", "body", "timeout", "send"],
+                &["header", "body", "body_bytes", "timeout", "send"],
                 args,
                 span,
             ),

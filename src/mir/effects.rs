@@ -1976,7 +1976,8 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         // An HTTP request or response is a plain value once received: its
         // accessors and builders only allocate.
         ("Request" | "Response" | "HttpError", _) => vec![HEAP],
-        ("Client", "new" | "request") | ("RequestBuilder", "header" | "body" | "timeout") => {
+        ("Client", "new" | "request")
+        | ("RequestBuilder", "header" | "body" | "body_bytes" | "timeout") => {
             vec![HEAP]
         }
         // A client call opens its own connection, so there is no value to

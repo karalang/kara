@@ -1,0 +1,943 @@
+// sigv4_store: an S3-style bucket store on loopback HTTP whose every request
+// is signed with AWS Signature Version 4, by header or by presigned URL, and
+// the clients that sign them. Object bodies are bytes.
+
+import std.crypto.hmac.hmac_sha256;
+import std.crypto.sha2.sha256;
+import std.sync.{Mutex};
+import std.time.sleep;
+import std.time.Duration;
+
+const HOST: Str = "127.0.0.1:47786";
+const ADDR: Str = "127.0.0.1:47786";
+const REGION: Str = "kara-local-1";
+const SERVICE: Str = "s3";
+const ALGORITHM: Str = "AWS4-HMAC-SHA256";
+// The server's clock is fixed so that every run prints the same answers.
+const NOW: Str = "20261123T120000Z";
+const MAX_SKEW: i64 = 15 * 60;
+const MAX_EXPIRES: i64 = 7 * 24 * 3600;
+const UNSIGNED: Str = "UNSIGNED-PAYLOAD";
+
+struct Response {
+    status: i64,
+    body: Vec[u8],
+    headers: Vec[(String, String)],
+}
+
+// Obviously fake credentials: an access key id, its secret, and whether it
+// may write.
+fn keys() -> Map[String, (String, bool)] {
+    let mut m = Map.new();
+    m.insert("AKIDKARAWRITER01".to_string(), ("not-a-real-secret/writer".to_string(), true));
+    m.insert("AKIDKARAREADER01".to_string(), ("not-a-real-secret/reader".to_string(), false));
+    m
+}
+
+// ---- signing
+
+fn hex(bytes: Slice[u8]) -> String {
+    Vec.from_iter(bytes.iter().map(|b| f"{b:02x}")).join("")
+}
+
+fn sha256_hex(data: Slice[u8]) -> String {
+    hex(sha256(data))
+}
+
+fn uri_encode(s: Str, keep_slash: bool) -> String {
+    let mut out = String.new();
+    for b in s.bytes() {
+        let c = b as char;
+        if c.is_ascii_alphanumeric() or c == '-' or c == '.' or c == '_' or c == '~' or (keep_slash and c == '/') {
+            out.push(c);
+        } else {
+            out.push_str(f"%{b:02X}");
+        }
+    }
+    out
+}
+
+fn hex_digit(b: u8) -> Option[u8] {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn uri_decode(s: Str) -> Option[String] {
+    let raw = s.bytes();
+    let mut out = Vec.new();
+    let mut i = 0;
+    while i < raw.len() {
+        if raw[i] == b'%' {
+            if i + 2 >= raw.len() {
+                return None;
+            }
+            let hi = hex_digit(raw[i + 1])?;
+            let lo = hex_digit(raw[i + 2])?;
+            out.push(hi * 16 + lo);
+            i += 3;
+        } else {
+            out.push(raw[i]);
+            i += 1;
+        }
+    }
+    String.from_utf8(out).ok()
+}
+
+fn canonical_query(pairs: Slice[(String, String)]) -> String {
+    let mut enc: Vec[(String, String)] = pairs
+        .iter()
+        .map(|(k, v)| (uri_encode(k, false), uri_encode(v, false)))
+        .collect();
+    enc.sort();
+    Vec.from_iter(enc.iter().map(|(k, v)| f"{k}={v}")).join("&")
+}
+
+fn signing_key(secret: Str, date: Str, region: Str) -> Vec[u8] {
+    let k = hmac_sha256(f"AWS4{secret}".bytes(), date.bytes());
+    let k = hmac_sha256(k, region.bytes());
+    let k = hmac_sha256(k, SERVICE.bytes());
+    hmac_sha256(k, b"aws4_request").to_vec()
+}
+
+fn collapse(v: Str) -> String {
+    Vec.from_iter(v.split_whitespace()).join(" ")
+}
+
+/// `path` is the decoded path; `headers` holds lower-case names.
+fn signature(
+    secret: Str,
+    method: Str,
+    path: Str,
+    query: Slice[(String, String)],
+    headers: ref Map[String, String],
+    signed: Slice[String],
+    payload: Str,
+    stamp: Str,
+    region: Str,
+) -> String {
+    let mut canonical_headers = String.new();
+    for h in signed {
+        canonical_headers.push_str(f"{h}:{collapse(headers[h])}\n");
+    }
+    let creq = f"{method}\n{uri_encode(path, true)}\n{canonical_query(query)}\n{canonical_headers}\n{signed.join(";")}\n{payload}";
+    let scope = f"{stamp[..8]}/{region}/{SERVICE}/aws4_request";
+    let sts = f"{ALGORITHM}\n{stamp}\n{scope}\n{sha256_hex(creq.bytes())}";
+    hex(hmac_sha256(signing_key(secret, stamp[..8], region), sts.bytes()))
+}
+
+/// Seconds since 1970 of a `YYYYMMDDTHHMMSSZ` stamp.
+fn seconds(stamp: Str) -> Option[i64] {
+    let b = stamp.bytes();
+    if b.len() != 16 or b[8] != b'T' or b[15] != b'Z' {
+        return None;
+    }
+    for (i, c) in b.iter().enumerate() {
+        if i != 8 and i != 15 and not c.is_ascii_digit() {
+            return None;
+        }
+    }
+    let num = |a: i64, z: i64| { i64.parse(stamp[a..z]).unwrap() };
+    let mut (y, m, d) = (num(0, 4), num(4, 6), num(6, 8));
+    let (hh, mm, ss) = (num(9, 11), num(11, 13), num(13, 15));
+    if m < 1 or m > 12 or d < 1 or d > 31 or hh >= 24 or mm >= 60 or ss >= 60 {
+        return None;
+    }
+    // days from civil (Howard Hinnant)
+    if m <= 2 {
+        y -= 1;
+    }
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = if m > 2 { m - 3 } else { m + 9 };
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146097 + doe - 719468;
+    Some(days * 86400 + hh * 3600 + mm * 60 + ss)
+}
+
+// ---- the store
+
+fn xml_escape(s: Str) -> String {
+    s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
+}
+
+fn xml_header(s: String) -> Vec[(String, String)] {
+    let _ = s;
+    [("Content-Type".to_string(), "application/xml".to_string())]
+}
+
+fn error(status: i64, code: Str, message: Str) -> Response {
+    let body = f"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error><Code>{code}</Code><Message>{xml_escape(message)}</Message></Error>";
+    Response { status, body: body.bytes().to_vec(), headers: xml_header(String.new()) }
+}
+
+fn valid_bucket(name: Str) -> bool {
+    name.len() >= 3
+        and name.len() <= 63
+        and name.chars().all(|c| c.is_ascii_lowercase() or c.is_ascii_digit() or c == '-')
+        and not name.starts_with("-")
+        and not name.ends_with("-")
+}
+
+struct Object {
+    data: Vec[u8],
+    content_type: String,
+    etag: String,
+}
+
+struct Store {
+    buckets: SortedMap[String, SortedMap[String, Object]],
+    counts: SortedMap[i64, i64],
+    keys: Map[String, (String, bool)],
+}
+
+impl Store {
+    fn new() -> Store {
+        Store { buckets: SortedMap.new(), counts: SortedMap.new(), keys: keys() }
+    }
+
+    fn check_credential(self, cred: Str, stamp: Str) -> Result[(String, String), Response] {
+        let fields: Vec[Str] = cred.split("/").collect();
+        if fields.len() != 5 or fields[4] != "aws4_request" or fields[3] != SERVICE {
+            return Err(error(400, "AuthorizationHeaderMalformed", f"bad credential scope '{cred}'"));
+        }
+        let (akid, date, region) = (fields[0], fields[1], fields[2]);
+        let secret = match self.keys.get(akid) {
+            Some((s, _)) => s.clone(),
+            None => return Err(error(403, "InvalidAccessKeyId", f"no access key {akid}")),
+        };
+        if region != REGION {
+            return Err(error(
+                400,
+                "AuthorizationHeaderMalformed",
+                f"the region '{region}' is wrong; expecting '{REGION}'",
+            ));
+        }
+        if date != stamp[..8] {
+            return Err(error(
+                400,
+                "AuthorizationHeaderMalformed",
+                f"the credential date {date} is not the date of x-amz-date",
+            ));
+        }
+        Ok((akid.to_string(), secret))
+    }
+
+    fn authenticate(
+        self,
+        method: Str,
+        path: Str,
+        query: Slice[(String, String)],
+        headers: ref Map[String, String],
+        body: Slice[u8],
+    ) -> Result[String, Response] {
+        if query.iter().any(|(k, _)| k == "X-Amz-Signature") {
+            return self.presigned(method, path, query, headers);
+        }
+        let auth = match headers.get("authorization") {
+            Some(a) => a,
+            None => return Err(error(403, "AccessDenied", "the request is not signed")),
+        };
+        let prefix = f"{ALGORITHM} ";
+        if not auth.starts_with(prefix) {
+            return Err(error(
+                400,
+                "AuthorizationHeaderMalformed",
+                f"the algorithm must be {ALGORITHM}",
+            ));
+        }
+        let mut parts: Map[String, String] = Map.new();
+        for item in auth[prefix.len()..].split(",") {
+            let item = item.trim();
+            match item.split_once("=") {
+                Some((k, v)) => {
+                    parts.insert(k.to_string(), v.to_string());
+                }
+                None => {
+                    return Err(error(
+                        400,
+                        "AuthorizationHeaderMalformed",
+                        f"'{item}' is not name=value",
+                    ))
+                }
+            }
+        }
+        for need in ["Credential", "SignedHeaders", "Signature"] {
+            if not parts.contains_key(need) {
+                return Err(error(400, "AuthorizationHeaderMalformed", f"missing {need}"));
+            }
+        }
+        let stamp = match headers.get("x-amz-date") {
+            Some(s) => s.clone(),
+            None => return Err(error(403, "AccessDenied", "missing x-amz-date")),
+        };
+        let (akid, secret) = self.check_credential(parts["Credential"], stamp)?;
+        let signed: Vec[String] = parts["SignedHeaders"].split(";").map(|s| s.to_string()).collect();
+        let mut sorted = signed.clone();
+        sorted.sort();
+        if signed != sorted or not signed.contains("host".to_string()) or not signed.contains("x-amz-date".to_string()) {
+            return Err(error(
+                400,
+                "AuthorizationHeaderMalformed",
+                "SignedHeaders must be sorted and name host and x-amz-date",
+            ));
+        }
+        for h in ref signed {
+            if not headers.contains_key(h) {
+                return Err(error(
+                    400,
+                    "AuthorizationHeaderMalformed",
+                    f"signed header {h} is not in the request",
+                ));
+            }
+        }
+        check_skew(stamp)?;
+        let payload = match headers.get("x-amz-content-sha256") {
+            Some(p) => p.clone(),
+            None => return Err(error(400, "InvalidRequest", "missing x-amz-content-sha256")),
+        };
+        let want = signature(secret, method, path, query, headers, signed, payload, stamp, REGION);
+        if want != parts["Signature"] {
+            return Err(error(403, "SignatureDoesNotMatch", "the signature does not match"));
+        }
+        if payload != UNSIGNED and payload != sha256_hex(body) {
+            return Err(error(
+                400,
+                "XAmzContentSHA256Mismatch",
+                "the body's SHA-256 is not x-amz-content-sha256",
+            ));
+        }
+        Ok(akid)
+    }
+
+    fn presigned(
+        self,
+        method: Str,
+        path: Str,
+        query: Slice[(String, String)],
+        headers: ref Map[String, String],
+    ) -> Result[String, Response] {
+        let q: Map[String, String] = query.iter().cloned().collect();
+        for need in ["X-Amz-Algorithm", "X-Amz-Credential", "X-Amz-Date", "X-Amz-Expires", "X-Amz-SignedHeaders"] {
+            if not q.contains_key(need) {
+                return Err(error(400, "AuthorizationQueryParametersError", f"missing {need}"));
+            }
+        }
+        if q["X-Amz-Algorithm"] != ALGORITHM {
+            return Err(error(
+                400,
+                "AuthorizationQueryParametersError",
+                f"the algorithm must be {ALGORITHM}",
+            ));
+        }
+        let stamp = q["X-Amz-Date"].clone();
+        let (akid, secret) = self.check_credential(q["X-Amz-Credential"], stamp)?;
+        let t = match seconds(stamp) {
+            Some(t) => t,
+            None => {
+                return Err(error(
+                    403,
+                    "AccessDenied",
+                    f"X-Amz-Date '{stamp}' is not YYYYMMDDTHHMMSSZ",
+                ))
+            }
+        };
+        let expires = match i64.parse(q["X-Amz-Expires"]) {
+            Ok(n) if n >= 1 and n <= MAX_EXPIRES => n,
+            _ => {
+                return Err(error(
+                    400,
+                    "AuthorizationQueryParametersError",
+                    "X-Amz-Expires must be 1 to 604800 seconds",
+                ))
+            }
+        };
+        let now = seconds(NOW).unwrap();
+        if t > now + MAX_SKEW {
+            return Err(error(403, "AccessDenied", "the request is signed in the future"));
+        }
+        if t + expires < now {
+            return Err(error(403, "AccessDenied", "the request has expired"));
+        }
+        let signed: Vec[String] = q["X-Amz-SignedHeaders"].split(";").map(String.from).collect();
+        for h in ref signed {
+            if not headers.contains_key(h) {
+                return Err(error(
+                    400,
+                    "AuthorizationQueryParametersError",
+                    f"signed header {h} is not in the request",
+                ));
+            }
+        }
+        let rest: Vec[(String, String)] = query.iter().filter(|(k, _)| k != "X-Amz-Signature").cloned().collect();
+        let want = signature(secret, method, path, rest, headers, signed, UNSIGNED, stamp, REGION);
+        if want != q["X-Amz-Signature"] {
+            return Err(error(403, "SignatureDoesNotMatch", "the signature does not match"));
+        }
+        Ok(akid)
+    }
+
+    fn handle(mut ref self, method: Str, target: Str, headers: Map[String, String], body: own Vec[u8]) -> Response {
+        let (raw_path, raw_query) = match target.split_once("?") {
+            Some((p, q)) => (p, q),
+            None => (target, ""),
+        };
+        let mut query: Vec[(String, String)] = Vec.new();
+        let mut path = uri_decode(raw_path);
+        if not raw_query.is_empty() {
+            for item in raw_query.split("&") {
+                let (k, v) = item.split_once("=").unwrap_or((item, ""));
+                match (uri_decode(k), uri_decode(v)) {
+                    (Some(k), Some(v)) => query.push((k, v)),
+                    _ => {
+                        path = None;
+                        break;
+                    }
+                }
+            }
+        }
+        let path = match path {
+            Some(p) => p,
+            None => {
+                *self.counts.entry(400).or_insert(0) += 1;
+                return error(400, "InvalidURI", "bad percent-encoding");
+            }
+        };
+        if path == "/_stats" and method == "GET" {
+            let line = Vec.from_iter(self.counts.iter().map(|(k, v)| f"{k}={v}")).join(" ");
+            return Response {
+                status: 200,
+                body: line.bytes().to_vec(),
+                headers: [("Content-Type".to_string(), "text/plain".to_string())],
+            };
+        }
+        let answer = match self.authenticate(method, path, query, headers, body) {
+            Ok(akid) => {
+                let may_write = self.keys[akid].1;
+                let q: Map[String, String] = query.into_iter().collect();
+                self.route(method, path, q, headers, body, may_write)
+            }
+            Err(e) => e,
+        };
+        *self.counts.entry(answer.status).or_insert(0) += 1;
+        answer
+    }
+
+    fn route(
+        mut ref self,
+        method: Str,
+        path: Str,
+        q: ref Map[String, String],
+        headers: ref Map[String, String],
+        body: own Vec[u8],
+        may_write: bool,
+    ) -> Response {
+        let (bucket, key) = path[1..].split_once("/").unwrap_or((path[1..], ""));
+        if (method == "PUT" or method == "DELETE") and not may_write {
+            return error(403, "AccessDenied", f"{method} needs write access");
+        }
+        if bucket.is_empty() {
+            if method != "GET" {
+                return error(405, "MethodNotAllowed", f"{method} on the service");
+            }
+            let names: String = Vec[String].from_iter(self.buckets.keys().map(|b| f"<Bucket><Name>{xml_escape(b)}</Name></Bucket>")).join("");
+            let body = f"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<ListAllMyBucketsResult><Buckets>{names}</Buckets></ListAllMyBucketsResult>";
+            return Response { status: 200, body: body.bytes().to_vec(), headers: xml_header(String.new()) };
+        }
+        if key.is_empty() {
+            return match method {
+                "PUT" => {
+                    if not valid_bucket(bucket) {
+                        error(400, "InvalidBucketName", f"'{bucket}' is not a valid bucket name")
+                    } else if self.buckets.contains_key(bucket) {
+                        error(409, "BucketAlreadyOwnedByYou", f"{bucket} exists")
+                    } else {
+                        self.buckets.insert(bucket.to_string(), SortedMap.new());
+                        Response {
+                            status: 200,
+                            body: Vec.new(),
+                            headers: [("Location".to_string(), f"/{bucket}")],
+                        }
+                    }
+                }
+                "GET" => {
+                    if not self.buckets.contains_key(bucket) {
+                        error(404, "NoSuchBucket", f"no bucket {bucket}")
+                    } else {
+                        self.list(bucket, q)
+                    }
+                }
+                _ => error(405, "MethodNotAllowed", f"{method} on a bucket"),
+            };
+        }
+        let objects = match self.buckets.get_mut(bucket) {
+            Some(o) => o,
+            None => return error(404, "NoSuchBucket", f"no bucket {bucket}"),
+        };
+        match method {
+            "PUT" => {
+                let etag = f"\"{sha256_hex(body)[..32]}\"";
+                let content_type = headers
+                    .get("content-type")
+                    .cloned()
+                    .unwrap_or_else(|| "application/octet-stream".to_string());
+                objects.insert(key.to_string(), Object { data: body, content_type, etag: etag.clone() });
+                Response { status: 200, body: Vec.new(), headers: [("ETag".to_string(), etag)] }
+            }
+            "GET" => match objects.get(key) {
+                Some(o) => Response {
+                    status: 200,
+                    body: o.data.clone(),
+                    headers: [
+                        ("Content-Type".to_string(), o.content_type.clone()),
+                        ("ETag".to_string(), o.etag.clone()),
+                    ],
+                },
+                None => error(404, "NoSuchKey", f"no key {key}"),
+            },
+            "DELETE" => {
+                objects.remove(key);
+                Response { status: 204, body: Vec.new(), headers: Vec.new() }
+            }
+            _ => error(405, "MethodNotAllowed", f"{method} on an object"),
+        }
+    }
+
+    fn list(self, bucket: Str, q: ref Map[String, String]) -> Response {
+        if q.get("list-type").map(|s| s.as_str()) != Some("2") {
+            return error(400, "InvalidArgument", "only list-type=2 is served");
+        }
+        let empty = String.new();
+        let prefix = q.get("prefix").unwrap_or(empty);
+        let delim = q.get("delimiter").unwrap_or(empty);
+        let max_keys = match q.get("max-keys").map(|s| i64.parse(s)).unwrap_or(Ok(1000)) {
+            Ok(n) if n >= 0 and n <= 1000 => n,
+            _ => return error(400, "InvalidArgument", "max-keys must be 0 to 1000"),
+        };
+        let mut after = String.new();
+        if let Some(tok) = q.get("continuation-token") {
+            let mut raw = Vec.new();
+            let b = tok.bytes();
+            if b.len() % 2 != 0 {
+                return error(400, "InvalidArgument", "the continuation token is not valid");
+            }
+            for pair in b.chunks(2) {
+                match (hex_digit(pair[0]), hex_digit(pair[1])) {
+                    (Some(h), Some(l)) => raw.push(h * 16 + l),
+                    _ => return error(400, "InvalidArgument", "the continuation token is not valid"),
+                }
+            }
+            after = match String.from_utf8(raw) {
+                Ok(s) => s,
+                Err(_) => return error(400, "InvalidArgument", "the continuation token is not valid"),
+            };
+        }
+        let mut contents: Vec[(String, i64, String)] = Vec.new();
+        let mut prefixes: Vec[String] = Vec.new();
+        let mut last: Option[String] = None;
+        let mut truncated = false;
+        for (key, obj) in ref self.buckets[bucket] {
+            if not key.starts_with(prefix.as_str()) {
+                continue;
+            }
+            let rest = key[prefix.len()..];
+            let entry = if not delim.is_empty() and rest.contains(delim.as_str()) {
+                let at = rest.find(delim.as_str()).unwrap();
+                f"{prefix}{rest[..at + delim.len()]}"
+            } else {
+                key.clone()
+            };
+            if not after.is_empty()
+                and (entry <= after or (not delim.is_empty() and after.ends_with(delim.as_str()) and entry.starts_with(after)))
+            {
+                continue;
+            }
+            if last.as_ref() == Some(ref entry) {
+                continue;
+            }
+            if contents.len() + prefixes.len() == max_keys {
+                truncated = true;
+                break;
+            }
+            last = Some(entry.clone());
+            if ref entry == key {
+                contents.push((key.clone(), obj.data.len(), obj.etag.clone()));
+            } else {
+                prefixes.push(entry);
+            }
+        }
+        let mut x = f"<Name>{xml_escape(bucket)}</Name><Prefix>{xml_escape(prefix)}</Prefix>";
+        if not delim.is_empty() {
+            x.push_str(f"<Delimiter>{xml_escape(delim)}</Delimiter>");
+        }
+        x.push_str(f"<MaxKeys>{max_keys}</MaxKeys><KeyCount>{contents.len() + prefixes.len()}</KeyCount>");
+        x.push_str(f"<IsTruncated>{if truncated { "true" } else { "false" }}</IsTruncated>");
+        for (key, size, etag) in ref contents {
+            x.push_str(f"<Contents><Key>{xml_escape(key)}</Key><Size>{size}</Size><ETag>{xml_escape(etag)}</ETag></Contents>");
+        }
+        for p in ref prefixes {
+            x.push_str(f"<CommonPrefixes><Prefix>{xml_escape(p)}</Prefix></CommonPrefixes>");
+        }
+        if truncated {
+            x.push_str(f"<NextContinuationToken>{hex(last.unwrap().bytes())}</NextContinuationToken>");
+        }
+        let body = f"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<ListBucketResult>{x}</ListBucketResult>";
+        Response { status: 200, body: body.bytes().to_vec(), headers: xml_header(String.new()) }
+    }
+}
+
+fn check_skew(stamp: Str) -> Result[(), Response] {
+    let t = match seconds(stamp) {
+        Some(t) => t,
+        None => {
+            return Err(error(
+                403,
+                "AccessDenied",
+                f"x-amz-date '{stamp}' is not YYYYMMDDTHHMMSSZ",
+            ))
+        }
+    };
+    if (t - seconds(NOW).unwrap()).abs() > MAX_SKEW {
+        return Err(error(
+            403,
+            "RequestTimeTooSkewed",
+            f"{stamp} is more than 15 minutes from the server's time",
+        ));
+    }
+    Ok(())
+}
+
+fn serve(store: ref Mutex[Store], req: Request) -> Response {
+    let mut headers = Map.new();
+    for (k, v) in req.headers().into_iter() {
+        headers.insert(k.to_lowercase(), v);
+    }
+    let mut s = store.lock();
+    s.value.handle(req.method(), req.url(), headers, req.bytes())
+}
+
+// ---- the clients
+
+/// Every `<name>..</name>` text in `xml`, unescaped, in order.
+fn tag(xml: Str, name: Str) -> Vec[String] {
+    let open = f"<{name}>";
+    let close = f"</{name}>";
+    let mut out = Vec.new();
+    let mut at = 0;
+    while let Some(i) = xml[at..].find(open) {
+        let start = at + i + open.len();
+        let j = start + xml[start..].find(close).unwrap();
+        let text = xml[start..j];
+        out.push(
+            text.replace("&quot;", "\"")
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&amp;", "&"),
+        );
+        at = j;
+    }
+    out
+}
+
+struct Answer {
+    status: i64,
+    body: Vec[u8],
+    headers: Vec[(String, String)],
+}
+
+impl Answer {
+    fn header(self, name: Str) -> String {
+        for (k, v) in ref self.headers {
+            if k.eq_ignore_ascii_case(name) {
+                return v.clone();
+            }
+        }
+        "-".to_string()
+    }
+
+    fn describe(self) -> String {
+        if self.status >= 400 {
+            let text = String.from_utf8_lossy(self.body).to_string();
+            f"{self.status} {tag(text, "Code")[0]}: {tag(text, "Message")[0]}"
+        } else {
+            f"{self.status}"
+        }
+    }
+}
+
+fn fetch(client: ref Client, method: Str, url: Str, headers: Slice[(String, String)], body: Slice[u8]) -> Answer {
+    loop {
+        let mut rb = client.request(method.to_string(), url.to_string());
+        for (k, v) in headers {
+            rb = rb.header(k.clone(), v.clone());
+        }
+        if method == "PUT" {
+            rb = rb.body_bytes(body.to_vec());
+        }
+        match rb.send() {
+            Ok(r) => return Answer { status: r.status, body: r.body, headers: r.headers },
+            Err(e) => match e.status() {
+                Some(code) => {
+                    return Answer {
+                        status: code,
+                        body: e.body().unwrap_or_default().bytes().to_vec(),
+                        headers: e.headers(),
+                    }
+                }
+                None => sleep(Duration.ms(20)),
+            },
+        }
+    }
+}
+
+fn short(data: Slice[u8]) -> String {
+    f"{data.len()} bytes, sha256 {sha256_hex(data)[..16]}"
+}
+
+struct Signer {
+    akid: String,
+    secret: String,
+    region: String,
+}
+
+impl Signer {
+    fn new(akid: Str, secret: Str) -> Signer {
+        Signer { akid: akid.to_string(), secret: secret.to_string(), region: REGION.to_string() }
+    }
+
+    fn in_region(akid: Str, secret: Str, region: Str) -> Signer {
+        Signer { akid: akid.to_string(), secret: secret.to_string(), region: region.to_string() }
+    }
+
+    /// Sign and send; `path` is the decoded path, and `sent` sends a
+    /// different one from the one signed.
+    fn send(
+        self,
+        c: ref Client,
+        method: Str,
+        path: Str,
+        query: Slice[(String, String)],
+        body: Slice[u8],
+        content_type: Option[Str],
+        stamp: Str,
+        payload: Option[Str],
+        sent: Option[Str],
+    ) -> Answer {
+        let payload = match payload {
+            Some(p) => p.to_string(),
+            None => sha256_hex(body),
+        };
+        let mut headers = Map.new();
+        headers.insert("host".to_string(), HOST.to_string());
+        headers.insert("x-amz-content-sha256".to_string(), payload.clone());
+        headers.insert("x-amz-date".to_string(), stamp.to_string());
+        let mut signed: Vec[String] = headers.keys().cloned().collect();
+        signed.sort();
+        let sig = signature(self.secret, method, path, query, headers, signed, payload, stamp, self.region);
+        let cred = f"{self.akid}/{stamp[..8]}/{self.region}/{SERVICE}/aws4_request";
+        let auth = f"{ALGORITHM} Credential={cred}, SignedHeaders={signed.join(";")}, Signature={sig}";
+        let mut send = [
+            ("Authorization".to_string(), auth),
+            ("x-amz-content-sha256".to_string(), payload),
+            ("x-amz-date".to_string(), stamp.to_string()),
+        ];
+        if let Some(t) = content_type {
+            send.push(("Content-Type".to_string(), t.to_string()));
+        }
+        let mut url = f"http://{HOST}{uri_encode(sent.unwrap_or(path), true)}";
+        if not query.is_empty() {
+            url.push('?');
+            url.push_str(canonical_query(query));
+        }
+        fetch(c, method, url, send, body)
+    }
+
+    fn get(self, c: ref Client, path: Str) -> Answer {
+        self.send(c, "GET", path, [], [], None, NOW, None, None)
+    }
+
+    fn presign(self, path: Str, expires: i64, stamp: Str) -> String {
+        let cred = f"{self.akid}/{stamp[..8]}/{self.region}/{SERVICE}/aws4_request";
+        let mut query = [
+            ("X-Amz-Algorithm".to_string(), ALGORITHM.to_string()),
+            ("X-Amz-Credential".to_string(), cred),
+            ("X-Amz-Date".to_string(), stamp.to_string()),
+            ("X-Amz-Expires".to_string(), expires.to_string()),
+            ("X-Amz-SignedHeaders".to_string(), "host".to_string()),
+        ];
+        let mut headers = Map.new();
+        headers.insert("host".to_string(), HOST.to_string());
+        let sig = signature(self.secret, "GET", path, query, headers, ["host".to_string()], UNSIGNED, stamp, self.region);
+        query.push(("X-Amz-Signature".to_string(), sig));
+        f"http://{HOST}{uri_encode(path, true)}?{canonical_query(query)}"
+    }
+}
+
+fn list_all(c: ref Client, who: ref Signer, bucket: Str, prefix: Str, delim: Str, max_keys: i64, label: Str) {
+    let mut token: Option[String] = None;
+    let mut page = 1;
+    loop {
+        let mut q = [
+            ("list-type".to_string(), "2".to_string()),
+            ("prefix".to_string(), prefix.to_string()),
+            ("max-keys".to_string(), max_keys.to_string()),
+        ];
+        if not delim.is_empty() {
+            q.push(("delimiter".to_string(), delim.to_string()));
+        }
+        if let Some(t) = ref token {
+            q.push(("continuation-token".to_string(), t.clone()));
+        }
+        let a = who.send(c, "GET", f"/{bucket}", q, [], None, NOW, None, None);
+        if a.status != 200 {
+            println(f"list {label} page {page} -> {a.describe()}");
+            return;
+        }
+        let text = String.from_utf8(a.body).unwrap();
+        println(f"list {label} page {page} -> {tag(text, "KeyCount")[0]} entries, truncated {tag(text, "IsTruncated")[0]}");
+        for (k, s) in tag(text, "Key").iter().zip(tag(text, "Size").iter()) {
+            println(f"  key {k} ({s})");
+        }
+        for p in tag(text, "Prefix").iter().skip(1) {
+            println(f"  prefix {p}");
+        }
+        match tag(text, "NextContinuationToken").into_iter().next() {
+            Some(t) => token = Some(t),
+            None => return,
+        }
+        page += 1;
+    }
+}
+
+fn main() {
+    // AWS's published get-vanilla example (its documentation's fake key).
+    let mut vh = Map.new();
+    vh.insert("host".to_string(), "example.amazonaws.com".to_string());
+    vh.insert("x-amz-date".to_string(), "20150830T123600Z".to_string());
+    let secret = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY";
+    let creq = f"GET\n/\n\nhost:example.amazonaws.com\nx-amz-date:20150830T123600Z\n\nhost;x-amz-date\n{sha256_hex(b"")}";
+    let sts = f"{ALGORITHM}\n20150830T123600Z\n20150830/us-east-1/service/aws4_request\n{sha256_hex(creq.bytes())}";
+    let mut k = hmac_sha256(f"AWS4{secret}".bytes(), b"20150830").to_vec();
+    for part in ["us-east-1", "service", "aws4_request"] {
+        k = hmac_sha256(k, part.bytes()).to_vec();
+    }
+    println(f"sigv4 get-vanilla signature {hex(hmac_sha256(k, sts.bytes()))}");
+
+    let store = Mutex.new(Store.new());
+    let group = TaskGroup.new();
+    let s = ref store;
+    group.spawn(|| Server.serve(ADDR.to_string(), |req| serve(s, req)));
+
+    let c = Client.new();
+    let ks = keys();
+    let writer = Signer.new("AKIDKARAWRITER01", ks["AKIDKARAWRITER01"].0);
+    let reader = Signer.new("AKIDKARAREADER01", ks["AKIDKARAREADER01"].0);
+
+    println("== buckets");
+    for name in ["kara-assets", "kara-assets", "Bad_Bucket", "kara-logs"] {
+        let a = writer.send(c, "PUT", f"/{name}", [], [], None, NOW, None, None);
+        println(f"create {name} -> {a.describe()}");
+    }
+    let a = reader.get(c, "/");
+    let names = tag(String.from_utf8(a.body.clone()).unwrap(), "Name");
+    println(f"buckets -> {a.status} {names.join(", ")}");
+
+    println("== put");
+    let blob: Vec[u8] = (0..=255u8).collect();
+    let mut chain = sha256(b"beach").to_vec();
+    chain.extend_from_slice(sha256(b"sand"));
+    let objects: Vec[(Str, Vec[u8], Str)] = [
+        ("readme.txt", b"Kara assets bucket.\nSigned with SigV4.\n".to_vec(), "text/plain"),
+        ("logo.bin", blob, "application/octet-stream"),
+        ("photos/2026/café menu.txt", "soup 4\nbread 2\n".bytes().to_vec(), "text/plain; charset=utf-8"),
+        ("photos/2026/beach.raw", chain, "image/x-raw"),
+        ("photos/2025/old.txt", b"from last year\n".to_vec(), "text/plain"),
+        ("notes/a b+c.txt", b"plus, space\n".to_vec(), "text/plain"),
+    ];
+    for (key, data, ctype) in ref objects {
+        let a = writer.send(c, "PUT", f"/kara-assets/{key}", [], data, Some(ctype), NOW, None, None);
+        println(f"put {key} -> {a.describe()} etag {a.header("ETag")}");
+    }
+
+    println("== get");
+    for (key, data, _) in ref objects {
+        let a = reader.get(c, f"/kara-assets/{key}");
+        let same = if ref a.body == data { "same" } else { "DIFFERENT" };
+        println(f"get {key} -> {a.status} {short(a.body)}, {a.header("Content-Type")}, {same}");
+    }
+
+    println("== list");
+    list_all(c, reader, "kara-assets", "", "/", 1000, "top");
+    list_all(c, reader, "kara-assets", "photos/", "/", 1000, "photos/");
+    list_all(c, reader, "kara-assets", "", "", 2, "all by 2");
+    list_all(c, reader, "kara-assets", "", "/", 2, "top by 2");
+    list_all(c, reader, "kara-nope", "", "", 10, "missing bucket");
+
+    println("== refused");
+    let a = reader.send(c, "PUT", "/kara-assets/x.txt", [], b"no", None, NOW, None, None);
+    println(f"reader put -> {a.describe()}");
+    let a = Signer.new("AKIDKARAWRITER01", "guessed-secret").get(c, "/kara-assets/readme.txt");
+    println(f"wrong secret -> {a.describe()}");
+    let a = Signer.new("AKIDKARANOBODY01", "x").get(c, "/kara-assets/readme.txt");
+    println(f"unknown key -> {a.describe()}");
+    let a = Signer.in_region("AKIDKARAWRITER01", ks["AKIDKARAWRITER01"].0, "us-west-2").get(c, "/kara-assets/readme.txt");
+    println(f"wrong region -> {a.describe()}");
+    let a = writer.send(c, "GET", "/kara-assets/readme.txt", [], [], None, "20261123T110000Z", None, None);
+    println(f"an hour slow -> {a.describe()}");
+    let a = writer.send(c, "GET", "/kara-assets/readme.txt", [], [], None, "20261123T121000Z", None, None);
+    println(f"ten minutes fast -> {a.describe()}");
+    let original = sha256_hex(b"original");
+    let a = writer.send(c, "PUT", "/kara-assets/y.txt", [], b"tampered", None, NOW, Some(ref original), None);
+    println(f"body swapped -> {a.describe()}");
+    let a = writer.send(c, "PUT", "/kara-assets/z.txt", [], b"streamed", None, NOW, Some(UNSIGNED), None);
+    println(f"unsigned payload -> {a.describe()}");
+    let a = writer.send(c, "GET", "/kara-assets/readme.txt", [], [], None, NOW, None, Some("/kara-assets/logo.bin"));
+    println(f"path swapped -> {a.describe()}");
+    let base = f"http://{HOST}";
+    let a = fetch(c, "GET", f"{base}/kara-assets/readme.txt", [], []);
+    println(f"not signed -> {a.describe()}");
+    let bad = [
+        ("Authorization".to_string(), "AWS4-HMAC-SHA1 Credential=x".to_string()),
+        ("x-amz-date".to_string(), NOW.to_string()),
+    ];
+    let a = fetch(c, "GET", f"{base}/kara-assets/readme.txt", bad, []);
+    println(f"wrong algorithm -> {a.describe()}");
+    let a = fetch(c, "GET", f"{base}/kara-assets/read%zzme.txt", [], []);
+    println(f"bad escape -> {a.describe()}");
+
+    println("== presigned");
+    let url = writer.presign("/kara-assets/photos/2026/café menu.txt", 300, NOW);
+    let a = fetch(c, "GET", url, [], []);
+    println(f"presigned menu -> {a.status} {short(a.body)}");
+    let url = writer.presign("/kara-assets/readme.txt", 600, "20261123T113000Z");
+    let a = fetch(c, "GET", url, [], []);
+    println(f"presigned 30 minutes ago for 10 -> {a.describe()}");
+    let url = writer.presign("/kara-assets/readme.txt", 3600, "20261123T113000Z");
+    let a = fetch(c, "GET", url, [], []);
+    println(f"presigned 30 minutes ago for 60 -> {a.status} {short(a.body)}");
+    let url = writer.presign("/kara-assets/readme.txt", 300, NOW).replace("readme", "logo.b").replace(".txt", "in");
+    let a = fetch(c, "GET", url, [], []);
+    println(f"presigned then edited -> {a.describe()}");
+    let url = writer.presign("/kara-assets/readme.txt", 999999, NOW);
+    let a = fetch(c, "GET", url, [], []);
+    println(f"presigned for 12 days -> {a.describe()}");
+
+    println("== delete");
+    let a = writer.send(c, "DELETE", "/kara-assets/logo.bin", [], [], None, NOW, None, None);
+    println(f"delete logo.bin -> {a.describe()}");
+    let a = writer.send(c, "DELETE", "/kara-assets/logo.bin", [], [], None, NOW, None, None);
+    println(f"delete logo.bin again -> {a.describe()}");
+    let a = reader.get(c, "/kara-assets/logo.bin");
+    println(f"get logo.bin -> {a.describe()}");
+    list_all(c, reader, "kara-assets", "", "/", 1000, "after delete");
+
+    println("== stats");
+    let a = fetch(c, "GET", f"{base}/_stats", [], []);
+    println(f"stats -> {a.status} {String.from_utf8(a.body).unwrap()}");
+    group.cancel();
+    println("done");
+}

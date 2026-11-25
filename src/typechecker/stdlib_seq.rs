@@ -555,6 +555,34 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 Type::Bool
             }
+            // `a.eq_ignore_ascii_case(b)`, Rust's `str` method: the same
+            // byte length, and each byte equal once put in ASCII lower case
+            // (review ruling 2026-11-25, B-2026-11-25-81).
+            "eq_ignore_ascii_case" => {
+                if args.len() != 1 {
+                    self.type_error(
+                        format!("'{method}' expects 1 argument, found {}", args.len()),
+                        *span,
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                } else {
+                    let arg_ty = self.infer_expr(&args[0].value);
+                    if !is_str_like(&arg_ty) {
+                        self.type_error(
+                            format!(
+                                "'{method}' expects a String argument, found '{}'",
+                                type_display(&arg_ty)
+                            ),
+                            args[0].value.span,
+                            TypeErrorKind::TypeMismatch,
+                        );
+                    }
+                }
+                Type::Bool
+            }
             "substring" => {
                 // substring(start: i64) -> String  — bytes from `start` to end.
                 // substring(start: i64, end: i64) -> String — bytes in the

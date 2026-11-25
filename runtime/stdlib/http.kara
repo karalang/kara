@@ -120,6 +120,14 @@ impl RequestBuilder {
         self
     }
 
+    // Replace the request entity body with bytes sent as they are: a
+    // binary upload, a protobuf or CBOR body. The last of `body` and
+    // `body_bytes` wins (B-2026-11-25-80).
+    #[compiler_builtin]
+    fn body_bytes(own self, b: own Vec[u8]) -> RequestBuilder {
+        self
+    }
+
     // Configure the request deadline in milliseconds. `0` (the
     // default) leaves ureq's no-timeout posture in place; positive
     // values apply `ureq::Request::timeout` so a slow / hung origin
@@ -269,6 +277,11 @@ impl Request {
     // The request with `b` as its body.
     #[compiler_builtin]
     fn with_body(own self, b: own String) -> Request { self }
+
+    // The request with the bytes `b` as its body, sent as they are
+    // (B-2026-11-25-80).
+    #[compiler_builtin]
+    fn with_bytes(own self, b: own Vec[u8]) -> Request { self }
 
     // The URL: the absolute URL a client request was built with, or the
     // request target (path and query) of the one a server is answering.

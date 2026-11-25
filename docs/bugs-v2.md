@@ -60,13 +60,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 771 |
 | false-positive | 384 |
-| missing-feature | 257 |
+| missing-feature | 259 |
 | perf | 204 |
 | other | 153 |
 | soundness | 134 |
 | miscompile | 110 |
 | run-vs-build | 76 |
-| crash | 69 |
+| crash | 70 |
 | codegen-gap | 47 |
 | use-after-free | 13 |
 | leak | 5 |
@@ -76,14 +76,14 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 928 |
-| mir | 341 |
-| mir-llvm | 330 |
-| cli | 317 |
+| typecheck | 930 |
+| mir | 342 |
+| mir-llvm | 333 |
+| cli | 318 |
 | parser | 162 |
 | ownership | 138 |
-| runtime | 112 |
-| interp | 110 |
+| runtime | 114 |
+| interp | 112 |
 | effect | 69 |
 | resolver | 57 |
 | other | 54 |
@@ -141,6 +141,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-25-61 | 2026-11-25 | typecheck | low | Attributes that design.md's attribute list does not have are accepted: `#[unsafe(no_mangle)]`, `#[unsafe(link_section(".."))]`, `#[used]` and `#[profile(..)]` (deferred.md's systems and embedded tracks) check with no diagnostic, `#[profile(kernel)]` is even enforced, the `@deprecated` shorthand works, and `#[with_provider(R, e)]` on a plain `fn` is silent; design.md says the list is generated from the registry and anything else is E_UNKNOWN_ATTRIBUTE | — |
 | B-2026-11-25-62 | 2026-11-25 | typecheck | low | An `impl` that leaves out a trait's required method reports E0203 and then a spurious E0236 `no method 'name' on type 'Rock'` at the trait's default method body that calls it | — |
 | B-2026-11-25-63 | 2026-11-25 | typecheck | low | `String.slice(a, b)` is accepted and returns a `Str` view, but library/strings.md has no `slice`: the documented view is `s[a..b]` (design.md §5) and the copy is `substring`; book ch09b taught `s.slice` (now `s[a..b]`) | — |
+| B-2026-11-25-80 | 2026-11-25 | typecheck+interp+mir-llvm+runtime+cli | medium | A client request body could only be text: `RequestBuilder.body` and `Request.with_body` took a `String`, so an S3-style client could not upload a binary object, and Rust's `rb.body(bytes.to_vec())` was refused with no fix | — |
+| B-2026-11-25-81 | 2026-11-25 | typecheck+interp+mir-llvm+runtime | low | `String` / `Str` had no `eq_ignore_ascii_case`, which a header-name lookup wants (Rust's `k.eq_ignore_ascii_case(name)` was refused with "no method 'eq_ignore_ascii_case' on type 'String'") | — |
+| B-2026-11-25-82 | 2026-11-25 | mir+mir-llvm | medium | `Some(ref s)` with `s: String` handed to an `Option[Str]` passes the check, then fails MIR validation ("field 0 of Option has the wrong type") on both backends, so the program does not run; the payload is not viewed as a call argument at a `Str` parameter is | — |
 
 ### Relocated
 

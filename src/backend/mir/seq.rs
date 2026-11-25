@@ -969,6 +969,16 @@ impl<'ctx> Cx<'ctx, '_> {
                 let r = self.builder.build_or(below, tie, "").map_err(e)?;
                 bool_of(self, r)
             }
+            // Rust's `str::eq_ignore_ascii_case`, in the runtime.
+            4 => {
+                let op = self.llcx.i32_type().const_int(4, false);
+                let r = self.rt_int(
+                    "str_test",
+                    &[op.into(), ap.into(), an.into(), bp.into(), bn.into()],
+                    8,
+                )?;
+                self.store(d, r.into())
+            }
             _ => self.str_contains(d, (ap, an), (bp, bn)),
         }
     }
@@ -1173,6 +1183,7 @@ impl<'ctx> Cx<'ctx, '_> {
             "starts_with" => Some(1),
             "ends_with" => Some(2),
             "lt" => Some(3),
+            "eq_ignore_ascii_case" => Some(4),
             _ => None,
         };
         let map = match method {

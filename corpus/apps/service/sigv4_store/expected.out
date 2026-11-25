@@ -1,0 +1,77 @@
+sigv4 get-vanilla signature 5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31
+== buckets
+create kara-assets -> 200
+create kara-assets -> 409 BucketAlreadyOwnedByYou: kara-assets exists
+create Bad_Bucket -> 400 InvalidBucketName: 'Bad_Bucket' is not a valid bucket name
+create kara-logs -> 200
+buckets -> 200 kara-assets, kara-logs
+== put
+put readme.txt -> 200 etag "f82c8bac23ccee1875b9571870f05d66"
+put logo.bin -> 200 etag "40aff2e9d2d8922e47afd4648e696749"
+put photos/2026/café menu.txt -> 200 etag "31cf0aa1549584f504fcec75304d33b4"
+put photos/2026/beach.raw -> 200 etag "2f032822e01a860a1523307dea3c13bc"
+put photos/2025/old.txt -> 200 etag "9869fa35dd2953554a94b6ee2a66bf70"
+put notes/a b+c.txt -> 200 etag "0b8254b1bc5de0e52cc9be78449181d6"
+== get
+get readme.txt -> 200 39 bytes, sha256 f82c8bac23ccee18, text/plain, same
+get logo.bin -> 200 256 bytes, sha256 40aff2e9d2d8922e, application/octet-stream, same
+get photos/2026/café menu.txt -> 200 15 bytes, sha256 31cf0aa1549584f5, text/plain; charset=utf-8, same
+get photos/2026/beach.raw -> 200 64 bytes, sha256 2f032822e01a860a, image/x-raw, same
+get photos/2025/old.txt -> 200 15 bytes, sha256 9869fa35dd295355, text/plain, same
+get notes/a b+c.txt -> 200 12 bytes, sha256 0b8254b1bc5de0e5, text/plain, same
+== list
+list top page 1 -> 4 entries, truncated false
+  key logo.bin (256)
+  key readme.txt (39)
+  prefix notes/
+  prefix photos/
+list photos/ page 1 -> 2 entries, truncated false
+  prefix photos/2025/
+  prefix photos/2026/
+list all by 2 page 1 -> 2 entries, truncated true
+  key logo.bin (256)
+  key notes/a b+c.txt (12)
+list all by 2 page 2 -> 2 entries, truncated true
+  key photos/2025/old.txt (15)
+  key photos/2026/beach.raw (64)
+list all by 2 page 3 -> 2 entries, truncated false
+  key photos/2026/café menu.txt (15)
+  key readme.txt (39)
+list top by 2 page 1 -> 2 entries, truncated true
+  key logo.bin (256)
+  prefix notes/
+list top by 2 page 2 -> 2 entries, truncated false
+  key readme.txt (39)
+  prefix photos/
+list missing bucket page 1 -> 404 NoSuchBucket: no bucket kara-nope
+== refused
+reader put -> 403 AccessDenied: PUT needs write access
+wrong secret -> 403 SignatureDoesNotMatch: the signature does not match
+unknown key -> 403 InvalidAccessKeyId: no access key AKIDKARANOBODY01
+wrong region -> 400 AuthorizationHeaderMalformed: the region 'us-west-2' is wrong; expecting 'kara-local-1'
+an hour slow -> 403 RequestTimeTooSkewed: 20261123T110000Z is more than 15 minutes from the server's time
+ten minutes fast -> 200
+body swapped -> 400 XAmzContentSHA256Mismatch: the body's SHA-256 is not x-amz-content-sha256
+unsigned payload -> 200
+path swapped -> 403 SignatureDoesNotMatch: the signature does not match
+not signed -> 403 AccessDenied: the request is not signed
+wrong algorithm -> 400 AuthorizationHeaderMalformed: the algorithm must be AWS4-HMAC-SHA256
+bad escape -> 400 InvalidURI: bad percent-encoding
+== presigned
+presigned menu -> 200 15 bytes, sha256 31cf0aa1549584f5
+presigned 30 minutes ago for 10 -> 403 AccessDenied: the request has expired
+presigned 30 minutes ago for 60 -> 200 39 bytes, sha256 f82c8bac23ccee18
+presigned then edited -> 403 SignatureDoesNotMatch: the signature does not match
+presigned for 12 days -> 400 AuthorizationQueryParametersError: X-Amz-Expires must be 1 to 604800 seconds
+== delete
+delete logo.bin -> 204
+delete logo.bin again -> 204
+get logo.bin -> 404 NoSuchKey: no key logo.bin
+list after delete page 1 -> 4 entries, truncated false
+  key readme.txt (39)
+  key z.txt (8)
+  prefix notes/
+  prefix photos/
+== stats
+stats -> 200 200=27 204=2 400=6 403=8 404=2 409=1
+done

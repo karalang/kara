@@ -22461,6 +22461,19 @@ impl<'l, 'a> Bx<'l, 'a> {
                         // Each payload at its field's type (`Some((1, 2))`
                         // as an `Option[(i32, i32)]`).
                         let ft = self.tys().tcx().field_ty(t, Some(idx), i as u32);
+                        // A `String` or `ref String` payload at a `Str`
+                        // field is viewed, as a call argument at a `Str`
+                        // parameter is (`Some(ref s)` for an
+                        // `Option[Str]`, B-2026-11-25-82).
+                        if let Some(ft) = ft {
+                            if matches!(self.tys().tcx().kind(ft), HK::StaticStr) {
+                                let at = self.expr_ty(&a.value)?;
+                                if matches!(self.strip_ty(at), HK::Str) {
+                                    ops.push(self.arg_operand_here(&a.value, ft)?);
+                                    continue;
+                                }
+                            }
+                        }
                         ops.push(match ft {
                             Some(ft) => self.operand_at(&a.value, ft)?,
                             None => self.expr_operand(&a.value)?,

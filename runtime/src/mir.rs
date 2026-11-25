@@ -1013,7 +1013,7 @@ unsafe fn text<'a>(ptr: *const u8, len: usize) -> &'a str {
 }
 
 /// A test of `a` against `b`: 0 `contains`, 1 `starts_with`, 2
-/// `ends_with`, 3 `a < b`.
+/// `ends_with`, 3 `a < b`, 4 `eq_ignore_ascii_case`.
 ///
 /// # Safety
 /// Each pointer is readable for its length, of UTF-8.
@@ -1033,6 +1033,7 @@ pub unsafe extern "C" fn karac_mir_str_test(
         0 => contains(a, b),
         1 => a.starts_with(b),
         2 => a.ends_with(b),
+        4 => a.eq_ignore_ascii_case(b),
         _ => a < b,
     })
 }

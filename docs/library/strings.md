@@ -50,6 +50,7 @@ An empty pattern matches at every char boundary, the start and the end included,
 | `contains` | `fn contains(self, pat: Str) -> bool` | Substring search. An empty `pat` is in every text: `"abc".contains("")` is `true` |
 | `starts_with` | `fn starts_with(self, pat: Str) -> bool` | `true` for an empty `pat` |
 | `ends_with` | `fn ends_with(self, pat: Str) -> bool` | `true` for an empty `pat` |
+| `eq_ignore_ascii_case` | `fn eq_ignore_ascii_case(self, other: Str) -> bool` | Rust's: the same byte length, and each byte equal once ASCII letters are put in lower case, so `"Content-Type"` matches `"content-type"` and `"É"` does not match `"é"`. For HTTP header names and other ASCII tokens (B-2026-11-25-81) |
 | `find` | `fn find(self, pat: Str) -> Option[i64]` | Byte offset of the first match. A valid place to cut with `s[a..b]`. An empty `pat` is found at the start: `"abc".find("")` is `Some(0)` |
 | `rfind` | `fn rfind(self, pat: Str) -> Option[i64]` | Byte offset of the last match. An empty `pat` is found at the end: `"abc".rfind("")` is `Some(3)` |
 | `match_indices` | `fn match_indices(self, pat: Str) -> impl Iterator[Item = (i64, Str)]` | Every non-overlapping match, left to right, with its byte offset; the `Str` is a view into `self`. An empty `pat` matches at every char boundary, the end included (B-2026-11-09-57) |

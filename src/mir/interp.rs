@@ -2090,7 +2090,8 @@ struct HttpBuilder {
     method: String,
     url: String,
     headers: Vec<(String, String)>,
-    body: String,
+    /// What `body` (its text's bytes) or `body_bytes` set last.
+    body: Vec<u8>,
     /// What `timeout` set, if it was called.
     timeout_ms: Option<i128>,
 }
@@ -13835,6 +13836,7 @@ impl<'a> Interp<'a> {
             "as_str" => Ok(Value::Str(s.to_string())),
             "starts_with" => Ok(Value::Bool(s.starts_with(text(1)?))),
             "ends_with" => Ok(Value::Bool(s.ends_with(text(1)?))),
+            "eq_ignore_ascii_case" => Ok(Value::Bool(s.eq_ignore_ascii_case(text(1)?))),
             "trim" => {
                 let t = s.trim().to_string();
                 new_string(self, t)
@@ -19554,7 +19556,11 @@ impl<'a> Interp<'a> {
                         let v = self.string_at(&args[2])?;
                         self.http_builders[i].headers.push((k, v));
                     }
-                    "body" => self.http_builders[i].body = self.string_at(&args[1])?,
+                    "body" => self.http_builders[i].body = self.string_at(&args[1])?.into_bytes(),
+                    // The bytes as they are (B-2026-11-25-80).
+                    "body_bytes" => {
+                        self.http_builders[i].body = self.bytes_of_view(&args[1].clone(), name)?
+                    }
                     "timeout" => {
                         if let Some(Value::Int(ms)) = args.get(1) {
                             self.http_builders[i].timeout_ms = Some(*ms);
@@ -19568,7 +19574,7 @@ impl<'a> Interp<'a> {
                         let b = &self.http_builders[i];
                         let mut req = crate::http1::Request::built(b.method.clone(), &b.url);
                         req.headers = b.headers.clone();
-                        req.body = b.body.clone().into_bytes();
+                        req.body = b.body.clone();
                         let url = b.url.clone();
                         let id = self.keep_request(url, req) as i128;
                         return Ok(Value::Agg(vec![Value::Int(id)]));
@@ -19662,8 +19668,8 @@ impl<'a> Interp<'a> {
         if base == "Client" {
             let url = self.string_at(&args[1])?;
             let body = match args.get(2) {
-                Some(b) => self.string_at(b)?,
-                None => String::new(),
+                Some(b) => self.string_at(b)?.into_bytes(),
+                None => Vec::new(),
             };
             let req = HttpBuilder {
                 method: if method == "get" { "GET" } else { "POST" }.into(),
@@ -20782,7 +20788,7 @@ impl<'a> Interp<'a> {
                 }
                 Ok(Value::Unit)
             }
-            ("Request", "with_header" | "with_body") => {
+            ("Request", "with_header" | "with_body" | "with_bytes") => {
                 let id = self.request_id(&args[0], name)?;
                 let id = if id == 0 {
                     // The served request, copied into one the program owns.
@@ -20794,6 +20800,10 @@ impl<'a> Interp<'a> {
                 if method == "with_header" {
                     let (k, v) = (text_of(self, 1)?, text_of(self, 2)?);
                     self.built(id).1.headers.push((k, v));
+                } else if method == "with_bytes" {
+                    // The bytes as they are (B-2026-11-25-80).
+                    let b = self.bytes_of_view(&args[1].clone(), name)?;
+                    self.built(id).1.body = b;
                 } else {
                     let b = text_of(self, 1)?;
                     self.built(id).1.body = b.into_bytes();
@@ -21816,6 +21826,7 @@ const STRING_TEXT_METHODS: &[&str] = &[
     "contains",
     "starts_with",
     "ends_with",
+    "eq_ignore_ascii_case",
     "trim",
     "to_uppercase",
     "to_lowercase",
@@ -22968,7 +22979,7 @@ type HttpFetched = Result<HttpAnswer, String>;
 /// and out, so a helper thread runs it.
 #[cfg(not(target_arch = "wasm32"))]
 fn http_fetch(req: &HttpBuilder, with_body: bool) -> HttpFetched {
-    let body: &[u8] = if with_body { req.body.as_bytes() } else { &[] };
+    let body: &[u8] = if with_body { &req.body } else { &[] };
     // Out of `i64`'s range, the nearest end of it: still refused, or
     // still no limit in practice.
     let timeout_ms = req
