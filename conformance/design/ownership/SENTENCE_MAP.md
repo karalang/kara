@@ -4,22 +4,22 @@ Status: covered, partial, FAILS (filed, the row named), not testable, or "→ dr
 
 Run with `python3 conformance/cases.py conformance/design/ownership` and, for the package cells (directories), `python3 conformance/packages.py conformance/design/ownership`.
 
-**Totals (2026-11-24):** 165 normative sentences: 128 covered, 6 partial, 7 not testable, 23 → drop schedule and 1 FAILS (B-2026-11-24-52, open). Three covered sentences failed when the audit started and are fixed with it: `ref_eq` on frozen handles (B-2026-11-24-50), the constructor named in the `#[non_exhaustive]` literal refusal (B-2026-11-24-51), and the wording of two `freeze` refusals (B-2026-11-24-53). A dependency's own lint warnings printed in a dependent's check is filed open (B-2026-11-24-54). The 2026-11-22 pass's fixes are pinned in tests/design_11_conformance_2026_11_22.rs; its cells were not kept.
+**Totals (2026-11-24):** 165 normative sentences: 151 covered, 6 partial, 7 not testable and 1 FAILS (B-2026-11-24-52, open). Three covered sentences failed when the audit started and are fixed with it: `ref_eq` on frozen handles (B-2026-11-24-50), the constructor named in the `#[non_exhaustive]` literal refusal (B-2026-11-24-51), and the wording of two `freeze` refusals (B-2026-11-24-53). A dependency's own lint warnings printed in a dependent's check is filed open (B-2026-11-24-54). The 2026-11-22 pass's fixes are pinned in tests/design_11_conformance_2026_11_22.rs; its cells were not kept. The 23 borrow-check and drop sentences are covered by the drop schedule's cells (f9557a6bfe), run on interp, build and ASan.
 
 ## Introduction and the core rules in brief
 
 | Line | Sentence | Status | Cells |
 |---|---|---|---|
 | 4812 | core-semantics.md is normative for moves, borrows, views, sharing and destruction | not testable | (a cross-reference) |
-| 4816 | Using a moved place is E0500 | → drop schedule | plain_struct_moved_then_used_refused (the struct form); corpus/core |
-| 4816 | Duplication is always written `.clone()`; nothing is copied, counted or shared implicitly | → drop schedule | corpus/core |
+| 4816 | Using a moved place is E0500 | covered | use_of_a_moved_place_is_e0500 (new, drop schedule, interp/build/ASan); also plain_struct_moved_then_used_refused (the struct form); corpus/core |
+| 4816 | Duplication is always written `.clone()`; nothing is copied, counted or shared implicitly | covered | duplication_is_written_clone (new, drop schedule, interp/build/ASan); also corpus/core |
 | 4817 | A bare parameter borrows (a `Copy` type is copied); `own T` is owned; `frozen T` is a read-only shared handle | covered | shared_handle_passed_to_own_stays_usable, frozen_graph_is_read_by_two_par_branches; §7 parameter modes in conformance/design/functions |
-| 4818 | Nothing moves out of a borrowed or shared place (borrowed parameters, `ref` places, `shared` / `sync` / `frozen` values, index projections, fields of a `Drop` type) | → drop schedule | |
-| 4818 | The fixes are `.clone()`, `mem.take`, `mem.replace`, `mem.swap` and `Option.take()` | → drop schedule | |
-| 4819 | References are decided by signatures, and views cannot escape their origins | → drop schedule | |
+| 4818 | Nothing moves out of a borrowed or shared place (borrowed parameters, `ref` places, `shared` / `sync` / `frozen` values, index projections, fields of a `Drop` type) | covered | no_move_out_of_a_borrowed_parameter, no_move_out_of_a_ref_place, no_move_out_of_an_index_projection, no_move_out_of_a_shared_field, no_move_out_of_a_field_of_a_drop_type (new, drop schedule, interp/build/ASan) |
+| 4818 | The fixes are `.clone()`, `mem.take`, `mem.replace`, `mem.swap` and `Option.take()` | covered | moving_out_of_a_borrowed_place_with_the_fixes (new, drop schedule, interp/build/ASan) |
+| 4819 | References are decided by signatures, and views cannot escape their origins | covered | a_view_may_not_escape_its_origin (E0509) (new, drop schedule, interp/build/ASan) |
 | 4820 | The compiler never turns an owned value into a shared or atomically counted one | covered | plain_struct_moved_then_used_refused, shared_graph_without_freeze_in_par_refused |
-| 4821 | Values are destroyed at scope end in reverse declaration order; temporaries at the end of their statement | → drop schedule | |
-| 4822 | A panic ends the process without running drops | → drop schedule | |
+| 4821 | Values are destroyed at scope end in reverse declaration order; temporaries at the end of their statement | covered | values_drop_in_reverse_declaration_order_temporaries_at_the_statement_end (new, drop schedule, interp/build/ASan) |
+| 4822 | A panic ends the process without running drops | covered | a_panic_ends_the_process_without_running_drops (new, drop schedule, interp/build/ASan) |
 | 4826 | Each step of the escalation path is written in the source, never a compiler decision | covered | shared_graph_without_freeze_in_par_refused (no implicit freeze), not_cross_task_sync_form_is_not_a_machine_fix (no implicit sync) |
 
 ## Shared types
@@ -33,30 +33,30 @@ Run with `python3 conformance/cases.py conformance/design/ownership` and, for th
 | 4859 | Using a regular struct as a value moves it | covered | plain_struct_moved_then_used_refused |
 | 4859 | Using a shared value (assign, store, pass to `own`) increments the count; the source stays usable | covered | shared_handle_passed_to_own_stays_usable |
 | 4860 | A shared type is mutated through `mut` fields, through any handle | covered | shared_mut_field_written_through_any_handle |
-| 4861 | A shared object is destroyed when the last handle is released | → drop schedule | |
-| 4862 | A cycle of strong handles leaks unless a back-edge is `weak` | → drop schedule | |
-| 4865 | Each binding, field or temporary holding a handle releases it when dropped; Drop body and fields run at zero | → drop schedule | |
-| 4866 | A handle aggregate counts the same way, so `cur = node.next` walks a list without `.clone()` | → drop schedule | |
-| 4867 | Any other type containing a handle (`Vec[Node]`, a user struct) is move-only; `.clone()` increments | → drop schedule | |
+| 4861 | A shared object is destroyed when the last handle is released | covered | a_shared_object_is_destroyed_when_its_last_handle_is_released (new, drop schedule, interp/build/ASan) |
+| 4862 | A cycle of strong handles leaks unless a back-edge is `weak` | covered | a_cycle_of_strong_handles_is_never_freed (LSan reports it; `detect_leaks=0` via `.env`), a_weak_back_edge_lets_the_pair_be_freed (clean under LSan) (new, drop schedule, interp/build/ASan) |
+| 4865 | Each binding, field or temporary holding a handle releases it when dropped; Drop body and fields run at zero | covered | a_shared_object_is_destroyed_when_its_last_handle_is_released (new, drop schedule, interp/build/ASan) |
+| 4866 | A handle aggregate counts the same way, so `cur = node.next` walks a list without `.clone()` | covered | a_handle_aggregate_counts_so_a_list_walks_without_clone (new, drop schedule, interp/build/ASan) |
+| 4867 | Any other type containing a handle (`Vec[Node]`, a user struct) is move-only; `.clone()` increments | covered | a_vec_of_handles_is_move_only, a_user_struct_holding_a_handle_is_move_only (new, drop schedule, interp/build/ASan) |
 | 4869 | A shared type's fields are fixed at construction unless declared `mut`; assigning a non-`mut` field is an error | covered | shared_non_mut_field_assignment_refused |
 | 4869 | A `mut` field can be written through any handle, including through a `ref` or a borrowed parameter | covered | shared_mut_field_written_through_any_handle |
-| 4872 | A `Copy` or handle-aggregate `mut` field is read as a value and holds no borrow, including as a scrutinee | → drop schedule | |
-| 4888 | Any other `mut` field is borrowed: `ref` reads, `mut ref` and `mut ref self` calls write, `match` / `for` read for the construct | → drop schedule | |
-| 4889 | A conflict through the same handle is a compile error (the `requeue` example), and the clone-first fix compiles | → drop schedule | |
-| 4914 | Each `mut` field neither `Copy` nor a handle aggregate carries a borrow flag; a conflict through another handle panics | → drop schedule | |
-| 4924 | The panic message names the field and the source spans of both accesses | → drop schedule | tests/design_11_conformance_2026_11_22.rs (d11_the_flag_panic_names_where_a_ref_holder_was_made, the 11-22 pass) |
+| 4872 | A `Copy` or handle-aggregate `mut` field is read as a value and holds no borrow, including as a scrutinee | covered | a_handle_aggregate_mut_field_is_read_as_a_value_peek_then_mutate (new, drop schedule, interp/build/ASan) |
+| 4888 | Any other `mut` field is borrowed: `ref` reads, `mut ref` and `mut ref self` calls write, `match` / `for` read for the construct | covered | a_ref_into_a_mut_field_conflicts_with_a_write_through_the_same_handle, a_loop_over_a_mut_field_borrows_it_so_a_push_through_the_same_handle_is_refused (new, drop schedule, interp/build/ASan) |
+| 4889 | A conflict through the same handle is a compile error (the `requeue` example), and the clone-first fix compiles | covered | a_loop_over_a_mut_field_borrows_it_so_a_push_through_the_same_handle_is_refused, cloning_the_field_first_ends_the_borrow (new, drop schedule, interp/build/ASan) |
+| 4914 | Each `mut` field neither `Copy` nor a handle aggregate carries a borrow flag; a conflict through another handle panics | covered | a_conflict_through_another_handle_panics_naming_the_field (new, drop schedule, interp/build/ASan) |
+| 4924 | The panic message names the field and the source spans of both accesses | covered | a_conflict_through_another_handle_panics_naming_the_field (new, drop schedule, interp/build/ASan); also tests/design_11_conformance_2026_11_22.rs (d11_the_flag_panic_names_where_a_ref_holder_was_made, the 11-22 pass) |
 | 4924 | A flag costs one byte per field before padding; `Copy`, handle-aggregate and immutable fields have none | covered | explain_reports_a_shared_types_borrow_flags |
 | 4924 | `karac explain` reports the total for each type | covered | explain_reports_a_shared_types_borrow_flags |
 | 4926 | Methods take a borrowed `self` only: `mut ref self` is an error | covered | shared_method_mut_ref_self_refused |
 | 4926 | A consuming `own self` is an error | covered | shared_method_own_self_refused |
 | 4926 | A method changes the object through its `mut` fields | covered | shared_mut_field_written_through_any_handle |
-| 4928 | A `shared` scrutinee counts as a `ref` scrutinee; binding a part borrows it; moving it is an error fixed by `.clone()`; a whole-handle binding copies the handle | → drop schedule | |
+| 4928 | A `shared` scrutinee counts as a `ref` scrutinee; binding a part borrows it; moving it is an error fixed by `.clone()`; a whole-handle binding copies the handle | covered | binding_a_part_of_a_shared_scrutinee_borrows_it_moving_the_binding_is_refused, a_shared_scrutinee_part_clones_and_a_whole_handle_binding_copies (new, drop schedule, interp/build/ASan) |
 | 4930 | A `shared` type has no default `==` | covered | shared_type_has_no_default_equality_refused |
 | 4930 | `#[derive(PartialEq, Eq)]` gives structural equality | covered | shared_derive_eq_is_structural_and_ref_eq_is_identity |
 | 4930 | `a.ref_eq(b)` compares identity, on every `shared`, `sync` and `frozen` handle type, with no bound | covered, FAILED at the audit | ref_eq_needs_no_bound_on_shared_sync_and_frozen (new): `a.ref_eq(b)` on two `frozen` handles was refused as an escape (E0511); fixed, B-2026-11-24-50 |
 | 4932 | `Identity[T]` keys a `Map` or `Set` by handle identity | covered | identity_keys_a_map_by_handle |
 | 4932 | `Identity.of(h)` (or `h.identity()`) copies the handle | covered | identity_keys_a_map_by_handle |
-| 4932 | The count rises, so the object cannot be freed while the key exists | → drop schedule | |
+| 4932 | The count rises, so the object cannot be freed while the key exists | covered | an_identity_key_keeps_the_object_alive (new, drop schedule, interp/build/ASan) |
 | 4932 | `Identity[T]` is `Hash + Eq + Clone`, never `Ord` | covered | identity_keys_a_map_by_handle, identity_is_never_ord_refused, identity_is_not_a_sorted_set_element_refused |
 | 4932 | Two keys are equal exactly when `.ref_eq` holds | covered | identity_keys_a_map_by_handle |
 | 4932 | Iteration order is the per-process hash order | covered | (the `Map` rule; conformance/collections) |
@@ -74,7 +74,7 @@ Run with `python3 conformance/cases.py conformance/design/ownership` and, for th
 
 | Line | Sentence | Status | Cells |
 |---|---|---|---|
-| 4948 | A cycle of strong handles is never freed; there is no cycle collector | → drop schedule | |
+| 4948 | A cycle of strong handles is never freed; there is no cycle collector | covered | a_cycle_of_strong_handles_is_never_freed, a_weak_back_edge_lets_the_pair_be_freed (new, drop schedule, interp/build/ASan) |
 | 4948 | Reading a `weak` field yields `Option[T]` | covered | weak_field_reads_as_option_and_stores_a_strong_handle |
 | 4960 | A strong handle is stored as it is (`c.parent = p`) and downgrades | covered | weak_field_reads_as_option_and_stores_a_strong_handle |
 | 4960 | `None` stores an empty weak (`Kid { parent: None }`) | covered | weak_field_reads_as_option_and_stores_a_strong_handle |
@@ -83,7 +83,7 @@ Run with `python3 conformance/cases.py conformance/design/ownership` and, for th
 | 4976 | A self-reference with no way to end is an error | covered | self_reference_with_no_end_refused |
 | 4976 | A self-reference through a type with no empty case (`(Node, i64)`) is an error | covered | self_reference_through_a_tuple_refused |
 | 4976 | A self-reference through `Option`, `Vec`, `Map` or `Set` is accepted | covered | self_reference_through_an_empty_case_is_accepted |
-| 4976 | Built without a cycle they free normally | → drop schedule | |
+| 4976 | Built without a cycle they free normally | covered | a_handle_aggregate_counts_so_a_list_walks_without_clone (new, drop schedule: an acyclic `Option[Node]` list, leak-checked on the ASan lane), with a_weak_back_edge_lets_the_pair_be_freed for the cyclic shape |
 | 4976 | The compiler does not infer `weak` | not testable | (an absence) |
 | 4979 | Strong to weak is implicit when assigning or passing | covered | weak_field_reads_as_option_and_stores_a_strong_handle, weak_accepts_a_strong_handle_passed_to_a_weak_parameter |
 | 4980 | A read checks liveness: `Some(handle)` (counted) or `None` | covered | weak_read_is_none_once_the_object_is_gone |
@@ -169,7 +169,7 @@ Run with `python3 conformance/cases.py conformance/design/ownership` and, for th
 | Line | Sentence | Status | Cells |
 |---|---|---|---|
 | 5158 | An operation on a value in the wrong state is rejected | covered | typestate_operation_in_the_wrong_state_refused, typestate_protocol_runs_in_order |
-| 5178 | Once `connect` consumes the old value, using it is E0500 | → drop schedule | |
+| 5178 | Once `connect` consumes the old value, using it is E0500 | covered | a_consumed_typestate_value_used_again_is_e0500 (new, drop schedule, interp/build/ASan) |
 
 ## `#[must_use]`
 
@@ -180,7 +180,7 @@ Run with `python3 conformance/cases.py conformance/design/ownership` and, for th
 | 5199 | On a type, it applies wherever a value would be dropped without being bound or used | covered | must_use_type_warns_with_its_reason, must_use_without_a_reason_uses_a_default |
 | 5200 | The warning text is the string argument; without one, a default message | covered | must_use_type_warns_with_its_reason, must_use_without_a_reason_uses_a_default |
 | 5201 | On a function, it warns when the return value is discarded | covered | must_use_on_a_function_warns_on_a_discarded_return |
-| 5202 | `let _ = expr;` drops the value at the `;` | → drop schedule | |
+| 5202 | `let _ = expr;` drops the value at the `;` | covered | let_underscore_drops_the_value_at_the_semicolon (new, drop schedule, interp/build/ASan) |
 | 5205 | 1. `Result` and `Option` are must-use by a compiler rule, in user code too | covered | must_use_result_and_option_in_user_code |
 | 5206 | 2. Every iterator adapter | covered | must_use_iterator_adapter_guard_builder_and_pure_transforms (`map`; tests/ cover the rest) |
 | 5207 | 3. Every guard type, with a message naming the resource | covered | must_use_iterator_adapter_guard_builder_and_pure_transforms |
