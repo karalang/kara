@@ -63,6 +63,13 @@ fn cmd_run_v2(
         std::env::set_var(crate::mir::interp::PANIC_RECORD_ENV, "1");
     }
     let manifest = run_manifest_preamble(filename, output, manifest_override, no_manifest);
+    // The runtime debug metadata: the dev profile's `runtime_debug_metadata`
+    // key, else on, as `karac build` reads it; the JIT's code generation and
+    // the interpreter both answer from this (design.md § Debugger contract,
+    // B-2026-11-25-24).
+    if manifest.as_ref().and_then(|m| m.dev_runtime_debug_metadata) == Some(false) {
+        std::env::set_var("KARAC_STRIP_DEBUG_METADATA", "1");
+    }
     // The `[link]` table: the interpreter `dlopen`s its libraries and the
     // JIT runner is handed them, as `karac build` links them; a package that
     // binds a C library otherwise ran only once built (B-2026-11-22-55).

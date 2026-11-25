@@ -204,6 +204,9 @@ pub unsafe extern "C" fn karac_mir_flag_conflict(addr: *const u8, head: *const u
     }
     msg.extend_from_slice(" (core semantics §6.2)".as_bytes());
     crate::mir::set_panic_bytes(msg.as_slice());
+    // The panic record's kind: `borrow_conflict` (design.md § Panic record,
+    // B-2026-11-25-25).
+    crate::mir::karac_mir_panic_kind(5);
 }
 
 /// `karac_mir_flag_acquire` for the coroutine frame at `frame`, at its

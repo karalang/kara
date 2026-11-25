@@ -188,3 +188,56 @@ fn mir_debug_metadata_follows_the_manifest_profiles() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `karac run`, on the JIT and under `--interp`, answers what the dev
+/// profile says, as `karac build` does: off when kara.toml turns it off, on
+/// by default (B-2026-11-25-24).
+#[test]
+fn mir_debug_metadata_follows_the_dev_profile_under_run_and_interp() {
+    for (toml, want) in [
+        ("[profile.dev]\nruntime_debug_metadata = false\n", "false\n"),
+        ("", "true\n"),
+    ] {
+        let dir = scratch(if toml.is_empty() { "run_on" } else { "run_off" });
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("kara.toml"),
+            format!("[package]\nname = \"dm\"\nversion = \"0.1.0\"\n\n{toml}"),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("src/main.kara"),
+            "import std.runtime;\n\nfn main() {\n    println(runtime.has_debug_metadata());\n}\n",
+        )
+        .unwrap();
+        for interp in [false, true] {
+            let mut args = vec!["run"];
+            if interp {
+                args.push("--interp");
+            }
+            let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+                .current_dir(&dir)
+                .env_remove("KARAC_STRIP_DEBUG_METADATA")
+                .args(&args)
+                .output()
+                .unwrap();
+            let why = String::from_utf8_lossy(&out.stderr).to_string();
+            if !interp
+                && common::link_or_skip(if out.status.success() {
+                    Ok(())
+                } else {
+                    Err(why.clone())
+                })
+                .is_none()
+            {
+                continue;
+            }
+            assert_eq!(
+                String::from_utf8_lossy(&out.stdout),
+                want,
+                "interp {interp} profile {toml:?}: {why}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

@@ -3280,12 +3280,18 @@ impl<'a> Interp<'a> {
                 Ok(Value::Unit)
             }
             // design.md §17's introspection: the interpreter has no
-            // scheduler to list and no debug metadata, as in legacy
-            // (B-2026-10-22-38).
+            // scheduler to list (B-2026-10-22-38).
             ("Runtime", "list_tasks" | "list_par_blocks") => {
                 Ok(self.alloc_box("Vec", Value::Agg(vec![])))
             }
-            ("Runtime", "has_debug_metadata") => Ok(Value::Bool(false)),
+            // What the profile says, as a compiled build answers: `karac
+            // run` and `karac build` set the strip variable from kara.toml
+            // (design.md § Debugger contract, B-2026-11-25-24). The lists
+            // above stay empty either way.
+            ("Runtime", "has_debug_metadata") => Ok(Value::Bool(!matches!(
+                std::env::var("KARAC_STRIP_DEBUG_METADATA").as_deref(),
+                Ok("1" | "true")
+            ))),
             ("println" | "print" | "eprintln" | "eprint", "") => {
                 // The arguments print one after another (an f-string's
                 // parts); a reference prints what it points to.
@@ -16414,6 +16420,9 @@ impl<'a> Interp<'a> {
             }
             msg.push_str(" (core semantics §6.2)");
             self.panic_message = Some(msg);
+            // The panic record's kind (design.md § Panic record,
+            // B-2026-11-25-25).
+            self.panic_kind = Some(crate::mir::syntax::panic_kind_code("borrow_conflict"));
             if self.trace {
                 self.events.push(Event::Abort(AbortReason::Panic));
             }

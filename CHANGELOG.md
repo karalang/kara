@@ -1088,6 +1088,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- `karac run` and `karac run --interp` now answer `has_debug_metadata()`
+  from the package's `[profile.dev] runtime_debug_metadata`, on by default,
+  as `karac build` does. `karac run` used to answer true whatever the
+  profile said, and the interpreter always answered false
+  (B-2026-11-25-24).
+- A conflicting access to a `shared` field through another handle is now
+  recorded in the panic record with kind `borrow_conflict`, not
+  `explicit`, on compiled programs and the interpreter (B-2026-11-25-25).
 - `a.ref_eq(b)` on two `frozen` handles was refused as an escape; it is
   the compiler's identity test, which keeps neither handle, and is
   accepted (B-2026-11-24-50). The refusal of a struct literal of another

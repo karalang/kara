@@ -5,13 +5,13 @@ Status: covered, partial, FAILS (routed, the owner named), not testable, not dra
 - `c17:`, `c17b:`, `c17c:` name a check (its printed name) in `probes/cases17.py`, `probes/cases17b.py` and `probes/cases17c.py`, run by `tests/tooling_sentence_probes_2026_11_24.rs` on the `--features llvm` leg (`K=<karac> python3 probes/<file>` by hand). `cases17` and `cases17b` are the 2026-11-21 design-14-17 pass, moved here from the shared folder; `cases17c` is this audit's.
 - A bare `tests/<file>` or `lsp/tests/<file>` is a Rust test file; `repl/` is `conformance/repl/`.
 
-**Totals (2026-11-25):** 174 table rows (normative sentences), plus the REPL subsection's 14, pinned in `conformance/repl/`. Of the 174: 162 covered, 0 partial, 2 FAILS (B-2026-11-25-24, B-2026-11-25-25), 10 not testable (client obligations, scope and stability statements, and `#[cfg]` conditions, since `#[cfg]` is not in 0.8). The probes: `cases17` 120/120, `cases17b` 20/20, `cases17c` 119/121 (its two failures are the FAILS rows, allowlisted by name in the harness). `cases17c` and the LSP pins in `lsp/tests/protocol_contract_2026_11_24.rs` and `lsp/src/analysis.rs` are new.
+**Totals (2026-11-25):** 174 table rows (normative sentences), plus the REPL subsection's 14, pinned in `conformance/repl/`. Of the 174: 164 covered, 0 partial, 0 FAILS, 10 not testable (client obligations, scope and stability statements, and `#[cfg]` conditions, since `#[cfg]` is not in 0.8). The probes: `cases17` 120/120, `cases17b` 20/20, `cases17c` 121/121 (the two that failed, B-2026-11-25-24 and -25, pass since their fixes). `cases17c` and the LSP pins in `lsp/tests/protocol_contract_2026_11_24.rs` and `lsp/src/analysis.rs` are new.
 
 **Drift found.**
 - FIXED: design.md said the language server's text sync is full-document. Since B-2026-11-21-33 it advertises incremental sync (range edits), which `lsp/tests/server.rs` pins. The row now says so.
 - DOC CHANGED (review ruling 2026-11-25): a bare `panic()` records `"explicit panic"`; design.md line 7576 said `"<no message>"`, which is now only the renderer's fallback for a record without one.
-- FAILS, B-2026-11-25-24 (run-vs-build): `karac run` ignores `[profile.dev] runtime_debug_metadata = false`, and `--interp` always answers `false`, while `karac build` honors the key.
-- FAILS, B-2026-11-25-25: a `shared` field's borrow conflict records kind `explicit`, not `borrow_conflict`.
+- Fixed, B-2026-11-25-24 (run-vs-build): `karac run` ignored `[profile.dev] runtime_debug_metadata = false`, and `--interp` always answered `false`; both now answer what the profile says, as `karac build` does.
+- Fixed, B-2026-11-25-25: a `shared` field's borrow conflict recorded kind `explicit`; it records `borrow_conflict`.
 - DOC CHANGED (review rulings 2026-11-25): the debugger contract's root reference is `parent_task_id: u64` with `0` for no parent (it said a sentinel tagged `"root"`); `#[cfg]` is marked not in 0.8 in the attribute table and §4, with a deferred.md entry.
 
 ## Structured compiler output (7211–7263)
@@ -170,7 +170,7 @@ Every sentence is pinned by a cell in `conformance/repl/` (its README maps them)
 |---|---|---|---|
 | 7550 | Building debugger tools is out of scope; the contract and metadata are the deliverable | not testable | scope |
 | 7557 | Metadata on by default in `[profile.dev]`, off in `[profile.release]` | covered | c17c: debug metadata on in dev; release: no debug metadata |
-| 7557 | Set by `runtime_debug_metadata` in either profile | FAILS (B-2026-11-25-24) | `karac build` honors it (tests/mir_debug_metadata.rs mir_debug_metadata_follows_the_manifest_profiles); `karac run` does not (c17c: [profile.dev] runtime_debug_metadata = false turns it off) |
+| 7557 | Set by `runtime_debug_metadata` in either profile | covered | `karac build` (tests/mir_debug_metadata.rs mir_debug_metadata_follows_the_manifest_profiles); `karac run` and `--interp` (mir_debug_metadata_follows_the_dev_profile_under_run_and_interp; c17c: [profile.dev] runtime_debug_metadata = false turns it off) |
 | 7559 | A `SpawnSiteId` per `par {}` block, stable across runs | covered | tests/mir_debug_metadata.rs mir_debug_metadata_lists_running_par_blocks |
 | 7560 | A parent-frame reference per worker: `parent_task_id: u64`, ids from 1, `0` only for the root | covered | tests/mir_debug_metadata.rs (parent ids in the rows); the runtime's counters start at 1 (runtime/src/mir_task.rs `ids`, runtime/src/dbg.rs `TASK_ID_COUNTER`). Doc changed by review ruling 2026-11-25 |
 | 7561 | An await-chain `WaitTarget` per suspended task | covered | tests/mir_debug_metadata.rs mir_debug_metadata_lists_suspended_tasks |
@@ -183,7 +183,7 @@ Every sentence is pinned by a cell in `conformance/repl/` (its README maps them)
 | Line | Sentence | Status | Cells |
 |---|---|---|---|
 | 7575 | Kind is one of the ten | covered | c17c: panic record kind explicit, index_out_of_bounds, overflow, div_by_zero, unwrap, assertion, unreachable; tests/mir_tasks.rs (deadlock); tests/isolating_alloc_failure.rs (alloc_failure) |
-| 7575 | `borrow_conflict` | FAILS (B-2026-11-25-25) | c17c: panic record kind borrow_conflict (the conflict records `explicit`) |
+| 7575 | `borrow_conflict` | covered | c17c: panic record kind borrow_conflict; tests/borrow_conflict_panic_record_kind.rs on the JIT and the interpreter |
 | 7576 | The message; a bare `panic()` records `"explicit panic"`; `<no message>` is the renderer's fallback | covered | c17c: a bare panic() records the message "explicit panic"; src/crash_report.rs (fallback) |
 | 7577 | Location `file:line:col`; inside a `#[track_caller]` library function, the caller's | covered | c17c: panic record <kind>: location file/line/col; track_caller: unwrap's location is the caller's line; tests/compiled_panic_places.rs |
 | 7578 | The error-return trace, in debug builds; none without `?` | covered | c17b: run --output=json: error_return_trace in the record; tests/tooling_conformance.rs |

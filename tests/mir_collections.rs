@@ -1019,9 +1019,8 @@ fn lazy_lock_is_clean_under_asan() {
 
 /// The runtime's introspection is empty outside any `par` block or task
 /// and `Vec.filled` with a negative count is empty, on both backends
-/// (B-2026-10-22-38). `has_debug_metadata()` is left out: a compiled dev
-/// build has the metadata and the interpreter does not
-/// (`tests/mir_debug_metadata.rs`, B-2026-11-05-34).
+/// (B-2026-10-22-38). `has_debug_metadata()` follows the profile on every
+/// executor (`tests/mir_debug_metadata.rs`, B-2026-11-25-24).
 #[test]
 fn runtime_introspection_and_negative_fills_agree_on_both_backends() {
     agrees(

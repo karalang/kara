@@ -1175,7 +1175,8 @@ fn main() {
 }
 
 /// The runtime's introspection (design.md §17) on the interpreter: no
-/// scheduler to list and no debug metadata (B-2026-10-22-38).
+/// scheduler to list (B-2026-10-22-38), and the debug metadata a dev
+/// profile turns on by default (B-2026-11-25-24).
 #[test]
 fn runtime_introspection_is_empty_on_the_interpreter() {
     assert_runs(
@@ -1186,7 +1187,7 @@ fn main() {
     println(Runtime.has_debug_metadata());
 }
 "#,
-        "0\n0\nfalse\n",
+        "0\n0\ntrue\n",
     );
 }
 
