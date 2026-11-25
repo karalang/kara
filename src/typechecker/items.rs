@@ -13424,6 +13424,13 @@ impl<'a> super::TypeChecker<'a> {
                         pattern.span.offset + pattern.span.length,
                     );
                 }
+                if matches!(pattern.kind, PatternKind::Binding(_)) {
+                    self.let_binding_ends.insert(
+                        SpanKey::from_span(&pattern.span),
+                        ty.is_none()
+                            .then_some(pattern.span.offset + pattern.span.length),
+                    );
+                }
                 if ty.is_none()
                     && !*is_mut
                     && matches!(value.kind, ExprKind::Tuple(_))
@@ -14875,6 +14882,73 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// B-2026-11-25-22 (kata 1372): `at = n` with `at` a `ref` local
+    /// and `n` a shared handle that is not a borrow in the MIR. A binding
+    /// over a borrowed scrutinee (`let Some(n) = at.next else { .. }`)
+    /// is let through as a borrow above (B-2026-10-19-13), but a shared
+    /// handle read out of a field is counted (core semantics §6.1), and
+    /// so is a `let` that took one by value. Neither fits a `ref` slot, and
+    /// every lane stopped with "invalid MIR: assigning shared Node to _ of
+    /// type ref shared Node". A bare parameter and a view of a `for` item
+    /// are borrows in the MIR and stay allowed. The fix declares `at` as
+    /// the handle, which counts it instead of borrowing it.
+    fn reject_shared_handle_into_ref_local(
+        &mut self,
+        target: &Expr,
+        name: &str,
+        inner: &Type,
+        value: &Expr,
+        src: &str,
+    ) {
+        let decl_of = |e: &Expr| {
+            self.resolve_result
+                .resolutions
+                .get(&SpanKey::from_span(&e.span))
+                .map(|id| self.resolve_result.symbol_table.get_symbol(*id).span)
+        };
+        let Some(src_decl) = decl_of(value) else {
+            return;
+        };
+        // Only where the MIR counts the handle: a binding over a borrowed
+        // or shared scrutinee, or a `let` that took the handle by value. A
+        // parameter and a view of a `for` item are borrows there.
+        let key = SpanKey::from_span(&src_decl);
+        let counted = self.pattern_view_bindings.contains(&key)
+            || (self.let_binding_ends.contains_key(&key)
+                && !self.local_scope.is_view(src)
+                && !self.view_let_bindings.contains(&key));
+        if !counted {
+            return;
+        }
+        let shown = type_display(inner);
+        let message = format!(
+            "`{name}` is a `ref {shown}` (it was bound to a borrow), so it cannot take \
+             `{src}`, a counted `{shown}` handle (core semantics §6.1); declare `{name}` \
+             as a `{shown}` where it is bound, which counts the handle instead of \
+             borrowing it"
+        );
+        let end = decl_of(target)
+            .and_then(|decl| self.let_binding_ends.get(&SpanKey::from_span(&decl)))
+            .copied()
+            .flatten();
+        match end {
+            Some(end) => self.type_error_with_fix_it(
+                message,
+                value.span,
+                TypeErrorKind::TypeMismatch,
+                super::FixIt {
+                    span: Span {
+                        offset: end,
+                        length: 0,
+                        ..value.span
+                    },
+                    replacement: format!(": {shown}"),
+                },
+            ),
+            None => self.type_error(message, value.span, TypeErrorKind::TypeMismatch),
+        }
+    }
+
     fn reject_owned_value_into_ref_local(&mut self, target: &Expr, value: &Expr, rhs_ty: &Type) {
         if !(self.cli_lint_overrides.strict_core || self.library_methods_from_source) {
             return;
@@ -14963,6 +15037,9 @@ impl<'a> super::TypeChecker<'a> {
                 .map(|id| self.resolve_result.symbol_table.get_symbol(*id).span)
                 .is_some_and(|decl| self.owned_let_bindings.contains(&SpanKey::from_span(&decl)));
             if !owned {
+                if !of_item && self.is_shared_handle(rhs_ty) {
+                    self.reject_shared_handle_into_ref_local(target, name, &inner, value, src);
+                }
                 return;
             }
             // Kata 2243: `let mut s = s; .. s = next;` with `s` a bare

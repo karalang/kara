@@ -1639,6 +1639,14 @@ impl<'a> super::TypeChecker<'a> {
                             .contains(&SpanKey::from_span(&pattern.span)))
                 {
                     self.local_scope.mark_view(name);
+                    if !self
+                        .program
+                        .ref_binding_spans
+                        .contains(&SpanKey::from_span(&pattern.span))
+                    {
+                        self.pattern_view_bindings
+                            .insert(SpanKey::from_span(&pattern.span));
+                    }
                     // §4.6: over an owned local's element the binding is a
                     // `ref` too; a write through it needs `mut ref`
                     // (B-2026-11-18-47).

@@ -4722,6 +4722,14 @@ pub struct TypeChecker<'a> {
     /// a `Vec`, so `karac fix` writes the type on the `let` instead
     /// (`prefix_let_fixes`, B-2026-11-17-112).
     pub(super) prefix_let_sites: FxHashMap<SpanKey, usize>,
+    /// A `let` binding, by its pattern's span: where the pattern ends when
+    /// the `let` has no annotation, so a fix can write the binding's type
+    /// there (B-2026-11-25-22).
+    pub(super) let_binding_ends: FxHashMap<SpanKey, Option<usize>>,
+    /// A pattern binding over a borrowed or shared scrutinee that the
+    /// strict check reads as a view (core semantics §4.6), by its span. A
+    /// shared handle bound so is counted in the MIR (B-2026-11-25-22).
+    pub(super) pattern_view_bindings: FxHashSet<SpanKey>,
     /// `let x = <library iterator>` with no annotation, by name: where
     /// `karac fix` writes `: Vec[T]` and `.collect()` when `x` is used as a
     /// `Vec` (B-2026-10-12-7).
@@ -5375,6 +5383,8 @@ impl<'a> TypeChecker<'a> {
             pruned_library_methods: std::collections::HashMap::new(),
             option_recv_spans: FxHashSet::default(),
             prefix_let_sites: FxHashMap::default(),
+            let_binding_ends: FxHashMap::default(),
+            pattern_view_bindings: FxHashSet::default(),
             iter_lets: FxHashMap::default(),
             untyped_let_names: FxHashMap::default(),
             collect_items: FxHashMap::default(),
