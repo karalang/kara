@@ -1044,10 +1044,15 @@ impl super::Parser {
     /// fields, ignore the rest". A `..` followed by another field
     /// emits `E_REST_PATTERN_NOT_LAST`.
     fn parse_struct_pattern_fields(&mut self) -> Option<(Vec<FieldPattern>, bool)> {
-        let mut fields = Vec::new();
+        let mut fields: Vec<FieldPattern> = Vec::new();
         let mut has_rest = false;
+        let mut rests = 0usize;
+        // A `..` with fields after it: the diagnostic's span and the
+        // `.., ` text to take out, for the fix that moves it last.
+        let mut misplaced: Option<(crate::token::Span, usize, usize)> = None;
         while !self.check(&Token::RightBrace) && !self.is_at_end() {
             if self.check(&Token::DotDot) {
+                rests += 1;
                 let dotdot_span = self.current_span();
                 self.advance();
                 if has_rest {
@@ -1064,6 +1069,7 @@ impl super::Parser {
                 // Optional trailing comma is fine; another field after
                 // the `..` is not.
                 if self.eat(&Token::Comma) && !self.check(&Token::RightBrace) {
+                    let at = self.current_span();
                     self.errors.push(super::ParseError {
                         kind: crate::parser::ParseErrorKind::Syntax,
                         message: "error[E_REST_PATTERN_NOT_LAST]: \
@@ -1072,8 +1078,9 @@ impl super::Parser {
                                   every named field, or drop the named fields \
                                   that follow it"
                             .to_string(),
-                        span: self.current_span(),
+                        span: at,
                     });
+                    misplaced.get_or_insert((at, dotdot_span.offset, at.offset));
                     // Continue parsing to surface follow-on errors
                     // rather than bailing immediately.
                 }
@@ -1119,6 +1126,33 @@ impl super::Parser {
             });
             if !self.eat(&Token::Comma) {
                 break;
+            }
+        }
+        // The fix moves the one `..` after the last field: the edit the
+        // message names, and the pattern means the same.
+        if let (Some((at, from, to)), Some(last), 1, true) = (
+            misplaced,
+            fields.last(),
+            rests,
+            self.check(&Token::RightBrace),
+        ) {
+            let end = last.span.offset + last.span.length;
+            if end > to {
+                self.fix_diffs.insert(
+                    crate::resolver::SpanKey::from_span(&at),
+                    vec![
+                        crate::resolver::TextEdit {
+                            offset: from,
+                            length: to - from,
+                            replacement: String::new(),
+                        },
+                        crate::resolver::TextEdit {
+                            offset: end,
+                            length: 0,
+                            replacement: ", ..".to_string(),
+                        },
+                    ],
+                );
             }
         }
         Some((fields, has_rest))

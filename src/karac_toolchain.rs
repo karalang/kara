@@ -82,7 +82,8 @@ impl std::fmt::Display for ToolchainError {
             }
             Self::MissingVersion { path } => write!(
                 f,
-                "`{}` is missing the required `version` key",
+                "`{}` is missing the required `version` key; add a line such as \
+                 `version = \"0.8\"`, the toolchain versions this project accepts",
                 path.display()
             ),
             Self::InvalidVersionType { path } => write!(
@@ -92,7 +93,8 @@ impl std::fmt::Display for ToolchainError {
             ),
             Self::InvalidVersionConstraint { path, value } => write!(
                 f,
-                "`{}`: `version = \"{}\"` is not a valid semver constraint",
+                "`{}`: `version = \"{}\"` is not a valid semver constraint; write one \
+                 such as \"0.8\", \"~0.8.1\" or \">=0.8, <1.0\"",
                 path.display(),
                 value
             ),

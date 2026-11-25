@@ -255,16 +255,30 @@ impl<'a> super::TypeChecker<'a> {
             }
             // B-2026-11-16-257: MIR never read a layout block, so a program
             // that has one runs exactly as it does without it.
-            Item::LayoutDef(l) => (
-                format!(
+            Item::LayoutDef(l) => {
+                let message = format!(
                     "`layout {}` is not available: layout blocks are deferred \
                      (deferred.md § Layout) and not in 0.8; remove the block, which \
                      does not change what the program does",
                     l.name
-                ),
-                l.span,
-                TypeErrorKind::DeferredLayoutBlock,
-            ),
+                );
+                // The fix deletes the block, the edit the message names. Its
+                // span starts at `layout`, so a block with a `pub`, an
+                // attribute or a doc comment in front keeps the message alone.
+                if !l.is_pub && l.attributes.is_empty() && l.doc_comment.is_none() {
+                    self.type_error_with_fix_it(
+                        message,
+                        l.span,
+                        TypeErrorKind::DeferredLayoutBlock,
+                        FixIt {
+                            span: l.span,
+                            replacement: String::new(),
+                        },
+                    );
+                    return;
+                }
+                (message, l.span, TypeErrorKind::DeferredLayoutBlock)
+            }
             _ => return,
         };
         self.type_error(message, span, kind);

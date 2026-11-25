@@ -124,7 +124,8 @@ impl std::fmt::Display for InstallSpecError {
             ),
             InstallSpecError::InvalidVersion { raw, message } => write!(
                 f,
-                "version constraint `{raw}` is not a valid semver requirement: {message}"
+                "version constraint `{raw}` is not a valid semver requirement: {message}; \
+                 write one such as `<name>@1.0`, `<name>@~1.2` or `<name>@=1.2.3`"
             ),
             InstallSpecError::InvalidPackageName { name, suggestion } => match suggestion {
                 Some(s) => write!(

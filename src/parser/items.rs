@@ -3098,6 +3098,7 @@ impl super::Parser {
             }
         }
         if self.at_kw("where") {
+            let at = self.current_span();
             self.error(
                 "error[E_UNION_WHERE_FORBIDDEN]: where-clauses are not allowed \
                  on union declarations; FFI unions are non-generic so there \
@@ -3106,6 +3107,18 @@ impl super::Parser {
             self.advance();
             while !self.check(&Token::LeftBrace) && !self.is_at_end() {
                 self.advance();
+            }
+            // The fix deletes the clause, through to the `{`: it bounds
+            // nothing, so the union means the same without it.
+            if self.check(&Token::LeftBrace) {
+                self.fix_edits.insert(
+                    crate::resolver::SpanKey::from_span(&at),
+                    crate::resolver::TextEdit {
+                        offset: at.offset,
+                        length: self.current_span().offset - at.offset,
+                        replacement: String::new(),
+                    },
+                );
             }
         }
 
@@ -3151,12 +3164,23 @@ impl super::Parser {
             // is not a meaningful annotation. Assignment to a union
             // field is unconditionally safe regardless.
             if self.check(&Token::Mut) {
+                let at = self.current_span();
                 self.error(
                     "error[E_UNION_FIELD_MUT_FORBIDDEN]: `mut` is not allowed \
                      on union fields; all union fields share storage and \
                      writes are unconditionally permitted",
                 );
                 self.advance();
+                // The fix deletes `mut` and the space after it: every field
+                // is writable already.
+                self.fix_edits.insert(
+                    crate::resolver::SpanKey::from_span(&at),
+                    crate::resolver::TextEdit {
+                        offset: at.offset,
+                        length: self.current_span().offset - at.offset,
+                        replacement: String::new(),
+                    },
+                );
             }
             let name = self.expect_identifier()?;
             let name_span = self.span_from(&start);
