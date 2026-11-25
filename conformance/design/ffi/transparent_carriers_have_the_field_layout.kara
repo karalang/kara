@@ -1,13 +1,11 @@
-// design.md §15 #[repr(transparent)] (6616, 6626-6628, 6636-6646): a
-// distinct type, a single-field struct and a single-variant one-field enum
-// have their field's layout; zero-sized, align-one neighbours carry no bytes.
+// design.md §15 #[repr(transparent)] (6616, 6626-6627, 6636-6646): a
+// distinct type and a single-field struct have their field's layout;
+// zero-sized, align-one neighbours carry no bytes.
 struct Celsius {}
 #[repr(transparent)]
 distinct type Fd = i32;
 #[repr(transparent)]
 struct Wrapper { inner: i64 }
-#[repr(transparent)]
-enum Only { V(u16) }
 // OK: exactly one non-zero-sized field; the unit struct carries no bytes.
 #[repr(transparent)]
 struct Reading {
@@ -19,7 +17,6 @@ struct Tagged { raw: u64, a: (), b: Array[u8, 0] }
 fn main() {
     println(f"{Fd.size_of()} {Fd.align_of()}");
     println(f"{Wrapper.size_of()} {Wrapper.align_of()}");
-    println(f"{Only.size_of()} {Only.align_of()}");
     println(f"{Reading.size_of()} {Reading.align_of()}");
     println(f"{Tagged.size_of()} {Tagged.align_of()}");
 }

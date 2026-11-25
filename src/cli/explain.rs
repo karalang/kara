@@ -1712,6 +1712,10 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
         ty("ReprTransparentInvalid", None),
     ),
     (
+        "E_REPR_TRANSPARENT_ON_ENUM",
+        ty("ReprTransparentInvalid", None),
+    ),
+    (
         "E_REPR_TRANSPARENT_REQUIRES_FIELD",
         ty("ReprTransparentInvalid", None),
     ),
@@ -3767,12 +3771,13 @@ const CODE_PROSE: &[(&str, &str)] = &[
          from the generic wrapper.",
     ),
     (
-        "E_REPR_TRANSPARENT_ENUM_NOT_SINGLE_VARIANT",
-        "A `#[repr(transparent)]` enum does not have exactly one variant \
-         carrying exactly one field (design.md § `#[repr(transparent)]`). \
-         Only such an enum can share its field's layout with no tag. Use an \
-         integer repr such as `#[repr(u8)]` for an enum with several \
-         variants.",
+        "E_REPR_TRANSPARENT_ON_ENUM",
+        "`#[repr(transparent)]` is on an enum. Only a single-field struct or \
+         a `distinct type` is a transparent carrier (design.md § \
+         `#[repr(transparent)]`): an enum of any shape is refused, a \
+         single-variant one-field enum included. For a newtype that has its \
+         field's layout, write `distinct type Name = Inner`; for a tagged \
+         enum at the C boundary, use an integer repr such as `#[repr(u8)]`.",
     ),
     (
         "E_STRUCT_LITERAL_SPREAD_UNSUPPORTED",
@@ -5034,6 +5039,7 @@ const RETIRED_CODES: &[(&str, &str)] = &[
     ("E0413", "A panic aborts in every build (core-semantics.md §10), so no panic unwinds through an exported `extern \"C-unwind\"` fn and it need not declare `panics`: such a fn is refused as E0415, which names the abort-only build."),
     ("E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY", "Slicing a string inside a character is a runtime panic (kind `index_out_of_bounds`), and no panic prints a diagnostic code: the message reads `byte index N is not a char boundary` (B-2026-11-16-320). Slice at a boundary (`s.char_indices()` gives each character's byte offset), or work in characters with `s.chars()`."),
     ("N0507", "The note suggested the `mut ref ||` capture prefix, which is removed from the language: writing it is E0519."),
+    ("E_REPR_TRANSPARENT_ENUM_NOT_SINGLE_VARIANT", "No enum is a `#[repr(transparent)]` carrier any more, whatever its shape: every `#[repr(transparent)]` enum is E_REPR_TRANSPARENT_ON_ENUM, which points at `distinct type` (review ruling 2026-11-25 on B-2026-11-25-12)."),
     ("E_MODULE_BINDING_NAMING", "A module-level `let` is E_MODULE_LET, whose fix declares it `const` under its SCREAMING_SNAKE_CASE name and renames its uses (design.md § Constants)."),
 ];
 

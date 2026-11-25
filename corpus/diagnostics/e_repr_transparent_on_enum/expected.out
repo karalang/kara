@@ -1,0 +1,1 @@
+ERROR at line 2: `#[repr(transparent)]` is for a single-field struct or a `distinct type`, not the enum `Only`. For a newtype with its field's layout, write `distinct type Only = <field type>`; for a tagged enum at the C boundary, use an integer repr such as `#[repr(u8)]`

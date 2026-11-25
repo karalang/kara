@@ -6623,12 +6623,11 @@ The compiler does not check that the `match` literals equal the declared discrim
 **Permitted carriers:**
 - **`distinct type Foo = Inner`**: the dedicated newtype mechanism, and the recommended form for FFI.
 - **A single-field `struct`** (`struct Wrapper { inner: Inner }`). It may also carry zero-sized fields (see below).
-- **A single-variant `enum` with one field** (`enum Foo { V(Inner) }`). Rare; included for parity with Rust.
 
 **Forbidden carriers**, each rejected at typecheck:
 - a `struct` with more than one non-zero-sized field: `error[E_REPR_TRANSPARENT_REQUIRES_SINGLE_FIELD]`;
 - a `struct` with no fields: `error[E_REPR_TRANSPARENT_REQUIRES_FIELD]`;
-- an `enum` with more than one variant, or with a payload-less variant: `error[E_REPR_TRANSPARENT_ENUM_NOT_SINGLE_VARIANT]`;
+- an `enum` of any shape, a single-variant one-field enum included: `error[E_REPR_TRANSPARENT_ON_ENUM]`. A `distinct type` is the newtype form; wrapping one field in an enum earns no layout special case;
 - `#[repr(transparent)]` combined with any other repr (`#[repr(C)]`, `#[repr(intN)]`): `error[E_REPR_TRANSPARENT_EXCLUSIVE]`. `transparent` *is* the layout claim; another repr would contradict or duplicate it.
 
 **Zero-sized neighbours.** A transparent struct may carry further fields **only if each has size zero and alignment one**: `()`, `PhantomData[T]`, an empty unit struct, or `Array[T, 0]` when `T` is aligned to one byte (`Array[u8, 0]`; `Array[u64, 0]` is 8-aligned and refused, as Rust refuses it). The non-zero-sized field's layout becomes the struct's layout; the companions matter only to the type system (for example, a unit-struct field tags the wrapper with what its number means). The rule is per field: two non-zero-sized fields are rejected even if their sizes add up to one field's worth.

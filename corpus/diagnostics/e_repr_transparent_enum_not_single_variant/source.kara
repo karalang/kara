@@ -1,7 +1,0 @@
-#[repr(transparent)]
-enum Choice {
-    Left(i32),
-    Right(i32),
-}
-
-fn main() {}

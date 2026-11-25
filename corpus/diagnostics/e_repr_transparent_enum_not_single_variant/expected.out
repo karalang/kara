@@ -1,1 +1,0 @@
-ERROR at line 2: a `#[repr(transparent)]` enum must have exactly one variant carrying exactly one field (the discriminant-position marker with no runtime tag); multi-variant or payload-less enums are rejected

@@ -4225,24 +4225,22 @@ impl<'a> super::TypeChecker<'a> {
         if !self.repr_transparent_active(&e.attributes, &e.span) {
             return;
         }
-        // Exactly one variant carrying exactly one field.
-        let ok = e.variants.len() == 1
-            && match &e.variants[0].kind {
-                VariantKind::Tuple(tys) => tys.len() == 1,
-                VariantKind::Struct(fields) => fields.len() == 1,
-                VariantKind::Unit => false,
-            };
-        if !ok {
-            self.type_error(
-                "error[E_REPR_TRANSPARENT_ENUM_NOT_SINGLE_VARIANT]: a `#[repr(transparent)]` \
-                 enum must have exactly one variant carrying exactly one field (the \
-                 discriminant-position marker with no runtime tag); multi-variant or \
-                 payload-less enums are rejected"
-                    .to_string(),
-                e.span,
-                TypeErrorKind::ReprTransparentInvalid,
-            );
-        }
+        // No enum is a transparent carrier, whatever its shape (review ruling
+        // 2026-11-25 on B-2026-11-25-12): a single-variant one-field enum used
+        // to pass here and was then laid out with a tag, so its "field's
+        // layout" was silently wrong. A `distinct type` is the newtype form.
+        self.type_error(
+            format!(
+                "error[E_REPR_TRANSPARENT_ON_ENUM]: `#[repr(transparent)]` is for a \
+                 single-field struct or a `distinct type`, not the enum `{0}`. For a \
+                 newtype with its field's layout, write `distinct type {0} = <field type>`; \
+                 for a tagged enum at the C boundary, use an integer repr such as \
+                 `#[repr(u8)]`",
+                e.name
+            ),
+            e.span,
+            TypeErrorKind::ReprTransparentInvalid,
+        );
     }
 
     /// The inclusive `[min, max]` value range of a `#[repr(intN)]` head name,

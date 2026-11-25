@@ -1,0 +1,6 @@
+#[repr(transparent)]
+enum Only {
+    V(i32),
+}
+
+fn main() {}

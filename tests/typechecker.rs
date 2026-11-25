@@ -40669,8 +40669,13 @@ fn repr_transparent_zero_sized_companion_accepts() {
 }
 
 #[test]
-fn repr_transparent_single_variant_enum_accepts() {
-    typecheck_ok("#[repr(transparent)] enum Wrap { V(i32) } fn main() {}");
+fn repr_transparent_single_variant_enum_rejected() {
+    // B-2026-11-25-12: this used to pass and be laid out with a tag (4 bytes
+    // for a `u16` field), so its promised field layout was silently wrong.
+    // Review ruling 2026-11-25: no enum is a transparent carrier.
+    let m = repr_transparent_err("#[repr(transparent)] enum Wrap { V(i32) } fn main() {}");
+    assert!(m.contains("E_REPR_TRANSPARENT_ON_ENUM"), "{m}");
+    assert!(m.contains("distinct type Wrap = <field type>"), "{m}");
 }
 
 /// B-2026-08-06-17 — a Kāra borrow in a foreign-import signature.
@@ -40815,19 +40820,13 @@ fn repr_transparent_zero_field_struct_rejected() {
 #[test]
 fn repr_transparent_multi_variant_enum_rejected() {
     let m = repr_transparent_err("#[repr(transparent)] enum E { A(i32), B(i32) } fn main() {}");
-    assert!(
-        m.contains("E_REPR_TRANSPARENT_ENUM_NOT_SINGLE_VARIANT"),
-        "{m}"
-    );
+    assert!(m.contains("E_REPR_TRANSPARENT_ON_ENUM"), "{m}");
 }
 
 #[test]
 fn repr_transparent_payload_less_variant_rejected() {
     let m = repr_transparent_err("#[repr(transparent)] enum E { A } fn main() {}");
-    assert!(
-        m.contains("E_REPR_TRANSPARENT_ENUM_NOT_SINGLE_VARIANT"),
-        "{m}"
-    );
+    assert!(m.contains("E_REPR_TRANSPARENT_ON_ENUM"), "{m}");
 }
 
 #[test]

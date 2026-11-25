@@ -1,0 +1,6 @@
+// design.md §15 #[repr(transparent)] (6625-6633, review ruling 2026-11-25 on
+// B-2026-11-25-12): no enum is a transparent carrier, a single-variant
+// one-field enum included; a `distinct type` is the newtype form.
+#[repr(transparent)]
+enum Only { V(i32) }
+fn main() {}
