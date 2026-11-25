@@ -60,11 +60,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 765 |
 | false-positive | 374 |
-| missing-feature | 255 |
+| missing-feature | 256 |
 | perf | 203 |
 | other | 149 |
 | soundness | 131 |
-| miscompile | 107 |
+| miscompile | 108 |
 | run-vs-build | 70 |
 | crash | 67 |
 | codegen-gap | 47 |
@@ -76,9 +76,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 910 |
+| typecheck | 911 |
 | mir | 336 |
-| mir-llvm | 328 |
+| mir-llvm | 329 |
 | cli | 314 |
 | parser | 162 |
 | ownership | 138 |
@@ -2296,6 +2296,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-25-7 | interp | medium | On the interpreter `c"hi"` has no trailing NUL: `*msg.as_ptr().add(2)` is `index 2 out of bounds for length 2`, where a build reads `0` (design.md 50… | 9814e8c4d7 |
 | B-2026-11-25-8 | interp | medium | A `host fn` on native is refused by the interpreter (`labs` is a `host fn`: it runs only in a wasm module whose host provides it); design.md 6869 say… | 07c8ca7b43 |
 | B-2026-11-25-18 | typecheck+cli | low | A `scan` seeded with a negated literal (`arr.iter().rev().scan(-1, \|m, x\| ..)` over `i32` items into a `Vec[i32]`, a running maximum as LeetCode's Ru… | b45cd107b3 |
+| B-2026-11-25-28 | typecheck | low | `s.as_str().hash(mut h)` was refused ("no method 'hash' on type 'Str'"), though collections.md § Hashing says a `Str` view hashes as its `String` doe… | 5b52c1c2df |
+| B-2026-11-25-29 | mir-llvm | medium | `==` on a `Map` or `Set` of a user `BuildHasher` was false when compiled, even for a table and its clone (`s == s.clone()`); the interpreter said true | 5b52c1c2df |
 
 </details>
 
