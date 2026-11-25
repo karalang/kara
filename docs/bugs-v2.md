@@ -58,14 +58,14 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 760 |
+| diagnostics | 761 |
 | false-positive | 373 |
 | missing-feature | 254 |
 | perf | 203 |
 | other | 149 |
 | soundness | 131 |
 | miscompile | 107 |
-| run-vs-build | 69 |
+| run-vs-build | 70 |
 | crash | 66 |
 | codegen-gap | 47 |
 | use-after-free | 13 |
@@ -78,7 +78,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 909 |
 | mir | 335 |
-| mir-llvm | 326 |
+| mir-llvm | 328 |
 | cli | 312 |
 | parser | 162 |
 | ownership | 136 |
@@ -142,6 +142,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-25-21 | 2026-11-25 | typecheck | low | `lossless_cast` (W0310) on a byte literal operand, `b'z' as i64 - top` with `top: i64`, offers no fix: `lint_unneeded_cast`'s fix-eligible operand kinds list `Integer` but not `ByteLit`, though deleting ` as i64` keeps `b'z'` whole and the subtraction widens it as the warning says | — |
 | B-2026-11-25-22 | 2026-11-25 | typecheck+mir | medium | A cursor over a `shared struct` list started from a `for` item, `for start in nodes.iter() { let mut at = start; loop { let Some(n) = at.next else { break; }; at = n; } }`, passes `karac check` and stops every lane with 'invalid MIR: assigning shared Node to _21 of type ref shared Node': `at` is a `ref Node` and `n`, a counted handle in the MIR, is let through as a borrow | — |
 | B-2026-11-25-23 | 2026-11-25 | mir+mir-llvm | medium | `mx.max(f)` with `mx: i64` (a literal's default) and `f: ref i32` from an adapted iterator (`flips.iter().rev()`, `.skip(1)`, `.filter(..)`) passes `karac check` and stops both lanes: 'call of unknown function i64.max' (interp), 'native `i64.max` is not lowered yet' (llvm); over a plain `flips.iter()` it runs | — |
+| B-2026-11-25-24 | 2026-11-25 | mir-llvm | medium | `karac run` (and `--interp`) ignore the package profile's `runtime_debug_metadata`: `has_debug_metadata()` is true under `karac run` with `[profile.dev] runtime_debug_metadata = false`, false under `--interp` always, while `karac build` honors the key | — |
+| B-2026-11-25-25 | 2026-11-25 | mir-llvm | low | A `shared` field's borrow conflict panics with panic-record kind `explicit`, not `borrow_conflict`, on the JIT and the MIR interpreter | — |
 
 ### Relocated
 

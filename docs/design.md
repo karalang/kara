@@ -7574,7 +7574,7 @@ A panic produces one **panic record** ([core-semantics.md §10.2](core-semantics
 
 **Fields:**
 1. **Kind.** One of `explicit`, `index_out_of_bounds`, `overflow`, `div_by_zero`, `unwrap`, `borrow_conflict`, `assertion`, `alloc_failure`, `unreachable` and `deadlock`. The first nine cover the cases of [core-semantics.md §10.1](core-semantics.md#10-panics-and-errors-c8); `deadlock` is a `recv` on sequential `wasm_wasi` when no task can run ([Concurrency across targets](#concurrency-across-targets)). Kinds are only ever added. Tools deduplicate on the kind and the location.
-2. **Message.** The panic's message, or `"<no message>"`. A standard-library message is informative, not contractual: the library docs state for each panicking operation its condition and its kind, and may quote today's message, but a tool keys on the kind (review-thread ruling 2026-11-16, B-2026-11-16-321).
+2. **Message.** The panic's message; a bare `panic()` records `"explicit panic"` (review-thread ruling 2026-11-25). A renderer shows `"<no message>"` for a record that has none. A standard-library message is informative, not contractual: the library docs state for each panicking operation its condition and its kind, and may quote today's message, but a tool keys on the kind (review-thread ruling 2026-11-16, B-2026-11-16-321).
 3. **Location.** `file:line:col`. For a panic raised inside a standard-library function marked `#[track_caller]` ([§10](#10-errors-and-panics)), it is the caller's location.
 4. **Error-return trace.** The path of the error being propagated, in debug builds ([Error return traces](#error-return-traces)). A panic with no `?` propagation behind it has none, and its report prints no `Error return trace:` (review-thread ruling 2026-11-16).
 

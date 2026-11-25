@@ -1385,4 +1385,32 @@ mod tests {
         let h = show(at("greet()", true));
         assert!(h.contains("fn greet(self) -> String"), "{h}");
     }
+
+    /// design.md § Language server: a diagnostic's `code` is its catalogue
+    /// code, or its phase when it has none (tooling sentence map, line
+    /// 7519).
+    #[test]
+    fn diagnostic_code_falls_back_to_the_phase() {
+        let raw = |code: Option<&str>| karac::PlaygroundDiagnostic {
+            phase: "resolve",
+            severity: "error",
+            message: "m".to_string(),
+            code: code.map(str::to_string),
+            help: Vec::new(),
+            line: 1,
+            column: 1,
+            offset: 0,
+            length: 2,
+            fixes: Vec::new(),
+        };
+        let out = to_lsp("fn f() {}", vec![raw(None), raw(Some("E0100"))]);
+        assert_eq!(
+            out[0].0.code,
+            Some(NumberOrString::String("resolve".to_string()))
+        );
+        assert_eq!(
+            out[1].0.code,
+            Some(NumberOrString::String("E0100".to_string()))
+        );
+    }
 }

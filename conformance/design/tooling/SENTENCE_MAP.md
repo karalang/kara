@@ -5,12 +5,13 @@ Status: covered, partial, FAILS (routed, the owner named), not testable, not dra
 - `c17:`, `c17b:`, `c17c:` name a check (its printed name) in `probes/cases17.py`, `probes/cases17b.py` and `probes/cases17c.py`, run by `tests/tooling_sentence_probes_2026_11_24.rs` on the `--features llvm` leg (`K=<karac> python3 probes/<file>` by hand). `cases17` and `cases17b` are the 2026-11-21 design-14-17 pass, moved here from the shared folder; `cases17c` is this audit's.
 - A bare `tests/<file>` or `lsp/tests/<file>` is a Rust test file; `repl/` is `conformance/repl/`.
 
-**Totals (2026-11-24):** 174 table rows (normative sentences), plus the REPL subsection's 14, pinned in `conformance/repl/`. Of the 174: 155 covered, 7 partial, 2 FAILS (both outside doc, LSP and REPL; routed to the review), 10 not testable (client obligations, scope and stability statements, and `#[cfg]` conditions, since `#[cfg]` is not implemented). The probes: `cases17` 120/120, `cases17b` 20/20, `cases17c` 115/116 (its one failure is the first FAILS row). The 116 checks of `cases17c` and the four LSP tests in `lsp/tests/protocol_contract_2026_11_24.rs` are new.
+**Totals (2026-11-25):** 174 table rows (normative sentences), plus the REPL subsection's 14, pinned in `conformance/repl/`. Of the 174: 160 covered, 2 partial (7560, 7652; sent to the review), 2 FAILS (B-2026-11-25-24, B-2026-11-25-25), 10 not testable (client obligations, scope and stability statements, and `#[cfg]` conditions, since `#[cfg]` is not implemented). The probes: `cases17` 120/120, `cases17b` 20/20, `cases17c` 119/121 (its two failures are the FAILS rows, allowlisted by name in the harness). `cases17c` and the LSP pins in `lsp/tests/protocol_contract_2026_11_24.rs` and `lsp/src/analysis.rs` are new.
 
 **Drift found.**
-- FIXED here: design.md said the language server's text sync is full-document. Since B-2026-11-21-33 it advertises incremental sync (range edits), which `lsp/tests/server.rs` pins. The row now says so.
-- FAILS, routed: `karac run` ignores `[profile.dev] runtime_debug_metadata = false` (line 7557): `has_debug_metadata()` prints `true` under `karac run` while the binary `karac build` writes from the same package prints `false`. The MIR interpreter (`--interp`) answers `false` whatever the profile.
-- FAILS, routed: a bare `panic()` records the message `"explicit panic"`, where line 7576 says a panic with no message records `"<no message>"`. The renderer (`src/crash_report.rs`) already falls back to `<no message>` for a record without one.
+- FIXED: design.md said the language server's text sync is full-document. Since B-2026-11-21-33 it advertises incremental sync (range edits), which `lsp/tests/server.rs` pins. The row now says so.
+- DOC CHANGED (review ruling 2026-11-25): a bare `panic()` records `"explicit panic"`; design.md line 7576 said `"<no message>"`, which is now only the renderer's fallback for a record without one.
+- FAILS, B-2026-11-25-24 (run-vs-build): `karac run` ignores `[profile.dev] runtime_debug_metadata = false`, and `--interp` always answers `false`, while `karac build` honors the key.
+- FAILS, B-2026-11-25-25: a `shared` field's borrow conflict records kind `explicit`, not `borrow_conflict`.
 
 ## Structured compiler output (7211–7263)
 
@@ -26,7 +27,7 @@ Status: covered, partial, FAILS (routed, the owner named), not testable, not dra
 | 7257 | Every phase, and a package as well as a file, reports a fix in this one shape | covered | c17c: package: unused_mut fix has replacement and a hint diff; effect diag: byte edits beside the hint |
 | 7259 | Codes come from per-phase bands; every code is catalogued for `karac explain` | covered | c17: explain E0500 / W0300 / E_CHAR_AS_NARROW_INT; tests/docs_conformance.rs |
 | 7261 | `code` is the symbolic code, `parent_code` the family's number | covered | c17: E_CHAR_AS_NARROW_INT has parent_code E0210 |
-| 7261 | A record with one code has no `parent_code` | partial | c17: diag E0500: required fields (E0500 carries none; not asserted as absent) |
+| 7261 | A record with one code has no `parent_code` | covered | c17c: a record with one code has no parent_code |
 | 7261 | The message does not repeat the code | covered | c17: diag E0500: message does not repeat the code |
 | 7261 | The text renderer's header names the same code | covered | c17c: text header names the symbolic code |
 | 7263 | A lint is one `W03xx` number; escalated it is the matching `E03xx`; the old shared code is `parent_code`; `lint_name` names it | covered | c17: redundant_clone is W0300, parent W0295; -D redundant_clone gives E0300 parent E0295 |
@@ -68,7 +69,7 @@ Status: covered, partial, FAILS (routed, the owner named), not testable, not dra
 | 7375 | A ring buffer 64 deep | covered | c17c: depth limit (at most 64 frames) |
 | 7376 | Only a `Result`'s `?` records a frame; a panic on `None` prints no trace | covered | c17c: Option ?: no Error return trace on the panic |
 | 7377 | A handled error ends its trace | covered | c17c: a handled error ends its trace |
-| 7377 | `unwrap`/`expect` keep it; `map_err`, `and_then`, `or_else` keep it | partial | c17b: panic record kind unwrap with its trace; `map_err` etc. in tests/mir_error_trace_drops.rs |
+| 7377 | `unwrap`/`expect` keep it; `map_err`, `and_then`, `or_else` keep it | covered | c17b: panic record kind unwrap with its trace; c17c: map_err keeps the trace for the next ?; tests/mir_error_trace_drops.rs |
 | 7378 | A dropped error ends its trace; printing alone does not clear; a moved value keeps its frames | covered | c17c: a dropped error ends its trace; tests/mir_error_trace_drops.rs |
 | 7379 | A full buffer drops the oldest entry: `{"frames": [...], "truncated": true}` | covered | c17c: depth limit: a full buffer reports {frames, truncated: true} |
 | 7380 | A chain split across parallel tasks reports `unavailable (the ? chain was split across parallel tasks)` | covered | tests/mir_error_trace_tasks.rs |
@@ -94,7 +95,7 @@ Status: covered, partial, FAILS (routed, the owner named), not testable, not dra
 | 7421 | `resolve`, `effect` and `provider_escape` run only if `parse` reported no error | covered | c17: jsonl: parse error skips resolve, typecheck, effect, ownership; c17c: resolve error: effect runs |
 | 7422 | `typecheck` runs only if `resolve` reported no error | covered | c17c: resolve error: typecheck skipped |
 | 7423 | `ownership` runs only if `typecheck` ran, and runs after type errors | covered | c17c: resolve error: ownership skipped; type error: ownership still runs |
-| 7424 | `lint`, `simd_check` and `comptime` always run | partial | c17c: resolve error: lint runs (simd_check and comptime unasserted) |
+| 7424 | `lint`, `simd_check` and `comptime` always run | covered | c17c: resolve error: lint runs; resolve error: simd_check and comptime run |
 | 7425 | `codegen` runs only if every analysis phase had zero errors | covered | c17c: build with a type error: codegen does not run |
 | 7429 | No `--stop-on-first-error` flag | covered | c17c: there is no --stop-on-first-error flag |
 | 7431 | The cascade cap is the same in both modes | covered | c17: cascade cap: same marker in the stream |
@@ -155,7 +156,7 @@ Status: covered, partial, FAILS (routed, the owner named), not testable, not dra
 | 7516 | `formatting`: `karac fmt`'s output as one whole-document edit | covered | lsp/tests/server.rs server_formats_a_document; shared `conformance/lsp/fmt_parity.py` |
 | 7517 | `kara/renderCrashReport` takes the record `karac run --output=json` carries, renders as `karac debug` | covered (new) | lsp/tests/protocol_contract_2026_11_24.rs lsp_contract_render_crash_report_takes_the_run_record; lsp/src/analysis.rs render_crash_report_matches_shared_renderer |
 | 7519 | Positions are UTF-16 | covered (new) | lsp/tests/protocol_contract_2026_11_24.rs lsp_contract_positions_are_utf16 |
-| 7519 | A diagnostic's `code` is its catalogue code, or its phase when it has none | partial | lsp/tests/server.rs (catalogue code); every diagnostic the probes raised has a code, so the fallback is unexercised |
+| 7519 | A diagnostic's `code` is its catalogue code, or its phase when it has none | covered | lsp/tests/server.rs (catalogue code); lsp/src/analysis.rs diagnostic_code_falls_back_to_the_phase |
 | 7519 | References and rename do not cross files in v1 | covered | lsp/tests/conformance_workspace.rs |
 
 ## REPL (experimental) (7521–7546)
@@ -168,9 +169,9 @@ Every sentence is pinned by a cell in `conformance/repl/` (its README maps them)
 |---|---|---|---|
 | 7550 | Building debugger tools is out of scope; the contract and metadata are the deliverable | not testable | scope |
 | 7557 | Metadata on by default in `[profile.dev]`, off in `[profile.release]` | covered | c17c: debug metadata on in dev; release: no debug metadata |
-| 7557 | Set by `runtime_debug_metadata` in either profile | FAILS (routed) | `karac build` honors it (tests/mir_debug_metadata.rs mir_debug_metadata_follows_the_manifest_profiles); `karac run` does not (c17c: [profile.dev] runtime_debug_metadata = false turns it off) |
+| 7557 | Set by `runtime_debug_metadata` in either profile | FAILS (B-2026-11-25-24) | `karac build` honors it (tests/mir_debug_metadata.rs mir_debug_metadata_follows_the_manifest_profiles); `karac run` does not (c17c: [profile.dev] runtime_debug_metadata = false turns it off) |
 | 7559 | A `SpawnSiteId` per `par {}` block, stable across runs | covered | tests/mir_debug_metadata.rs mir_debug_metadata_lists_running_par_blocks |
-| 7560 | A parent-frame reference per worker; the root's is `"root"` | partial | tests/mir_debug_metadata.rs (worker entries; the root sentinel unasserted) |
+| 7560 | A parent-frame reference per worker; the root's is `"root"` | partial | tests/mir_debug_metadata.rs (worker entries). `std.runtime` gives `parent_task_id: u64`, `0` for the root task (runtime/stdlib/runtime.kara), not a value tagged `"root"`; sent to the review 2026-11-25 |
 | 7561 | An await-chain `WaitTarget` per suspended task | covered | tests/mir_debug_metadata.rs mir_debug_metadata_lists_suspended_tasks |
 | 7562 | `list_tasks()` / `list_par_blocks()`; empty without the metadata | covered | tests/mir_debug_metadata.rs; c17c: release: no debug metadata, lists empty |
 | 7566 | `has_debug_metadata()` reports it | covered | c17c: debug metadata on in dev |
@@ -181,8 +182,8 @@ Every sentence is pinned by a cell in `conformance/repl/` (its README maps them)
 | Line | Sentence | Status | Cells |
 |---|---|---|---|
 | 7575 | Kind is one of the ten | covered | c17c: panic record kind explicit, index_out_of_bounds, overflow, div_by_zero, unwrap, assertion, unreachable; tests/mir_tasks.rs (deadlock); tests/isolating_alloc_failure.rs (alloc_failure) |
-| 7575 | `borrow_conflict` | partial | no probe raises it on the v2 backends |
-| 7576 | The message, or `"<no message>"` | FAILS (routed) | a bare `panic()` records `"explicit panic"` (probe by hand; see Drift above) |
+| 7575 | `borrow_conflict` | FAILS (B-2026-11-25-25) | c17c: panic record kind borrow_conflict (the conflict records `explicit`) |
+| 7576 | The message; a bare `panic()` records `"explicit panic"`; `<no message>` is the renderer's fallback | covered | c17c: a bare panic() records the message "explicit panic"; src/crash_report.rs (fallback) |
 | 7577 | Location `file:line:col`; inside a `#[track_caller]` library function, the caller's | covered | c17c: panic record <kind>: location file/line/col; track_caller: unwrap's location is the caller's line; tests/compiled_panic_places.rs |
 | 7578 | The error-return trace, in debug builds; none without `?` | covered | c17b: run --output=json: error_return_trace in the record; tests/tooling_conformance.rs |
 | 7581 | The record goes to stderr in human-readable form | covered | c17c: built binary run directly: exit 101, human report, no JSON |
@@ -233,7 +234,7 @@ Every sentence is pinned by a cell in `conformance/repl/` (its README maps them)
 |---|---|---|---|
 | 7643 | An attribute not in the registry is `E_UNKNOWN_ATTRIBUTE` | covered | c17: E_UNKNOWN_ATTRIBUTE: reported as error |
 | 7649 | The v1 core set is in the registry: derive, default, serde, target, repr, non_exhaustive, track_caller, no_effect | covered | c17c: #[<name>] is in the registry |
-| 7652 | `#[cfg(...)]` | partial | c17c: cfg is refused as not implemented, naming `#[target]`; line 7653 says `#[target]` is interim until `#[cfg]` is implemented |
+| 7652 | `#[cfg(...)]` | partial | c17c: cfg is refused as not implemented, naming `#[target]`; line 7653 says `#[target]` is interim until `#[cfg]` is implemented, while this row lists `#[cfg]` in the v1 core set; sent to the review 2026-11-25 |
 | 7655 | `#[must_use]` warns on a discarded value | covered | c17c: #[must_use]: discarding the value warns |
 | 7657 | `#[deprecated]` warns at a use | covered | c17c: #[deprecated]: a use warns |
 | 7659 | `#[panic_handler]` | covered | c17c: custom panic handler runs after the record |

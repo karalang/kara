@@ -17,9 +17,12 @@ use std::process::Command;
 
 /// Checks that fail today and are tracked, by the start of their name.
 const OPEN: &[&str] = &[
-    // `karac run` ignores `[profile.dev] runtime_debug_metadata = false`
-    // (`karac build` honors it); routed to the review thread 2026-11-24.
+    // PREDICTS B-2026-11-25-24: `karac run` ignores `[profile.dev]
+    // runtime_debug_metadata = false` (`karac build` honors it).
     "[profile.dev] runtime_debug_metadata = false turns it off",
+    // PREDICTS B-2026-11-25-25: a `shared` field's borrow conflict records kind
+    // `explicit`.
+    "panic record kind borrow_conflict",
 ];
 
 fn probe(script: &str) {

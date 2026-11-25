@@ -60,6 +60,8 @@ if e400:
 
 # Every batch diagnostic carries `phase`.
 c, doc, e, f = check_json('fn main() {\n    let mut x = 1;\n    let y: String = 2;\n}\n')
+e05 = [x for x in diags(doc) if x.get("code") == "E0200"]
+check("a record with one code has no parent_code", bool(e05) and all("parent_code" not in x for x in e05), e05)
 check("every batch diagnostic carries phase", diags(doc) and all("phase" in x for x in diags(doc)), diags(doc))
 
 # A package's checks have concepts too: a manifest error.
@@ -104,7 +106,8 @@ ph = phases(ev)
 check("resolve error: typecheck skipped", ph.get("typecheck") == "skipped", ph)
 check("resolve error: ownership skipped (typecheck did not run)", ph.get("ownership") == "skipped", ph)
 check("resolve error: effect runs (it needs only parse)", ph.get("effect") == "ran", ph)
-check("resolve error: lint runs", ph.get("lint") in ("ran", None), ph)
+check("resolve error: lint runs", ph.get("lint") == "ran", ph)
+check("resolve error: simd_check and comptime run", ph.get("simd_check") == "ran" and ph.get("comptime") == "ran", ph)
 
 ev = stream('fn main() {\n    let x: String = 1;\n    println(x);\n}\n')
 ph = phases(ev)
@@ -172,6 +175,15 @@ d, f = single(UNWRAP)
 c, o, e, _ = run(d, ["run", f])
 check("text mode: the trace is a note on stderr", c == 101 and "Error return trace" in e, e[:300])
 
+MAPERR = '''fn f(x: i64) -> Result[i64, String] { if x > 0 { Ok(x) } else { Err("neg") } }
+fn g(x: i64) -> Result[i64, i64] { let y = f(x).map_err(|e| e.len() as i64)?; Ok(y) }
+fn main() { println(f"{g(-1).unwrap()}"); }
+'''
+c, o, e = run_json(MAPERR)
+tr = jdoc(o).get("error_return_trace") or []
+fr = tr.get("frames", []) if isinstance(tr, dict) else tr
+check("map_err keeps the trace for the next ?", c == 101 and any("map_err" in (x.get("expr") or "") or x.get("line") == 2 for x in fr), (o[:400]))
+
 DEEP = '''fn down(n: i64) -> Result[i64, String] {
     if n == 0 { return Err("bottom"); }
     let x = down(n - 1)?;
@@ -209,6 +221,26 @@ for kind, src in KINDS.items():
     check(f"panic record kind {kind}", c == 101 and rec.get("kind") == kind, (c, o[:200], e[:200]))
     loc = rec.get("location") or {}
     check(f"panic record {kind}: location file/line/col", all(k in loc for k in ("file", "line", "col")), loc)
+
+c, o, e = run_json('fn main() { panic(); }\n')
+rec = (jdoc(o).get("runtime_errors") or [{}])[0]
+check("a bare panic() records the message \"explicit panic\"", rec.get("message") == "explicit panic", rec)
+
+BAG = '''shared struct Bag { mut items: Vec[i64] }
+fn add_all(src: Bag, dst: Bag) {
+    for x in src.items {
+        dst.items.push(x);
+    }
+}
+fn main() {
+    let b = Bag { items: Vec.new() };
+    b.items.push(1);
+    add_all(b, b);
+}
+'''
+c, o, e = run_json(BAG)
+rec = (jdoc(o).get("runtime_errors") or [{}])[0]
+check("panic record kind borrow_conflict", c == 101 and rec.get("kind") == "borrow_conflict", rec)
 
 c, o, e = run_json('fn main() {\n    let o: Option[i64] = None;\n    println(f"{o.unwrap()}");\n}\n')
 rec = (jdoc(o).get("runtime_errors") or [{}])[0]
