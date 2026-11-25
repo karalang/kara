@@ -1599,6 +1599,37 @@ impl<'a> super::TypeChecker<'a> {
             let Some(missing) = self.serde_missing_part(&ty, trait_name) else {
                 continue;
             };
+            if !self.program_declares_type(&missing) {
+                // Review-thread rulings 2026-11-26 (B-2026-11-25-49): why
+                // each of these has no impl, and what to write instead.
+                let instead = match missing.as_str() {
+                    "i128" | "u128" => "a JSON number past 2^53 loses precision in most \
+                         readers; write the field as an `i64`, or as a `String` the program \
+                         converts"
+                        .to_string(),
+                    "Result" => "a `Result` has no canonical JSON shape; write an enum \
+                         with the variants meant, tagged with `#[serde(..)]`"
+                        .to_string(),
+                    "Array" => "`Array` support is planned (docs/library/json.md); write \
+                         the field as a `Vec` for now"
+                        .to_string(),
+                    _ => format!(
+                        "write the field as a type that has one, or as a program type with \
+                         its own `impl {trait_name}`"
+                    ),
+                };
+                self.type_error(
+                    format!(
+                        "{owner} derives {trait_name} but {part} has type '{}', and the \
+                         library has no {trait_name} impl for '{missing}': {instead} \
+                         (design.md §9)",
+                        type_display(&ty)
+                    ),
+                    span,
+                    TypeErrorKind::TypeMismatch,
+                );
+                continue;
+            }
             self.type_error(
                 format!(
                     "{owner} derives {trait_name} but {part} has type '{}', and '{missing}' \
@@ -1657,19 +1688,59 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 args.iter()
                     .find_map(|a| self.serde_missing_part(a, trait_name))
+                    .or_else(|| {
+                        (!declared && self.library_lacks(ty, trait_name)).then(|| name.clone())
+                    })
+            }
+            // A primitive or a library type the library has no impl for
+            // (`i128`, `u128`, `Array`, `Result`): the derive refuses it by
+            // name, as a direct `Json.serialize` of one is refused, rather
+            // than leave it to every backend (B-2026-11-25-49).
+            Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char => {
+                self.library_lacks(ty, trait_name).then(|| type_display(ty))
             }
             Type::Tuple(elems) => elems
                 .iter()
                 .find_map(|e| self.serde_missing_part(e, trait_name)),
-            Type::Array { element, .. }
-            | Type::Slice { element, .. }
-            | Type::Vector { element, .. } => self.serde_missing_part(element, trait_name),
+            Type::Array { element, .. } => {
+                self.serde_missing_part(element, trait_name).or_else(|| {
+                    self.library_lacks(ty, trait_name)
+                        .then(|| "Array".to_string())
+                })
+            }
+            Type::Slice { element, .. } | Type::Vector { element, .. } => {
+                self.serde_missing_part(element, trait_name)
+            }
             Type::Ref(inner) | Type::MutRef(inner) | Type::Rc(inner) | Type::Arc(inner) => {
                 self.serde_missing_part(inner, trait_name)
             }
             Type::Refinement { base, .. } => self.serde_missing_part(base, trait_name),
             _ => None,
         }
+    }
+
+    /// Whether the library has no `trait_name` impl for `ty`'s head. The
+    /// head is asked with `i64` for each argument: the arguments are asked
+    /// part by part, and one the bound cannot see yet (a distinct type
+    /// whose impl a derive writes, a tuple the derive refuses by its own
+    /// rule) must not make `Vec` look unimplemented.
+    fn library_lacks(&self, ty: &Type, trait_name: &str) -> bool {
+        let i64_ty = Type::Int(super::types::IntSize::I64);
+        let head = match ty {
+            Type::Named { name, args } => Type::Named {
+                name: name.clone(),
+                args: args.iter().map(|_| i64_ty.clone()).collect(),
+            },
+            Type::Array { .. } => {
+                let mut head = ty.clone();
+                if let Type::Array { element, .. } = &mut head {
+                    **element = i64_ty;
+                }
+                head
+            }
+            _ => ty.clone(),
+        };
+        !self.type_satisfies_bound(&head, trait_name)
     }
 
     /// design.md §9 Derive, two list rules (B-2026-11-06-27 items 3-5):

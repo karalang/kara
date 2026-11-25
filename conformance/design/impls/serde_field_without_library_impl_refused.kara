@@ -1,0 +1,4 @@
+import std.json.{Json};
+#[derive(Serialize, Deserialize)]
+struct A { x: i128 }
+fn main() { println(Json.serialize(A { x: 5 })); }

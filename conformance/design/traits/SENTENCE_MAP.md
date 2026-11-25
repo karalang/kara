@@ -505,7 +505,7 @@ Status: covered, partial, FAILS (filed, the row named), not testable, not drafte
 | 4569 | `rename` applies to a variant | covered | impls/serde_generic_and_str_input |
 | 4570 | `default: expr` takes a constant expression; a run-time one is refused | covered | impls/serde_default_constant_forms, impls/serde_default_not_constant_refused |
 | 4571 | A tuple field is a sequence of exactly its length | covered | impls/serde_tuple_field |
-| 4571 | A tuple inside another type is refused by field name | covered | impls/serde_tuple_inside_vec_refused |
+| 4571 | A tuple inside another type is refused by field name | covered | impls/serde_tuple_inside_vec_refused; a library type with no impl, impls/serde_field_without_library_impl_refused |
 | 4572 | A duplicate field is refused | covered | impls/serde_missing_field_by_renamed_key |
 | 4573 | A missing field is reported by its renamed key | covered | impls/serde_missing_field_by_renamed_key |
 | 4574 | `Json.deserialize(text: Str)` reads a view | covered | impls/serde_generic_and_str_input |

@@ -32,3 +32,11 @@ The text `stringify` writes and the errors `parse` reports are those of the Rust
 **Floats.** `Json.serialize` writes a float as `stringify` writes a `Number`, and an `f32` by its own shortest digits (`0.1`). NaN and the infinities are written `null`, as serde_json writes them, and `null` does not read back into an `f64` or `f32`: `Json.deserialize` refuses it as the wrong shape (`f: expected a number, found null at line 1 column 6`). They do not round-trip, so a field that must carry them is an `Option[f64]`, or a type with its own impl (review-thread ruling 2026-11-20, B-2026-11-20-29).
 
 **`Json.deserialize` errors.** Text that is not JSON is reported as `parse` reports it, with the same message and position (`EOF while parsing an object at line 1 column 7`). JSON of the wrong shape is reported with the path of the field being read: `a: expected an integer, found a string at line 1 column 6`, ``missing field `active` ``; so is a value the type refuses, at its last character (`u: 256 is out of range for u8 at line 1 column 39`, `c: expected one character, found "xy" at line 1 column 32`), and a field missing from a nested struct names that struct (``inner: missing field `small` ``) (review-thread ruling 2026-11-16, B-2026-11-16-174; B-2026-11-20-23).
+
+**Field types the derives refuse.** `#[derive(Serialize, Deserialize)]` refuses a field whose type, or a part of it, has no impl in the library, and names the part (review-thread rulings 2026-11-26, B-2026-11-25-49):
+
+| Type | Status | Write instead |
+|---|---|---|
+| `i128`, `u128` | Refused: a JSON number past 2^53 loses precision in most readers | An `i64` field, or a `String` the program converts |
+| `Result[T, E]` | Refused: a `Result` has no canonical JSON shape | An enum with the variants meant, tagged with `#[serde(..)]` |
+| `Array[T, N]` | Refused today; planned. It will be written as a JSON array of `N` elements and read back from exactly `N`, an error naming the expected and actual length otherwise, nested arrays alike | A `Vec[T]` field |

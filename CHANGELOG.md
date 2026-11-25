@@ -37,6 +37,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `drop 1`). A later use of the array, which then stopped with MIR's
   internal move check, runs when nothing was moved out and is refused at
   `karac check` when an element was (B-2026-11-25-44).
+- `#[derive(Serialize, Deserialize)]` refuses a field whose type, or a
+  part of it, has no impl in the library: `i128`, `u128`, `Array[T, N]`
+  and `Result[T, E]`, alone or in a `Vec` or `Option`. `karac check`
+  accepted them and every backend stopped at "no method 'serialize'"
+  (B-2026-11-25-49).
 - `#[no_effect(allocates(Heap))]` refuses a `.clone()` that copies a heap
   buffer: a `String`, a `Vec` or other collection, a `Box`, or an
   `Option`, `Result`, tuple, array or derived-`Clone` type holding one,
