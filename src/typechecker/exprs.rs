@@ -14107,9 +14107,11 @@ impl<'a> super::TypeChecker<'a> {
                     // `-n as i64` casts `-n` (`as` binds looser than a
                     // prefix operator), a suffixed literal and a cast end
                     // at their own last token: the deletion keeps each
-                    // whole (B-2026-11-21-74).
+                    // whole (B-2026-11-21-74). So does a byte literal,
+                    // `b'z' as i64 - top` (B-2026-11-25-21).
                     | ExprKind::Unary { .. }
                     | ExprKind::Integer(..)
+                    | ExprKind::ByteLit(_)
                     | ExprKind::Cast { .. }
             ))
             && end > start)
