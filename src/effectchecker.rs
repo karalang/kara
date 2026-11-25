@@ -1233,6 +1233,11 @@ pub struct EffectCheckResult {
     /// For each function in a recursive group (or calling itself), how its
     /// set grew in the fixed point: the chain `karac explain` shows.
     pub fixpoint_chains: HashMap<String, FixpointChain>,
+    /// The parameters a clause named for each effect it counts as a class
+    /// (`writes(f)` on a `File`, `sends(tx)` on a `Sender`), keyed by the
+    /// verb's offset and the effect: what `karac query effects` shows as
+    /// `"roots"` (B-2026-11-25-35).
+    pub declared_roots: HashMap<(usize, Effect), Vec<String>>,
     /// Declared effects for each function.
     pub declared_effects: HashMap<String, DeclaredEffects>,
     /// Expanded effect groups.
@@ -1519,6 +1524,13 @@ pub struct EffectChecker<'a> {
     /// (`writes(f)` on an `f: ref File` is `writes(FileSystem)`;
     /// B-2026-11-25-35).
     pub(crate) class_root_params: Vec<(String, &'static str)>,
+    /// The channel-endpoint parameters of that signature.
+    pub(crate) channel_root_params: Vec<String>,
+    /// For a clause that names a resource rooted at a parameter (`writes(f)`,
+    /// `sends(tx)`), which this checker counts as its class: the parameter
+    /// names, keyed by the verb's offset and the effect it became, so a
+    /// query can show what the clause wrote (B-2026-11-25-35).
+    pub(crate) declared_roots: FxHashMap<(usize, Effect), Vec<String>>,
     /// Functions and their AST bodies (for inference). [`FnHandle`]
     /// borrows the AST directly (the SCC convergence loop and
     /// whole-program walks clone the HANDLE, never the body — review
@@ -1892,6 +1904,8 @@ impl<'a> EffectChecker<'a> {
             self_is_channel_endpoint: false,
             uncharged_root_params: Vec::new(),
             class_root_params: Vec::new(),
+            channel_root_params: Vec::new(),
+            declared_roots: FxHashMap::default(),
             function_bodies: FxHashMap::default(),
             method_bodies: FxHashMap::default(),
             method_name_index: FxHashMap::default(),
@@ -3230,6 +3244,7 @@ impl<'a> EffectChecker<'a> {
             interner,
             inferred_effects,
             fixpoint_chains,
+            declared_roots,
             declared_effects,
             expanded_groups,
             transparent_effects,
@@ -3244,6 +3259,7 @@ impl<'a> EffectChecker<'a> {
                 .into_iter()
                 .map(|(k, v)| (interner.resolve(k).to_string(), v))
                 .collect(),
+            declared_roots: declared_roots.into_iter().collect(),
             fixpoint_chains: fixpoint_chains
                 .into_iter()
                 .map(|(k, (group, steps))| {
@@ -3529,6 +3545,7 @@ impl<'a> EffectChecker<'a> {
     ) -> DeclaredEffects {
         let channel = crate::ast::channel_endpoint_param_names(params);
         self.class_root_params = crate::ast::handle_class_param_names(params);
+        self.channel_root_params = channel.clone();
         self.uncharged_root_params = crate::ast::value_root_param_names(params)
             .into_iter()
             .filter(|p| !channel.contains(p))
@@ -3539,8 +3556,24 @@ impl<'a> EffectChecker<'a> {
         let decl = self.parse_effect_list(effects);
         self.uncharged_root_params.clear();
         self.class_root_params.clear();
+        self.channel_root_params.clear();
         self.self_is_channel_endpoint = false;
         decl
+    }
+
+    /// Remember that the clause verb at `span` named `effect` through the
+    /// parameter `root` (B-2026-11-25-35).
+    fn record_declared_root(&mut self, span: Span, effect: &Effect, root: Option<&str>) {
+        let Some(root) = root else {
+            return;
+        };
+        let roots = self
+            .declared_roots
+            .entry((span.offset, effect.clone()))
+            .or_default();
+        if !roots.iter().any(|r| r == root) {
+            roots.push(root.to_string());
+        }
     }
 
     fn parse_effect_list(&mut self, effects: &Option<EffectList>) -> DeclaredEffects {
@@ -3593,13 +3626,12 @@ impl<'a> EffectChecker<'a> {
                         if let Some(&(_, class)) =
                             root.and_then(|r| self.class_root_params.iter().find(|(p, _)| p == r))
                         {
-                            result.add(
-                                Effect {
-                                    verb: verb.kind.clone(),
-                                    resource: class.to_string(),
-                                },
-                                EffectOrigin::Direct(verb.span),
-                            );
+                            let effect = Effect {
+                                verb: verb.kind.clone(),
+                                resource: class.to_string(),
+                            };
+                            self.record_declared_root(verb.span, &effect, root);
+                            result.add(effect, EffectOrigin::Direct(verb.span));
                             continue;
                         }
                         if root == Some("self") {
@@ -3616,13 +3648,14 @@ impl<'a> EffectChecker<'a> {
                             continue;
                         }
                         let res_name = self.canonical_resource_name(&resource.path);
-                        result.add(
-                            Effect {
-                                verb: verb.kind.clone(),
-                                resource: res_name,
-                            },
-                            EffectOrigin::Direct(verb.span),
-                        );
+                        let effect = Effect {
+                            verb: verb.kind.clone(),
+                            resource: res_name,
+                        };
+                        if root.is_some_and(|r| self.channel_root_params.iter().any(|p| p == r)) {
+                            self.record_declared_root(verb.span, &effect, root);
+                        }
+                        result.add(effect, EffectOrigin::Direct(verb.span));
                     }
                 }
                 EffectItem::Group(name) => {

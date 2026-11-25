@@ -108,18 +108,87 @@ fn serialized_by_json(cause: &SerializationCause) -> String {
 
 /// Render an `EffectSet` as a JSON array of `{"verb","resource"}` objects.
 pub(crate) fn effect_set_json(set: &EffectSet) -> String {
+    effect_set_json_rooted(set, &|_| Vec::new())
+}
+
+/// [`effect_set_json`], with `"roots"` on an effect a clause named through a
+/// parameter: `{"verb":"writes","resource":"FileSystem","roots":["f"]}` for
+/// `with writes(f)` on an `f: ref File` (B-2026-11-25-35).
+pub(crate) fn effect_set_json_rooted(
+    set: &EffectSet,
+    roots_of: &dyn Fn(&crate::effectchecker::Effect) -> Vec<String>,
+) -> String {
     let list: Vec<String> = set
         .effects
         .iter()
         .map(|te| {
+            let roots = roots_of(&te.effect);
+            let roots = if roots.is_empty() {
+                String::new()
+            } else {
+                let names: Vec<String> = roots.iter().map(|r| json_string(r)).collect();
+                format!(",\"roots\":[{}]", names.join(","))
+            };
             format!(
-                "{{\"verb\":{},\"resource\":{}}}",
+                "{{\"verb\":{},\"resource\":{}{roots}}}",
                 json_string(effect_verb_str(&te.effect.verb)),
                 json_string(&te.effect.resource),
             )
         })
         .collect();
     format!("[{}]", list.join(","))
+}
+
+/// The parameters a function's clause named for `effect`, when the clause
+/// wrote it rooted at one (`sends(tx)`, `writes(f)`); empty otherwise. The
+/// inferred set takes the same roots, since the body's effect is the one
+/// the clause declares (B-2026-11-25-35).
+pub(crate) fn declared_roots_of(
+    effects: &EffectCheckResult,
+    declared: Option<&DeclaredEffects>,
+    effect: &crate::effectchecker::Effect,
+) -> Vec<String> {
+    let set = match declared {
+        Some(DeclaredEffects::Explicit(set)) | Some(DeclaredEffects::PolymorphicWithFixed(set)) => {
+            set
+        }
+        _ => return Vec::new(),
+    };
+    set.effects
+        .iter()
+        .filter(|te| te.effect == *effect)
+        .find_map(|te| match &te.origin {
+            crate::effectchecker::EffectOrigin::Direct(span) => effects
+                .declared_roots
+                .get(&(span.offset, effect.clone()))
+                .cloned(),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+/// A function's inferred and declared effects as JSON, each effect a clause
+/// named through a parameter carrying its `"roots"`.
+pub(crate) fn function_effects_json(
+    effects: &EffectCheckResult,
+    function: &str,
+) -> (String, String) {
+    let declared = effects.declared_effects.get(function);
+    let roots_of = |e: &crate::effectchecker::Effect| declared_roots_of(effects, declared, e);
+    let inferred = effects
+        .inferred_effects
+        .get(function)
+        .map(|set| effect_set_json_rooted(set, &roots_of))
+        .unwrap_or_else(|| "[]".to_string());
+    let declared_json = match declared {
+        Some(DeclaredEffects::Explicit(set)) => effect_set_json_rooted(set, &roots_of),
+        Some(DeclaredEffects::PolymorphicWithFixed(set)) => format!(
+            "{{\"polymorphic\":true,\"fixed\":{}}}",
+            effect_set_json_rooted(set, &roots_of)
+        ),
+        other => declared_effects_json(other),
+    };
+    (inferred, declared_json)
 }
 
 /// Render a function's `declared_effects` JSON value: `null` (none /
@@ -846,18 +915,14 @@ pub(crate) fn build_effect_graph_json(
         .nodes
         .iter()
         .map(|(key, node)| {
-            let inferred_str = effects
-                .inferred_effects
-                .get(key)
-                .map(effect_set_json)
-                .unwrap_or_else(|| "[]".to_string());
+            let (inferred_str, declared_str) = function_effects_json(effects, key);
             format!(
                 "{{\"function\":{},\"line\":{},\"is_test\":{},\"inferred_effects\":{},\"declared_effects\":{}}}",
                 json_string(key),
                 node.line,
                 node.is_test,
                 inferred_str,
-                declared_effects_json(effects.declared_effects.get(key)),
+                declared_str,
             )
         })
         .collect();

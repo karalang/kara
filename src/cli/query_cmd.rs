@@ -703,9 +703,8 @@ pub(super) fn query_effects(pipeline: &Pipeline, function: &str, filename: &str)
         process::exit(1);
     }
 
-    let inferred_str = inferred
-        .map(crate::effect_graph::effect_set_json)
-        .unwrap_or_else(|| "[]".to_string());
+    let (inferred_str, declared_str) =
+        crate::effect_graph::function_effects_json(effects, function);
     // Why the function has each effect: the call chain to where it
     // happens, one chain per effect in inferred order (design.md § Compiler
     // query API: "each answer includes a derivation chain").
@@ -732,7 +731,7 @@ pub(super) fn query_effects(pipeline: &Pipeline, function: &str, filename: &str)
         "{{\"function\":{},\"inferred_effects\":{},\"declared_effects\":{},\"derivation\":{}}}",
         json_string(function),
         inferred_str,
-        crate::effect_graph::declared_effects_json(declared),
+        declared_str,
         crate::effect_graph::derivation_json(&steps),
     );
 }

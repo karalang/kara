@@ -1,0 +1,4 @@
+// design.md § Value-rooted resources: the query shows the parameter a clause named, beside the class this checker counts (B-2026-11-25-35).
+pub fn put(f: ref File) -> bool with writes(f) blocks { f.write("z".bytes()).is_ok() }
+pub fn snd(tx: ref Sender[i64]) with sends(tx) blocks { let _ = tx.send(1); }
+fn main() { println(1); }

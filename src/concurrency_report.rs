@@ -494,6 +494,7 @@ mod tests {
             unused_effects: Vec::new(),
             inferred_public: Vec::new(),
             fixpoint_chains: Default::default(),
+            declared_roots: Default::default(),
         }
     }
 

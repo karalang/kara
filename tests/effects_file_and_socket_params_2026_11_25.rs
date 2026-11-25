@@ -68,3 +68,32 @@ fn main() { println(1); }
     assert!(text.contains("  receives(Network)\n"), "{text}");
     assert!(!text.contains("sends(Network)"), "{text}");
 }
+
+#[test]
+fn query_effects_shows_the_parameter_a_clause_named() {
+    let src =
+        "pub fn put(f: ref File) -> bool with writes(f) blocks { f.write(\"z\".bytes()).is_ok() }
+pub fn snd(tx: ref Sender[i64]) with sends(tx) blocks { let _ = tx.send(1); }
+fn main() { println(1); }
+";
+    let (out, text) = karac("query-put", src, &["query", "effects", "m.kara.put"]);
+    assert!(out.status.success(), "{text}");
+    assert!(
+        text.contains("\"declared_effects\":[{\"verb\":\"writes\",\"resource\":\"FileSystem\",\"roots\":[\"f\"]}"),
+        "{text}"
+    );
+    assert!(
+        text.contains("{\"verb\":\"writes\",\"resource\":\"FileSystem\",\"roots\":[\"f\"]}"),
+        "{text}"
+    );
+    let (out, text) = karac("query-snd", src, &["query", "effects", "m.kara.snd"]);
+    assert!(out.status.success(), "{text}");
+    assert!(
+        text.contains("\"declared_effects\":[{\"verb\":\"sends\",\"resource\":\"Channel\",\"roots\":[\"tx\"]}"),
+        "{text}"
+    );
+    let (out, text) = karac("query-all", src, &["query", "effects", "m.kara"]);
+    assert!(out.status.success(), "{text}");
+    assert!(text.contains("\"roots\":[\"tx\"]"), "{text}");
+    assert!(text.contains("\"roots\":[\"f\"]"), "{text}");
+}

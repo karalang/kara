@@ -191,6 +191,7 @@ fn empty_effects() -> EffectCheckResult {
         unused_effects: Vec::new(),
         inferred_public: Vec::new(),
         fixpoint_chains: Default::default(),
+        declared_roots: Default::default(),
     }
 }
 

@@ -1113,6 +1113,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   charges the body's operations to; the MIR pass keys them by the value.
   A socket or TLS read is now `receives(Network)` only and a write
   `sends(Network)` only; both carried both (B-2026-11-25-35).
+- `karac query effects` shows the parameter a clause named for an effect
+  it counts as a class: `with sends(tx)` is
+  `{"verb":"sends","resource":"Channel","roots":["tx"]}` in the declared
+  and the inferred list, and `with writes(f)` on a `File` the same with
+  `"roots":["f"]`. A private function with no clause still shows the class
+  alone (B-2026-11-25-35).
 - `a.ref_eq(b)` on two `frozen` handles was refused as an escape; it is
   the compiler's identity test, which keeps neither handle, and is
   accepted (B-2026-11-24-50). The refusal of a struct literal of another
