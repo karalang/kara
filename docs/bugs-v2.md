@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 765 |
-| false-positive | 374 |
+| false-positive | 375 |
 | missing-feature | 256 |
 | perf | 203 |
 | other | 149 |
@@ -84,7 +84,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | ownership | 138 |
 | runtime | 110 |
 | interp | 106 |
-| effect | 64 |
+| effect | 65 |
 | resolver | 57 |
 | other | 53 |
 | codegen | 22 |
@@ -123,14 +123,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-24-49 | 2026-11-24 | typecheck+cli | medium | `karac fix` retypes a Rust `usize` index to `i64` and keeps `i.wrapping_sub(1)` as it was, so the idiom `for j in [i.wrapping_sub(1), i + 1] { if j < n { .. arr[j] } }` no longer skips 0 - 1: on `usize` it wrapped past every length, on `i64` it is -1, passes `j < n`, and the fixed program dies with index out of bounds; `checked_sub` and `saturating_sub` get the floor edit, `wrapping_sub` none | — |
 | B-2026-11-24-52 | 2026-11-24 | cli | low | The `deprecated` warning for a `pub` item of a dependency does not name the defining package, which design.md § `#[deprecated]` says it does so the migration target is clear across re-exports | — |
 | B-2026-11-24-54 | 2026-11-24 | cli | low | `karac check` in a package prints a path dependency's own `deprecated` and `must_use` warnings (`warning[must_use]: /abs/path/lib/src/lib.kara:7:28: discarded return value of `mu``), as if they were the dependent's | — |
-| B-2026-11-25-9 | 2026-11-25 | typecheck | medium | An associated function named by a keyword and called bare, `Handle.type()` / `Handle.match(2)`, fails with `E0516 a type that failed to check is not lowered yet`; design.md 283 says any keyword may name a method or associated function and is usable after `.` (`Handle.r#type()` and keyword-named methods work) | — |
 | B-2026-11-25-10 | 2026-11-25 | resolver | medium | Reserved type names are not reserved everywhere: `fn u8()` and a field named `char` are accepted (and `u8()` calls the user's fn), and `enum MutFn` / `trait OnceFn` are accepted (only `struct Fn` is E0102); design.md 224 says primitive names and `Fn`/`MutFn`/`OnceFn` cannot be declared or bound as names | — |
 | B-2026-11-25-11 | 2026-11-25 | interp | medium | A pointee-changing raw-pointer cast is ignored by the interpreter: `*(c as *const u8)` with `c: *const u32` at `0x0A0B0C0D` reads `168496141`, not the low byte `13` a build reads, and `offset(1)` on the cast pointer fails (no sequence) | — |
 | B-2026-11-25-12 | 2026-11-25 | typecheck+mir-llvm | medium | `#[repr(transparent)] enum Only { V(u16) }` is 4 bytes, align 2, on every lane, and `extern` takes no such enum (E_EXTERN_TYPE_NOT_FFI_SAFE, 'carries data'); design.md 6616/6628 give a single-variant one-field enum its field's layout at every C-ABI boundary (6694 names only structs and distinct types, so the page also needs a ruling) | — |
 | B-2026-11-25-13 | 2026-11-25 | typecheck | medium | An opaque `extern` type accepts `#[derive(Debug)]` and a struct pattern binding a field it cannot have (`match f { CFile { fileno } => .. }` on `ref CFile`); design.md 6811/6812 refuse both (E_OPAQUE_TYPE_NO_FIELDS for patterns, E_OPAQUE_TYPE_NO_INHERENT_OR_TRAIT_IMPLS for derives) | — |
 | B-2026-11-25-14 | 2026-11-25 | typecheck | low | A method call on an opaque type is E_OPAQUE_TYPE_NO_METHODS; design.md 6808 says it gets 'the same diagnostic' as field access, E_OPAQUE_TYPE_NO_FIELDS. The code or the page has drifted (corpus/diagnostics/e_opaque_type_no_methods pins the code) | — |
-| B-2026-11-25-15 | 2026-11-25 | other | low | `#[allow(undocumented_unsafe)]` on an `unsafe { }` block and `#![allow(undocumented_unsafe)]` on a module do not silence the warning; design.md 6284 promises both levels | — |
-| B-2026-11-25-16 | 2026-11-25 | cli | low | Three §15 refusals promise a fix that `karac fix` does not apply: `&x as *const T` (6360: replace with `ptr.const(..)`), `p as usize` (6428: the fix offers `ptr.addr(p)`), and `extern "C-unwind"` imports (6690: E0415 with `"C"` as the fix) | — |
 | B-2026-11-25-19 | 2026-11-25 | typecheck+cli | low | `lossless_cast` misses a widening cast of a `ref` operand in a binary operation or compound assignment: `total += x as i64` and `total + x as i64`, with `x` the `ref i32` that `target.iter()` yields and `total: i64`, pass silently, while `total += n as i64` with `n: i32` and `let z: i64 = x as i64` are linted and `total += x` checks and runs | — |
 | B-2026-11-25-20 | 2026-11-25 | typecheck | low | `at = parent[at]`, with `let mut at = start;` an `i32` from `for start in 0..n` (`n: i32`) and `parent: Vec[i64]`, is refused with E0200 'Write an explicit `as i32`' at the `i64` value: the binding took its type from its first value, and the help names only the narrowing cast, not the binding's type (`let mut at: i64 = start;`), which keeps every value | — |
 | B-2026-11-25-21 | 2026-11-25 | typecheck | low | `lossless_cast` (W0310) on a byte literal operand, `b'z' as i64 - top` with `top: i64`, offers no fix: `lint_unneeded_cast`'s fix-eligible operand kinds list `Integer` but not `ByteLit`, though deleting ` as i64` keeps `b'z'` whole and the subtraction widens it as the warning says | — |
@@ -2293,11 +2290,15 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-25-6 | interp | medium | `String.from_utf8(b"hi")`, an `Array[u8, N]` by value, fails on the interpreter with `expected a sequence, found Agg([Int(104), Int(105)])`; a build… | cb790c4635 |
 | B-2026-11-25-7 | interp | medium | On the interpreter `c"hi"` has no trailing NUL: `*msg.as_ptr().add(2)` is `index 2 out of bounds for length 2`, where a build reads `0` (design.md 50… | 9814e8c4d7 |
 | B-2026-11-25-8 | interp | medium | A `host fn` on native is refused by the interpreter (`labs` is a `host fn`: it runs only in a wasm module whose host provides it); design.md 6869 say… | 07c8ca7b43 |
+| B-2026-11-25-9 | typecheck | medium | An associated function named by a keyword and called bare, `Handle.type()` / `Handle.match(2)`, fails with `E0516 a type that failed to check is not… | 2b4a278d94 |
+| B-2026-11-25-15 | other | low | `#[allow(undocumented_unsafe)]` on an `unsafe { }` block and `#![allow(undocumented_unsafe)]` on a module do not silence the warning; design.md 6284… | 2b4a278d94 |
+| B-2026-11-25-16 | cli | low | Three §15 refusals promise a fix that `karac fix` does not apply: `&x as *const T` (6360: replace with `ptr.const(..)`), `p as usize` (6428: the fix… | 2b4a278d94 |
 | B-2026-11-25-17 | cli | low | `karac explain` of `.discriminant()` on an enum with no `#[repr]` does not say the value is local, not a semver contract (design.md 6563); it prints… | 1b9892c957 |
 | B-2026-11-25-18 | typecheck+cli | low | A `scan` seeded with a negated literal (`arr.iter().rev().scan(-1, \|m, x\| ..)` over `i32` items into a `Vec[i32]`, a running maximum as LeetCode's Ru… | b45cd107b3 |
 | B-2026-11-25-23 | mir+mir-llvm | medium | `mx.max(f)` with `mx: i64` (a literal's default) and `f: ref i32` from an adapted iterator (`flips.iter().rev()`, `.skip(1)`, `.filter(..)`) passes `… | e8e9642865 |
 | B-2026-11-25-28 | typecheck | low | `s.as_str().hash(mut h)` was refused ("no method 'hash' on type 'Str'"), though collections.md § Hashing says a `Str` view hashes as its `String` doe… | 5b52c1c2df |
 | B-2026-11-25-29 | mir-llvm | medium | `==` on a `Map` or `Set` of a user `BuildHasher` was false when compiled, even for a table and its clone (`s == s.clone()`); the interpreter said true | 5b52c1c2df |
+| B-2026-11-25-30 | effect | medium | E0406 refused a call whose function values at one effect variable's positions perform different effects; the spec solves the variable as their union | c655355b2e |
 
 </details>
 
