@@ -1745,6 +1745,10 @@ impl<'a> super::TypeChecker<'a> {
                 .position(|imp| imp.trait_name.is_none() && applies(imp))
                 .or_else(|| self.env.impls.iter().position(applies));
             if let Some(i) = found {
+                if self.env.impls[i].trait_name.is_none() {
+                    let type_name = type_name.clone();
+                    self.check_cross_module_method_access(&type_name, member, span);
+                }
                 let target_generic_args = self.env.impls[i].target_generic_args.clone();
                 let sig = self.env.impls[i].methods[member].clone();
                 // Phase-8 line 96 — associated-function use-site

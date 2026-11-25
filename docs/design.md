@@ -660,6 +660,8 @@ A non-`pub` type in a `pub` signature is `E0221 PrivateTypeInPublicSignature`. D
 
 **Struct fields** use the same three levels ([§5 Structs](#structs)).
 
+**Methods and associated functions** of an inherent `impl` use them too, counted from the module that declares the `impl`: `c.m()`, `Type.m(c)`, `Type.f()` and the value `Type.m` are each `E0111 PrivateItemAccess` where `m` is not visible, as a free function's import is. A trait impl's methods are as visible as the trait.
+
 ### Packages and manifests
 
 `kara.toml` is the package manifest: the single source of package metadata, dependencies and build settings.

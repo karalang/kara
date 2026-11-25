@@ -1268,6 +1268,9 @@ impl<'a> super::TypeChecker<'a> {
 
         match method_pick {
             Some((imp, sig)) => {
+                if imp.trait_name.is_none() {
+                    self.check_cross_module_method_access(&type_name, method, span);
+                }
                 // B-2026-11-06-7: a receiver whose type argument a later use
                 // will fix (`heap.push(x)` on `PriorityQueue.new()`) cannot
                 // have the impl's bounds checked yet; they are checked once

@@ -2090,7 +2090,7 @@ pub(super) fn package_check(
 }
 
 /// A type refusal only a module-aware check makes: a private field read
-/// from another module, a private type in a public signature, and a
+/// or method called from another module, a private type in a public signature, and a
 /// `#[non_exhaustive]` type matched or built from another package. The
 /// combined source has one scope and one package, so its check cannot see
 /// them (B-2026-10-25-46).
@@ -2100,6 +2100,7 @@ fn type_error_is_a_module_boundary_rule(kind: &crate::typechecker::TypeErrorKind
         kind,
         K::PrivateTypeInPublicSignature
             | K::PrivateFieldAccess
+            | K::PrivateMethodAccess
             | K::OrphanImpl
             | K::NonExhaustiveCrossPackageLiteral
             | K::NonExhaustiveCrossPackageMatch

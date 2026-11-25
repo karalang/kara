@@ -890,6 +890,105 @@ impl<'a> super::TypeChecker<'a> {
         })
     }
 
+    /// Emit `E0111` ([`TypeErrorKind::PrivateMethodAccess`]) when a method or
+    /// associated function of an inherent impl of `type_name` is called from
+    /// a module that may not see it: design.md §4's three levels hold for a
+    /// method as for a free function, so a default-visibility one is
+    /// visible in its package and a `private` one in its directory
+    /// (B-2026-11-25-54). A trait's methods are as visible as the trait.
+    /// Without a `ProgramTree`, and for a type no module of the tree
+    /// declares an `impl` of (a library type), the call is allowed.
+    pub(super) fn check_cross_module_method_access(
+        &mut self,
+        type_name: &str,
+        method: &str,
+        span: &Span,
+    ) {
+        let Some(tree) = self.tree else { return };
+        let Some(current) = self.current_module else {
+            return;
+        };
+        let canonical = self
+            .type_origins
+            .get(type_name)
+            .map_or(type_name, |(_, name, _)| name.as_str())
+            .to_string();
+        let mut refusals = Vec::new();
+        for m in tree.modules.iter().filter(|m| !m.is_synthetic) {
+            for item in &m.items {
+                let Item::ImplBlock(imp) = item else { continue };
+                if imp.trait_name.is_some() {
+                    continue;
+                }
+                let TypeKind::Path(path) = &imp.target_type.kind else {
+                    continue;
+                };
+                if path.segments.last() != Some(&canonical) {
+                    continue;
+                }
+                for it in &imp.items {
+                    let ImplItem::Method(f) = it else { continue };
+                    if f.name != method {
+                        continue;
+                    }
+                    if f.is_pub || m.path == tree.module(current).path {
+                        return;
+                    }
+                    match self.method_visibility_refusal(tree, &m.path, current, f.is_private) {
+                        Some(why) => refusals.push(why),
+                        None => return,
+                    }
+                }
+            }
+        }
+        if let Some(why) = refusals.into_iter().next() {
+            self.type_error(
+                format!("`{canonical}.{method}` {why}"),
+                *span,
+                TypeErrorKind::PrivateMethodAccess,
+            );
+        }
+    }
+
+    /// Why a method declared in module `origin_path` is not visible from
+    /// `current`, worded as a free function's `E0111` is, or `None` when it
+    /// is.
+    fn method_visibility_refusal(
+        &self,
+        tree: &crate::module::ProgramTree,
+        origin_path: &[String],
+        current: crate::module::ModuleId,
+        private: bool,
+    ) -> Option<String> {
+        let current_path = &tree.module(current).path;
+        let dir = |p: &[String]| p[..p.len().saturating_sub(1)].to_vec();
+        let label = if origin_path.is_empty() {
+            "(package root)".to_string()
+        } else {
+            origin_path.join(".")
+        };
+        if private {
+            return (dir(origin_path) != dir(current_path)).then(|| {
+                format!(
+                    "in module `{label}` is `private` — visible only to files in the same \
+                     directory"
+                )
+            });
+        }
+        let package = |id: crate::module::ModuleId| tree.module(id).package.clone();
+        let origin_pkg = tree
+            .graph
+            .by_path
+            .get::<[String]>(origin_path)
+            .and_then(|&id| package(id));
+        (origin_pkg != package(current)).then(|| {
+            format!(
+                "in package `{}` is not `pub` — only `pub` items can be used across packages",
+                origin_pkg.as_deref().unwrap_or("<root package>")
+            )
+        })
+    }
+
     /// Whether type `name`, marked `#[non_exhaustive]` or not, is seen from
     /// outside the package that defines it: a library type from a user
     /// function, or a type of another package of the tree (B-2026-11-07-23).

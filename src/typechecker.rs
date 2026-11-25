@@ -1399,6 +1399,11 @@ pub enum TypeErrorKind {
     /// `E0111 PrivateItemAccess`, which §4 names for direct access to an
     /// invisible item (B-2026-11-04-46; it was coded E0221).
     PrivateFieldAccess,
+    /// A method of an inherent impl the calling module may not see: a
+    /// default-visibility one from another package, or a `private` one from
+    /// another directory, as for a free function (design.md §4 Visibility,
+    /// B-2026-11-25-54). Coded `E0111 PrivateItemAccess`.
+    PrivateMethodAccess,
     /// A `ScopeLocal` marker-trait type (e.g. `TaskHandle[T]`) appears
     /// in an escape position — function return type, struct/enum field
     /// type, or as the argument to `Sender.send`. The handle is bound to
@@ -2010,6 +2015,7 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::UnsupportedNumericSuffix
         | TypeErrorKind::PrivateTypeInPublicSignature
         | TypeErrorKind::PrivateFieldAccess
+        | TypeErrorKind::PrivateMethodAccess
         | TypeErrorKind::ConflictingImpl
         | TypeErrorKind::OrphanImpl
         | TypeErrorKind::NonExhaustiveCrossPackageLiteral

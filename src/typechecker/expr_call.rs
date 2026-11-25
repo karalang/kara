@@ -3538,6 +3538,9 @@ impl<'a> super::TypeChecker<'a> {
                 .map(|_| (segments[0].clone(), segments[1].clone())),
             _ => None,
         };
+        if let Some((t, m)) = &assoc_impl_call {
+            self.check_cross_module_method_access(t, m, &callee.span);
+        }
 
         // The free fn's own generic parameters, for a function-trait bound
         // that mentions one no parameter or return type does (`U` in

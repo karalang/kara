@@ -20,6 +20,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Programs 0.8.1 accepted that are now refused
 
+- A method or associated function of an inherent `impl` follows the three
+  levels of visibility a free function does (design.md §4 Visibility): a
+  default one called from another package, or a `private` one from another
+  directory, is `E0111`, as a method call, `Type.m(x)`, `Type.f()` or the
+  value `Type.m`. 0.8.1 let any module call any of them, so a library could
+  not keep a helper method out of its API. No program in the corpus called
+  one across that line (B-2026-11-25-54).
 - Two `par` branches that each sort, clone or dedup a `Vec` of a program
   type, or file or look up its key in a `Map` or `Set`, conflict when that
   type's `cmp`, `clone`, `eq` or `hash` writes a resource: the branch is

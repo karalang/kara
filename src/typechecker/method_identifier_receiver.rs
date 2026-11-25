@@ -704,6 +704,7 @@ impl<'a> super::TypeChecker<'a> {
                 // § Method Resolution Step 3. Multi-inherent / multi-trait
                 // ambiguity detection (Step 4) is deferred.
                 if let Some(mut sig) = self.env.find_method(type_name, &[], method).cloned() {
+                    self.check_cross_module_method_access(type_name, method, span);
                     // A trait's default body is written against `Self`, which
                     // is the implementing type (design.md § Declarations and
                     // impls); a struct receiver gets it substituted on its
@@ -1153,6 +1154,11 @@ impl<'a> super::TypeChecker<'a> {
                     .into_iter()
                     .map(|(imp, sig)| (imp.clone_without_methods(), sig.clone()))
                     .collect();
+                if let [(imp, _)] = candidates.as_slice() {
+                    if imp.trait_name.is_none() {
+                        self.check_cross_module_method_access(&type_name, method, span);
+                    }
+                }
                 // Slice 5C of the method-resolution CR — see
                 // `phase-4-interpreter.md` § method-resolution sub-item 5C.
                 // `find_methods_with_args` already applies the inherent-

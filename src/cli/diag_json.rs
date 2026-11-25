@@ -3353,6 +3353,7 @@ pub(crate) fn type_error_code(kind: &crate::typechecker::TypeErrorKind) -> &'sta
         crate::typechecker::TypeErrorKind::UnsupportedNumericSuffix => "E0220",
         crate::typechecker::TypeErrorKind::PrivateTypeInPublicSignature => "E0221",
         crate::typechecker::TypeErrorKind::PrivateFieldAccess => "E0111",
+        crate::typechecker::TypeErrorKind::PrivateMethodAccess => "E0111",
         crate::typechecker::TypeErrorKind::RefutablePattern => "E0222",
         crate::typechecker::TypeErrorKind::MissingSupertrait => "E0229",
         crate::typechecker::TypeErrorKind::TraitBoundNotSatisfied => "E0232",
