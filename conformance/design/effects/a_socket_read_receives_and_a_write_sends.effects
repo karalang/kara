@@ -1,0 +1,5 @@
+rd has receives(Network), blocks
+rd lacks sends(Network)
+wr has sends(Network), blocks
+wr lacks receives(Network)
+dial has sends(Network), receives(Network)

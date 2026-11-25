@@ -212,7 +212,7 @@ impl TlsListener {
     // starve the rest. (The managed `Server.serve` / `serve_tls` paths
     // do this hardening internally — see phase-8 line 124.)
     #[compiler_builtin]
-    fn accept(ref self) -> Result[TlsStream, TlsError] with sends(Network) receives(Network) {
+    fn accept(ref self) -> Result[TlsStream, TlsError] with receives(Network) {
         Result.Err(TlsError.Protocol(-1))
     }
 }
@@ -261,7 +261,7 @@ impl TlsStream {
     // executes — codegen replaces via `lower_tls_stream_read`.
     #[compiler_builtin]
     fn read(ref self, buf: mut Slice[u8]) -> Result[i64, TlsError]
-        with sends(Network) receives(Network)
+        with receives(Network)
     {
         Result.Err(TlsError.Protocol(-1))
     }
@@ -276,7 +276,7 @@ impl TlsStream {
     // executes — codegen replaces via `lower_tls_stream_write`.
     #[compiler_builtin]
     fn write(ref self, buf: Slice[u8]) -> Result[i64, TlsError]
-        with sends(Network) receives(Network)
+        with sends(Network)
     {
         Result.Err(TlsError.Protocol(-1))
     }
@@ -292,7 +292,7 @@ impl TlsStream {
     // `lower_tls_stream_write_all`.
     #[compiler_builtin]
     fn write_all(ref self, buf: Slice[u8]) -> Result[i64, TlsError]
-        with sends(Network) receives(Network)
+        with sends(Network)
     {
         Result.Err(TlsError.Protocol(-1))
     }

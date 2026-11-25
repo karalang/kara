@@ -1,0 +1,5 @@
+// io.md § Effects: `conn.read(mut buf)` has `receives(conn)`, a write sends; a read is not a send (B-2026-11-25-35).
+fn rd(c: ref TcpStream) -> bool { let mut b = [0u8; 1]; c.read(mut b).is_ok() }
+fn wr(c: ref TcpStream) -> bool { c.write("x".bytes()).is_ok() }
+fn dial() -> bool { TcpStream.connect("127.0.0.1:1").is_ok() }
+fn main() { println(dial()); }

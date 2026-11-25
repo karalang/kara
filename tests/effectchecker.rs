@@ -6637,9 +6637,7 @@ fn tcp_tls_ws_network_effects_propagate_to_callers() {
     "#;
     let result = effectcheck_full_pipeline(src);
     for fn_name in [
-        "tcp_accept_caller",
         "tcp_io_caller",
-        "tls_accept_caller",
         "tls_connect_caller",
         "tls_io_caller",
         "ws_accept_caller",
@@ -6649,6 +6647,19 @@ fn tcp_tls_ws_network_effects_propagate_to_callers() {
             caller_has_network_pair(&result, fn_name),
             "{fn_name} must propagate sends+receives(Network): {:?}",
             result.inferred_effects.get(fn_name).map(|s| &s.effects),
+        );
+    }
+    // An accept only receives (io.md: `accept` has `receives(self)`); it was
+    // charged a send too until B-2026-11-25-35.
+    for fn_name in ["tcp_accept_caller", "tls_accept_caller"] {
+        let set = &result.inferred_effects[fn_name].effects;
+        let has = |v: EffectVerbKind| {
+            set.iter()
+                .any(|te| te.effect.verb == v && te.effect.resource == "Network")
+        };
+        assert!(
+            has(EffectVerbKind::Receives) && !has(EffectVerbKind::Sends),
+            "{fn_name} must propagate receives(Network) only: {set:?}"
         );
     }
 }

@@ -1514,6 +1514,11 @@ pub struct EffectChecker<'a> {
     /// does not charge: every one whose type is not a channel endpoint
     /// (B-2026-10-31-9). See `parse_effect_list`.
     pub(crate) uncharged_root_params: Vec<String>,
+    /// The parameters of that signature whose type is a file or a
+    /// connection, with the class a resource rooted at one collapses to
+    /// (`writes(f)` on an `f: ref File` is `writes(FileSystem)`;
+    /// B-2026-11-25-35).
+    pub(crate) class_root_params: Vec<(String, &'static str)>,
     /// Functions and their AST bodies (for inference). [`FnHandle`]
     /// borrows the AST directly (the SCC convergence loop and
     /// whole-program walks clone the HANDLE, never the body — review
@@ -1886,6 +1891,7 @@ impl<'a> EffectChecker<'a> {
             channel_param_names: std::collections::HashSet::new(),
             self_is_channel_endpoint: false,
             uncharged_root_params: Vec::new(),
+            class_root_params: Vec::new(),
             function_bodies: FxHashMap::default(),
             method_bodies: FxHashMap::default(),
             method_name_index: FxHashMap::default(),
@@ -2658,52 +2664,68 @@ impl<'a> EffectChecker<'a> {
                 verb: EffectVerbKind::Receives,
                 resource: "Network".to_string(),
             };
-            for fn_name in [
+            // io.md § Effects: a read is a receive and a write is a send
+            // (`conn.read(mut buf)` has `receives(conn)`); opening a
+            // connection, a request and a server do both (B-2026-11-25-35:
+            // every entry here carried both until then).
+            #[derive(Clone, Copy)]
+            enum Dir {
+                Both,
+                Receives,
+                Sends,
+            }
+            for (fn_name, dir) in [
                 // std.http client + server
-                "Client.get",
-                "Client.post",
-                "RequestBuilder.send",
-                "Server.serve",
-                "Server.serve_tls",
-                "Server.serve_static",
+                ("Client.get", Dir::Both),
+                ("Client.post", Dir::Both),
+                ("RequestBuilder.send", Dir::Both),
+                ("Server.serve", Dir::Both),
+                ("Server.serve_tls", Dir::Both),
+                ("Server.serve_static", Dir::Both),
                 // std.tcp
-                "TcpListener.accept",
-                "TcpStream.connect",
-                "TcpStream.read",
-                "TcpStream.write",
-                "TcpStream.write_all",
-                "TcpStream.read_to_end",
+                ("TcpListener.accept", Dir::Receives),
+                ("TcpStream.connect", Dir::Both),
+                ("TcpStream.read", Dir::Receives),
+                ("TcpStream.write", Dir::Sends),
+                ("TcpStream.write_all", Dir::Sends),
+                ("TcpStream.read_to_end", Dir::Receives),
                 // std.tls
-                "TlsListener.accept",
-                "TlsStream.connect",
-                "TlsStream.read",
-                "TlsStream.write",
-                "TlsStream.write_all",
-                "TlsStream.read_to_end",
+                ("TlsListener.accept", Dir::Receives),
+                ("TlsStream.connect", Dir::Both),
+                ("TlsStream.read", Dir::Receives),
+                ("TlsStream.write", Dir::Sends),
+                ("TlsStream.write_all", Dir::Sends),
+                ("TlsStream.read_to_end", Dir::Receives),
                 // A buffer over a connection (B-2026-11-10-14): the
                 // `MethodCall` arm keys a call on one this way.
-                "BufReader[TcpStream].read_line",
-                "BufReader[TcpStream].read_to_string",
-                "BufReader[TcpStream].read",
-                "BufReader[TcpStream].read_exact",
-                "BufReader[TcpStream].lines",
-                "BufReader[TcpStream].fill_buf",
-                "BufWriter[TcpStream].write",
-                "BufWriter[TcpStream].write_all",
-                "BufWriter[TcpStream].flush",
-                // WebSocket
-                "WebSocket.accept",
-                "WebSocket.accept_tls",
-                "WebSocket.recv_text",
-                "WebSocket.send_text",
-                "WebSocket.recv_binary",
-                "WebSocket.send_binary",
-                "WebSocket.send_text_masked",
-                "WebSocket.send_binary_masked",
+                ("BufReader[TcpStream].read_line", Dir::Receives),
+                ("BufReader[TcpStream].read_to_string", Dir::Receives),
+                ("BufReader[TcpStream].read", Dir::Receives),
+                ("BufReader[TcpStream].read_exact", Dir::Receives),
+                ("BufReader[TcpStream].lines", Dir::Receives),
+                ("BufReader[TcpStream].fill_buf", Dir::Receives),
+                ("BufWriter[TcpStream].write", Dir::Sends),
+                ("BufWriter[TcpStream].write_all", Dir::Sends),
+                ("BufWriter[TcpStream].flush", Dir::Sends),
+                // WebSocket: the handshake answers the request and a
+                // receive answers pings, so both send too (io.md: `recv` has
+                // `receives(self) sends(self)`).
+                ("WebSocket.accept", Dir::Both),
+                ("WebSocket.accept_tls", Dir::Both),
+                ("WebSocket.recv_text", Dir::Both),
+                ("WebSocket.send_text", Dir::Sends),
+                ("WebSocket.recv_binary", Dir::Both),
+                ("WebSocket.send_binary", Dir::Sends),
+                ("WebSocket.send_text_masked", Dir::Sends),
+                ("WebSocket.send_binary_masked", Dir::Sends),
             ] {
                 let mut set = EffectSet::new();
-                set.add(sends_network.clone(), EffectOrigin::Direct(builtin_span));
-                set.add(receives_network.clone(), EffectOrigin::Direct(builtin_span));
+                if matches!(dir, Dir::Both | Dir::Sends) {
+                    set.add(sends_network.clone(), EffectOrigin::Direct(builtin_span));
+                }
+                if matches!(dir, Dir::Both | Dir::Receives) {
+                    set.add(receives_network.clone(), EffectOrigin::Direct(builtin_span));
+                }
                 self.inferred_effects
                     .insert(self.interner.intern(fn_name), set);
             }
@@ -3506,14 +3528,17 @@ impl<'a> EffectChecker<'a> {
         self_type: Option<&str>,
     ) -> DeclaredEffects {
         let channel = crate::ast::channel_endpoint_param_names(params);
+        self.class_root_params = crate::ast::handle_class_param_names(params);
         self.uncharged_root_params = crate::ast::value_root_param_names(params)
             .into_iter()
             .filter(|p| !channel.contains(p))
+            .filter(|p| !self.class_root_params.iter().any(|(c, _)| c == p))
             .collect();
         self.self_is_channel_endpoint =
             self_type.is_some_and(|t| crate::ast::CHANNEL_ENDPOINT_TYPE_HEADS.contains(&t));
         let decl = self.parse_effect_list(effects);
         self.uncharged_root_params.clear();
+        self.class_root_params.clear();
         self.self_is_channel_endpoint = false;
         decl
     }
@@ -3560,6 +3585,21 @@ impl<'a> EffectChecker<'a> {
                         // the clause states it and callers inherit nothing.
                         let root = resource.path.first().map(String::as_str);
                         if root.is_some_and(|r| self.uncharged_root_params.iter().any(|p| p == r)) {
+                            continue;
+                        }
+                        // A file or a connection parameter: the class this
+                        // checker charges the body's operations on it to
+                        // (B-2026-11-25-35).
+                        if let Some(&(_, class)) =
+                            root.and_then(|r| self.class_root_params.iter().find(|(p, _)| p == r))
+                        {
+                            result.add(
+                                Effect {
+                                    verb: verb.kind.clone(),
+                                    resource: class.to_string(),
+                                },
+                                EffectOrigin::Direct(verb.span),
+                            );
                             continue;
                         }
                         if root == Some("self") {

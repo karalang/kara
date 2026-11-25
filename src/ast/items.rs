@@ -14651,6 +14651,41 @@ pub fn value_root_param_names(params: &[Param]) -> Vec<String> {
         .collect()
 }
 
+/// The capability class the effect checker charges an operation on a value
+/// of this type to: `File` (and a buffer over one) is `FileSystem`, a socket
+/// or a connection is `Network` (B-2026-11-25-35). A resource rooted at a
+/// parameter of such a type (`writes(f)` on an `f: ref File`) collapses to
+/// that class here, as a channel parameter collapses to `Channel`: the MIR
+/// effect pass keys the operation by the value, and the class is the sound
+/// direction for this checker, which has no per-value identity.
+pub fn type_handle_class(ty: &TypeExpr) -> Option<&'static str> {
+    match &ty.kind {
+        crate::ast::TypeKind::Path(p) => match p.segments.last().map(String::as_str)? {
+            "File" => Some("FileSystem"),
+            "TcpStream" | "TcpListener" | "TlsStream" | "TlsListener" | "UdpSocket"
+            | "WebSocket" => Some("Network"),
+            "BufReader" | "BufWriter" => match p.generic_args.as_deref() {
+                Some([GenericArg::Type(inner)]) => type_handle_class(inner),
+                _ => None,
+            },
+            _ => None,
+        },
+        crate::ast::TypeKind::Ref(inner) | crate::ast::TypeKind::MutRef(inner) => {
+            type_handle_class(inner)
+        }
+        _ => None,
+    }
+}
+
+/// The parameters whose type is a handle with a capability class, each with
+/// its class ([`type_handle_class`]).
+pub fn handle_class_param_names(params: &[Param]) -> Vec<(String, &'static str)> {
+    params
+        .iter()
+        .filter_map(|p| Some((p.name()?.to_string(), type_handle_class(&p.ty)?)))
+        .collect()
+}
+
 /// True when the type's root head (after stripping `ref` / `mut ref` / `weak`)
 /// is a channel endpoint.
 pub fn type_head_is_channel_endpoint(ty: &TypeExpr) -> bool {

@@ -1096,6 +1096,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 - A conflicting access to a `shared` field through another handle is now
   recorded in the panic record with kind `borrow_conflict`, not
   `explicit`, on compiled programs and the interpreter (B-2026-11-25-25).
+- A `pub fn` over a file or a connection can declare the resource rooted
+  at the parameter, as design.md § Value-rooted resources and io.md say:
+  `with writes(f)` on an `f: ref File`, `receives(c)` / `sends(c)` on a
+  `c: ref TcpStream`. It was refused with E0400 asking for
+  `writes(FileSystem)`. The front-end checker counts it as the class it
+  charges the body's operations to; the MIR pass keys them by the value.
+  A socket or TLS read is now `receives(Network)` only and a write
+  `sends(Network)` only; both carried both (B-2026-11-25-35).
 - `a.ref_eq(b)` on two `frozen` handles was refused as an escape; it is
   the compiler's identity test, which keeps neither handle, and is
   accepted (B-2026-11-24-50). The refusal of a struct literal of another

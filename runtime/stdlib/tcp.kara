@@ -159,7 +159,7 @@ impl TcpListener {
     // `emit_state_machine_invocation_for_park_on_fd` codegen
     // helper to thread their yield points through the same primitive.
     #[compiler_builtin]
-    fn accept(ref self) -> Result[TcpStream, TcpError] with sends(Network) receives(Network) {
+    fn accept(ref self) -> Result[TcpStream, TcpError] with receives(Network) {
         Result.Err(TcpError.Other(-1))
     }
 }
@@ -228,7 +228,7 @@ impl TcpStream {
     // replaces the call via `lower_tcp_stream_read`.
     #[compiler_builtin]
     fn read(ref self, buf: mut Slice[u8]) -> Result[i64, TcpError]
-        with sends(Network) receives(Network)
+        with receives(Network)
     {
         Result.Err(TcpError.Other(-1))
     }
@@ -240,7 +240,7 @@ impl TcpStream {
     // `direction = 1u8` (Write).
     #[compiler_builtin]
     fn write(ref self, buf: Slice[u8]) -> Result[i64, TcpError]
-        with sends(Network) receives(Network)
+        with sends(Network)
     {
         Result.Err(TcpError.Other(-1))
     }
@@ -263,7 +263,7 @@ impl TcpStream {
     // above.
     #[compiler_builtin]
     fn write_all(ref self, buf: Slice[u8]) -> Result[i64, TcpError]
-        with sends(Network) receives(Network)
+        with sends(Network)
     {
         Result.Err(TcpError.Other(-1))
     }

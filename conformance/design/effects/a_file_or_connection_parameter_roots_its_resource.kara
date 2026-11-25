@@ -1,0 +1,5 @@
+// design.md § Value-rooted resources: a `pub fn` over a file or a connection declares the resource rooted at the parameter (B-2026-11-25-35).
+pub fn put(f: ref File) -> bool with writes(f) blocks { f.write("z".bytes()).is_ok() }
+pub fn rd(c: ref TcpStream) -> bool with receives(c) blocks suspends { let mut b = [0u8; 1]; c.read(mut b).is_ok() }
+pub fn wr(c: ref TcpStream) -> bool with sends(c) blocks suspends { c.write("x".bytes()).is_ok() }
+fn main() { println("ok"); }

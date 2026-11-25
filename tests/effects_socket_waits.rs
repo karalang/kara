@@ -68,7 +68,8 @@ fn undeclared_tcp_read_asks_for_blocks_and_suspends() {
              }
          }
          fn main() {}",
-        &["Add: with blocks receives(Network) sends(Network) suspends"],
+        // A read only receives (io.md § Effects; B-2026-11-25-35).
+        &["Add: with blocks receives(Network) suspends"],
     );
 }
 

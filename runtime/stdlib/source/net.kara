@@ -150,7 +150,7 @@ impl TcpListener {
     }
 
     #[compiler_builtin]
-    fn accept(ref self) -> Result[TcpStream, NetError] with sends(Network) receives(Network) blocks suspends {
+    fn accept(ref self) -> Result[TcpStream, NetError] with receives(Network) blocks suspends {
         Err(NetError.Other(-1))
     }
 
@@ -179,12 +179,12 @@ impl TcpStream {
     }
 
     #[compiler_builtin]
-    fn read(ref self, buf: mut Slice[u8]) -> Result[i64, NetError] with sends(Network) receives(Network) blocks suspends {
+    fn read(ref self, buf: mut Slice[u8]) -> Result[i64, NetError] with receives(Network) blocks suspends {
         Err(NetError.Other(-1))
     }
 
     #[compiler_builtin]
-    fn write(ref self, buf: Slice[u8]) -> Result[i64, NetError] with sends(Network) receives(Network) blocks suspends {
+    fn write(ref self, buf: Slice[u8]) -> Result[i64, NetError] with sends(Network) blocks suspends {
         Err(NetError.Other(-1))
     }
 
@@ -192,7 +192,7 @@ impl TcpStream {
     // goes round again, and so does `Interrupted`. Inside a task each
     // `write` suspends on its own, so one that would block keeps the bytes
     // already sent (M4 item 2).
-    fn write_all(ref self, buf: Slice[u8]) -> Result[i64, NetError] with sends(Network) receives(Network) blocks suspends {
+    fn write_all(ref self, buf: Slice[u8]) -> Result[i64, NetError] with sends(Network) blocks suspends {
         let mut done = 0;
         while done < buf.len() {
             match self.write(buf[done..buf.len()]) {
@@ -209,7 +209,7 @@ impl TcpStream {
     // again, and so does `Interrupted`; a read of 0 before then is
     // `UnexpectedEof` (io.md, B-2026-11-10-44). After an error `buf` starts
     // with the bytes read so far.
-    fn read_exact(ref self, buf: mut Slice[u8]) -> Result[(), NetError] with sends(Network) receives(Network) blocks suspends {
+    fn read_exact(ref self, buf: mut Slice[u8]) -> Result[(), NetError] with receives(Network) blocks suspends {
         let mut done = 0;
         while done < buf.len() {
             match self.read(mut buf[done..]) {
@@ -226,7 +226,7 @@ impl TcpStream {
     // until it returns 0; `Interrupted` goes round again. The count read;
     // after an error `buf` ends with the bytes read so far (io.md,
     // B-2026-11-13-73).
-    fn read_to_end(ref self, buf: mut ref Vec[u8]) -> Result[i64, NetError] with sends(Network) receives(Network) blocks suspends {
+    fn read_to_end(ref self, buf: mut ref Vec[u8]) -> Result[i64, NetError] with receives(Network) blocks suspends {
         let mut chunk = [0u8; 8192];
         let mut done = 0;
         loop {
@@ -323,7 +323,7 @@ impl TlsListener {
     }
 
     #[compiler_builtin]
-    fn accept(ref self) -> Result[TlsStream, NetError] with sends(Network) receives(Network) blocks suspends {
+    fn accept(ref self) -> Result[TlsStream, NetError] with receives(Network) blocks suspends {
         Err(NetError.Other(-1))
     }
 
@@ -341,17 +341,17 @@ impl TlsStream {
     }
 
     #[compiler_builtin]
-    fn read(ref self, buf: mut Slice[u8]) -> Result[i64, NetError] with sends(Network) receives(Network) blocks suspends {
+    fn read(ref self, buf: mut Slice[u8]) -> Result[i64, NetError] with receives(Network) blocks suspends {
         Err(NetError.Other(-1))
     }
 
     #[compiler_builtin]
-    fn write(ref self, buf: Slice[u8]) -> Result[i64, NetError] with sends(Network) receives(Network) blocks suspends {
+    fn write(ref self, buf: Slice[u8]) -> Result[i64, NetError] with sends(Network) blocks suspends {
         Err(NetError.Other(-1))
     }
 
     // As `TcpStream.write_all`.
-    fn write_all(ref self, buf: Slice[u8]) -> Result[i64, NetError] with sends(Network) receives(Network) blocks suspends {
+    fn write_all(ref self, buf: Slice[u8]) -> Result[i64, NetError] with sends(Network) blocks suspends {
         let mut done = 0;
         while done < buf.len() {
             match self.write(buf[done..buf.len()]) {
@@ -365,7 +365,7 @@ impl TlsStream {
     }
 
     // As `TcpStream.read_to_end`: up to the peer's `close_notify`.
-    fn read_to_end(ref self, buf: mut ref Vec[u8]) -> Result[i64, NetError] with sends(Network) receives(Network) blocks suspends {
+    fn read_to_end(ref self, buf: mut ref Vec[u8]) -> Result[i64, NetError] with receives(Network) blocks suspends {
         let mut chunk = [0u8; 8192];
         let mut done = 0;
         loop {
@@ -384,7 +384,7 @@ impl TlsStream {
     // As `TcpStream.read_exact`. A peer that sends `close_notify` before
     // `buf` is full is `UnexpectedEof`; one gone without it is
     // `Tls(UnexpectedClose)`, as for `read`.
-    fn read_exact(ref self, buf: mut Slice[u8]) -> Result[(), NetError] with sends(Network) receives(Network) blocks suspends {
+    fn read_exact(ref self, buf: mut Slice[u8]) -> Result[(), NetError] with receives(Network) blocks suspends {
         let mut done = 0;
         while done < buf.len() {
             match self.read(mut buf[done..]) {

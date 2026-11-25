@@ -4,7 +4,7 @@ Status: covered, partial, FAILS (filed, the row named), not testable. Cell names
 
 Run with `python3 conformance/cases.py conformance/design/effects` and, for the two package cells, `python3 conformance/packages.py conformance/design/modules`. Kinds this directory adds to cases.py: `.effects` (the sets `karac query effects` infers), `.cmd` (a karac command's output), `.json` (a predicate over a JSON document), `.notes` and `.absent` (text `karac check` must or must not print).
 
-**Totals (2026-11-24):** 219 normative sentences, 204 covered, 5 partial, 10 not testable. Two of the covered failed when the audit started and are fixed with it: a `par` branch was not charged the program impls a native runs on what it holds (B-2026-11-24-44), and a function declaring a keyed resource was charged nothing for it (B-2026-11-24-45). 39 sentences had no cell before the audit; the rest were covered by the earlier pass, the probe's sweep and the Rust suites.
+**Totals (2026-11-24):** 219 normative sentences, 205 covered, 4 partial, 10 not testable. Two of the covered failed when the audit started and are fixed with it: a `par` branch was not charged the program impls a native runs on what it holds (B-2026-11-24-44), and a function declaring a keyed resource was charged nothing for it (B-2026-11-24-45). 39 sentences had no cell before the audit; the rest were covered by the earlier pass, the probe's sweep and the Rust suites.
 
 ## Introduction
 
@@ -74,7 +74,7 @@ Run with `python3 conformance/cases.py conformance/design/effects` and, for the 
 | 5339 | `Stderr`: `writes` | covered | built_in_resources_clock_randomsource_env_stderr |
 | 5340 | `Clock`: `reads` | covered | built_in_resources_clock_randomsource_env_stderr |
 | 5341 | `Env`: `reads` / `writes` | covered | built_in_resources_clock_randomsource_env_stderr, builtin_resource_verbs (new: `env.set` writes) |
-| 5342 | `Network`: `sends` / `receives` | partial | builtin_resource_verbs (new: `sends(Network)` on connect); `receives(Network)` on a read needs a peer, tests/effects_socket_waits.rs |
+| 5342 | `Network`: `sends` / `receives` | covered | builtin_resource_verbs (new: `sends(Network)` on connect), a_socket_read_receives_and_a_write_sends (new: a read receives only, a write sends only; B-2026-11-25-35, fixed) |
 | 5343 | `RandomSource`: `writes` | covered | built_in_resources_clock_randomsource_env_stderr |
 | 5344 | `Heap`: `allocates` | covered | allocation_is_inferred_as_allocates_heap |
 | 5346 | Two `par` branches that both print conflict | covered | two_par_branches_that_both_print_conflict |
@@ -90,7 +90,7 @@ Run with `python3 conformance/cases.py conformance/design/effects` and, for the 
 |---|---|---|---|
 | 5357 | Two channels, connections or files are two resources | covered | two_channels_are_two_resources_par_over_separate, two_files_written_in_two_branches_ok (new) |
 | 5358 | When the compiler cannot tell two values apart, they conflict | covered | values_not_known_apart_conflict_refused (new) |
-| 5359 | A parameter-rooted resource is substituted by the argument at each call | covered | two_channels_are_two_resources_par_over_separate, one_channel_in_two_branches_is_a_conflict |
+| 5359 | A parameter-rooted resource is substituted by the argument at each call | covered | two_channels_are_two_resources_par_over_separate, one_channel_in_two_branches_is_a_conflict, a_file_or_connection_parameter_roots_its_resource (new: `writes(f)` on a `File`, `receives(c)` / `sends(c)` on a `TcpStream`, which this checker counts as the class; B-2026-11-25-35, fixed), a_file_parameter_rooted_write_does_not_cover_a_read_refused (new) |
 | 5360 | Effects on a function's own locals never appear in its signature | covered | effects_on_a_function_s_own_locals_are_not_effects_of |
 | 5360 | Inside its body they still decide which branches conflict | covered | one_channel_in_two_branches_is_a_conflict |
 | 5361 | A function type writes `sends(Channel)` / `receives(Channel)` | covered | fn_type_clause_names_some_channel (new); tests/channel_effect_clause.rs |

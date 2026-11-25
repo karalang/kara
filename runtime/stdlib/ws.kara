@@ -212,7 +212,7 @@ impl WebSocket {
     // or a per-WebSocket-instance side flag.
     #[compiler_builtin]
     fn send_text(ref self, msg: Slice[u8]) -> Result[i64, TcpError]
-        with sends(Network) receives(Network)
+        with sends(Network)
     {
         Result.Err(TcpError.Other(-1))
     }
@@ -238,7 +238,7 @@ impl WebSocket {
 
     #[compiler_builtin]
     fn send_binary(ref self, msg: Slice[u8]) -> Result[i64, TcpError]
-        with sends(Network) receives(Network)
+        with sends(Network)
     {
         Result.Err(TcpError.Other(-1))
     }
@@ -260,14 +260,14 @@ impl WebSocket {
     // surface changes.
     #[compiler_builtin]
     fn send_text_masked(ref self, msg: Slice[u8]) -> Result[i64, TcpError]
-        with sends(Network) receives(Network)
+        with sends(Network)
     {
         Result.Err(TcpError.Other(-1))
     }
 
     #[compiler_builtin]
     fn send_binary_masked(ref self, msg: Slice[u8]) -> Result[i64, TcpError]
-        with sends(Network) receives(Network)
+        with sends(Network)
     {
         Result.Err(TcpError.Other(-1))
     }
