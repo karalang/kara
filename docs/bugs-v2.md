@@ -134,7 +134,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-25-24 | 2026-11-25 | mir-llvm | medium | `karac run` (and `--interp`) ignore the package profile's `runtime_debug_metadata`: `has_debug_metadata()` is true under `karac run` with `[profile.dev] runtime_debug_metadata = false`, false under `--interp` always, while `karac build` honors the key | — |
 | B-2026-11-25-25 | 2026-11-25 | mir-llvm | low | A `shared` field's borrow conflict panics with panic-record kind `explicit`, not `borrow_conflict`, on the JIT and the MIR interpreter | — |
 | B-2026-11-25-26 | 2026-11-25 | mir | low | `..mut ref rest` over a `mut ref Array[T, N]` is refused E0516 ('not lowered yet'): the checker types `rest` as `mut ref Array[T, K]`, which needs a sub-array place (remainder of B-2026-11-25-1) | — |
-| B-2026-11-25-27 | 2026-11-25 | interp | medium | `karac run --interp` aborts with a Rust stack overflow (exit 134, 'thread has overflowed its stack') dropping a 1,000,000-node `shared` chain; `karac run` (JIT) and a built binary drop it, as design.md §16 promises (no frames per level, B-2026-11-16-311) | — |
 | B-2026-11-25-31 | 2026-11-25 | mir-llvm+runtime | low | Inserting 10^5 random `i64` keys into a compiled `SortedMap` still takes about 1.5x Rust's `BTreeMap` (100 rounds: 1.5 s against 1.0 s; `entry(k).or_insert(0) += 1` 1.6 s against 0.97 s), after B-2026-11-24-41 | — |
 
 ### Relocated
@@ -2297,6 +2296,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-25-17 | cli | low | `karac explain` of `.discriminant()` on an enum with no `#[repr]` does not say the value is local, not a semver contract (design.md 6563); it prints… | 1b9892c957 |
 | B-2026-11-25-18 | typecheck+cli | low | A `scan` seeded with a negated literal (`arr.iter().rev().scan(-1, \|m, x\| ..)` over `i32` items into a `Vec[i32]`, a running maximum as LeetCode's Ru… | b45cd107b3 |
 | B-2026-11-25-23 | mir+mir-llvm | medium | `mx.max(f)` with `mx: i64` (a literal's default) and `f: ref i32` from an adapted iterator (`flips.iter().rev()`, `.skip(1)`, `.filter(..)`) passes `… | e8e9642865 |
+| B-2026-11-25-27 | interp | medium | `karac run --interp` aborts with a Rust stack overflow (exit 134, 'thread has overflowed its stack') dropping a 1,000,000-node `shared` chain; `karac… | e0c82e9559 |
 | B-2026-11-25-28 | typecheck | low | `s.as_str().hash(mut h)` was refused ("no method 'hash' on type 'Str'"), though collections.md § Hashing says a `Str` view hashes as its `String` doe… | 5b52c1c2df |
 | B-2026-11-25-29 | mir-llvm | medium | `==` on a `Map` or `Set` of a user `BuildHasher` was false when compiled, even for a table and its clone (`s == s.clone()`); the interpreter said true | 5b52c1c2df |
 | B-2026-11-25-30 | effect | medium | E0406 refused a call whose function values at one effect variable's positions perform different effects; the spec solves the variable as their union | c655355b2e |
