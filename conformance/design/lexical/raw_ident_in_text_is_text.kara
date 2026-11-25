@@ -1,0 +1,8 @@
+fn main() {
+    // r#fn in a comment is just text
+    println("r#fn");
+    println(r"r#async");
+    let r#r = r#"r#"x""#;
+    println(r#r);
+    println(r#r.len());
+}

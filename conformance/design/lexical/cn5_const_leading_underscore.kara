@@ -1,0 +1,2 @@
+const _MAX: i64 = 3;
+fn main() { println(_MAX); }

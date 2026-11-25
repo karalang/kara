@@ -1,0 +1,6 @@
+/// outer
+fn one() -> i64 { 1 }
+fn main() {
+    //! inside a body
+    println(one());
+}

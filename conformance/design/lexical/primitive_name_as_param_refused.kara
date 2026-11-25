@@ -1,0 +1,2 @@
+fn f(bool: i64) -> i64 { bool }
+fn main() { println(f(1)); }

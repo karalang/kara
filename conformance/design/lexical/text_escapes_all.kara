@@ -1,0 +1,6 @@
+fn main() {
+    let s = "a\nb\tc\rd\\e\'f\"g\0h\u{41}\x42";
+    for b in s.bytes() { print(f"{b} "); }
+    println("");
+    println(s.len());
+}

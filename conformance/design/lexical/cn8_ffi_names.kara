@@ -1,0 +1,13 @@
+unsafe extern "C" {
+    fn abs(n: i32) -> i32;
+    // `abs` is Value class: no rename needed.
+
+    #[kara_name("XcbWindow")]
+    type xcb_window_t;
+    // A vendor type, rebound to a Type-class name on the Kāra side.
+}
+fn take(_p: *const XcbWindow) {}
+fn main() {
+    let n = unsafe { abs(-5) };
+    println(n);
+}

@@ -1,0 +1,16 @@
+struct Flag { on: bool }
+impl Flag {
+    fn r#or(own self, other: own Flag) -> Flag { Flag { on: self.on or other.on } }
+    fn and(own self, other: own Flag) -> Flag { Flag { on: self.on and other.on } }
+}
+struct Config { r#move: bool, r#await: i64 }
+fn main() {
+    let a = Flag { on: false }.or(Flag { on: true });
+    let b = Flag { on: true }.r#and(Flag { on: true });
+    println(a.on);
+    println(b.on);
+    let c = Config { r#move: true, r#await: 4 };
+    println(c.move);
+    println(c.await);
+    println(c.r#await);
+}

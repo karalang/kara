@@ -1,0 +1,6 @@
+fn main() {
+    let r = r"a\n
+    b";
+    println(r);
+    println(r.len());
+}

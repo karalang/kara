@@ -1,0 +1,8 @@
+fn main() {
+    let r#pure = 1; let r#box = 2; let r#do = 3; let r#gen = 4; let r#yield = 5;
+    let r#become = 6; let r#comptime = 7; let r#final = 8; let r#override = 9;
+    let r#virtual = 10; let r#asm = 11; let r#global_asm = 12; let r#typeof = 13;
+    let r#try = 14; let r#async = 15; let r#await = 16; let r#move = 17;
+    println(r#pure + r#box + r#do + r#gen + r#yield + r#become + r#comptime + r#final + r#override);
+    println(r#virtual + r#asm + r#global_asm + r#typeof + r#try + r#async + r#await + r#move);
+}

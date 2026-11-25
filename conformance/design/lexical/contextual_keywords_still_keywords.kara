@@ -1,0 +1,17 @@
+distinct type Meters = i64;
+marker trait Tag {}
+shared struct Node { v: i64 }
+struct W { v: i64 }
+impl Tag for W {}
+fn take(w: own W) -> i64 { w.v }
+fn main() {
+    let distinct = 1;
+    let marker = 2;
+    let shared = 3;
+    let own = 4;
+    let m = Meters(5);
+    let n = Node { v: 6 };
+    let n2 = n;
+    println(distinct + marker + shared + own);
+    println(m.raw() + n.v + n2.v + take(W { v: 1 }));
+}

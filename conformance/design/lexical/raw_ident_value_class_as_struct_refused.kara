@@ -1,0 +1,2 @@
+struct r#async { v: i64 }
+fn main() {}

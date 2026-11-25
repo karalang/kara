@@ -1,0 +1,2 @@
+const n: i64 = 3;
+fn main() { println(n); }

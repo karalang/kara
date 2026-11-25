@@ -1,0 +1,5 @@
+unsafe extern "C" {
+    pure fn abs(n: i32) -> i32;
+}
+fn magnitude(n: i32) -> i32 { unsafe { abs(n) } }
+fn main() { println(magnitude(-9)); }

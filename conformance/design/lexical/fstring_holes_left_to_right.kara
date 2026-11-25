@@ -1,0 +1,8 @@
+fn tick(tag: Str, v: i64) -> i64 {
+    println(tag);
+    v
+}
+fn main() {
+    let s = f"{tick("a", 1)}-{tick("b", 2)}-{tick("c", 3)}";
+    println(s);
+}

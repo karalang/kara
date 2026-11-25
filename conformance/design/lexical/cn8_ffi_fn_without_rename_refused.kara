@@ -1,0 +1,4 @@
+unsafe extern "C" {
+    fn GetTickCount() -> u32;
+}
+fn main() {}

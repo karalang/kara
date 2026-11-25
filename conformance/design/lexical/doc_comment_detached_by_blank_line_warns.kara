@@ -1,0 +1,4 @@
+/// Detached by the blank line below.
+
+fn one() -> i64 { 1 }
+fn main() { println(one()); }

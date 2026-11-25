@@ -1,0 +1,10 @@
+unsafe extern "C" {
+    fn puts(s: *const u8) -> i32 with writes(Stdout);
+}
+
+fn greet() with writes(Stdout) {
+    let msg: ref CStr = c"hello, world";
+    unsafe { puts(msg.as_ptr()); }
+}
+
+fn main() { greet(); }

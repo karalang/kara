@@ -1,0 +1,2 @@
+trait OnceFn { fn go(self); }
+fn main() {}

@@ -1,0 +1,21 @@
+import std.r#encoding;
+struct r#Point[r#T] { r#x: r#T }
+enum r#Shape { r#Circle, Square }
+type r#Meters = i64;
+trait r#Area { fn r#area(self) -> i64; }
+impl r#Area for r#Shape {
+    fn r#area(self) -> i64 { match self { r#Shape.r#Circle => 3, Shape.Square => 4 } }
+}
+#[r#non_exhaustive]
+pub enum Kind { A }
+fn r#scale(r#by: i64) -> i64 { r#by * 2 }
+fn main() {
+    let p: r#Point[i64] = r#Point { r#x: 5 };
+    let m: r#Meters = 2;
+    println(p.r#x + p.x + m);
+    println(r#Shape.r#Circle.area() + Shape.Square.r#area());
+    println(scale(4) + r#scale(1));
+    let bytes = encoding.r#hex_decode("ff").unwrap();
+    println(bytes.len());
+    let _k = Kind.A;
+}

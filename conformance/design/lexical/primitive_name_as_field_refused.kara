@@ -1,0 +1,2 @@
+struct S { char: i64 }
+fn main() {}

@@ -1,0 +1,2 @@
+fn or(a: bool, b: bool) -> bool { a or b }
+fn main() { println(1); }

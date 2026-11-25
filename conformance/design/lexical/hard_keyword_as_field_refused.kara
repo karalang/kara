@@ -1,0 +1,2 @@
+struct Item { type: i64 }
+fn main() {}

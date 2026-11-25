@@ -1,0 +1,7 @@
+fn main() {
+    println(i64.MAX);
+    println(u32.size_of());
+    let c = char.try_from(65u32).unwrap();
+    println(c);
+    println(u8.MAX);
+}

@@ -1,0 +1,13 @@
+fn main() {
+    println(127i8);
+    println(32767i16);
+    println(2147483647i32);
+    println(9223372036854775807i64);
+    println(255u8);
+    println(65535u16);
+    println(42isize);
+    println(42usize);
+    println(0xFFu8);
+    println(0b1000_0000u8);
+    println(0o777u16);
+}

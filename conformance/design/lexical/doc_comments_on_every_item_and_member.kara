@@ -1,0 +1,70 @@
+//! Module doc
+//! second line
+
+/// A point.
+struct Point {
+    /// x coord
+    x: i64,
+    /// y coord
+    y: i64,
+}
+
+/// Shapes.
+enum Shape {
+    /// round
+    Circle,
+    /// boxy
+    Rect {
+        /// width
+        w: i64,
+        /// height
+        h: i64,
+    },
+}
+
+/// Area.
+trait Area {
+    /// compute
+    fn area(
+        self,
+        /// scale factor
+        k: i64,
+    ) -> i64;
+}
+
+/// Doubled.
+const TWO: i64 = 2;
+
+/// Alias.
+type Id = i64;
+
+/// Meters.
+distinct type Meters = i64;
+
+impl Area for Point {
+    fn area(self, k: i64) -> i64 { self.x * self.y * k }
+}
+
+/// Adds.
+fn add(
+    /// left
+    a: i64,
+    /// right
+    b: i64,
+) -> i64 { a + b }
+
+/// # Safety
+/// libc abs has no preconditions.
+unsafe extern "C" {
+    /// Absolute value.
+    fn abs(n: i32) -> i32;
+}
+
+fn main() {
+    let p = Point { x: 2, y: 3 };
+    let _s = Shape.Circle;
+    let _r = Shape.Rect { w: 1, h: 2 };
+    let id: Id = 1;
+    let _m = Meters(3);
+    println(add(p.area(TWO), id));
+}

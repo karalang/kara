@@ -1,0 +1,12 @@
+fn main() {
+    let c = 'o';
+    let mut hits = 0;
+    'outer: for i in 0..5 {
+        for j in 0..5 {
+            if i * j == 6 { break 'outer; }
+            hits += 1;
+        }
+    }
+    println(c);
+    println(hits);
+}

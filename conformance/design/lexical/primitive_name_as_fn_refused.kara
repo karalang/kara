@@ -1,0 +1,2 @@
+fn u8() -> i64 { 1 }
+fn main() { println(1); }

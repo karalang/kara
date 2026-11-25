@@ -1,0 +1,1 @@
+fn main() { let UserCount = 0; println(UserCount); }

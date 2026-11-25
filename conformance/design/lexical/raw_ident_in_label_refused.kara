@@ -1,0 +1,3 @@
+fn main() {
+    'r#outer: loop { break 'r#outer; }
+}

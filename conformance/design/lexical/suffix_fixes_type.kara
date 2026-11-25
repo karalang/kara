@@ -1,0 +1,7 @@
+fn main() {
+    let a = 255u8;
+    println(a.wrapping_add(1));
+    let b = 127i8;
+    println(b.wrapping_add(1));
+    println(4000000000u32.wrapping_add(500000000));
+}

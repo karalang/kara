@@ -1,0 +1,2 @@
+struct HTTPClient { port: i64 }
+fn main() { let c = HTTPClient { port: 80 }; println(c.port); }

@@ -1,0 +1,8 @@
+struct Handle { v: i64 }
+impl Handle {
+    fn r#type() -> Handle { Handle { v: 7 } }
+}
+fn main() {
+    let h = Handle.r#type();
+    println(h.v);
+}

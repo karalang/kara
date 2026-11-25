@@ -1,0 +1,2 @@
+fn take(s: String) -> i64 { s.len() }
+fn main() { println(take(c"abc")); }

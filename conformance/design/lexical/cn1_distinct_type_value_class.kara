@@ -1,0 +1,2 @@
+distinct type meters = f64;
+fn main() {}

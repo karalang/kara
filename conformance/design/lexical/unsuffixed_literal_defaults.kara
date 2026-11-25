@@ -1,0 +1,6 @@
+fn main() {
+    let big = 3000000000;
+    println(big * 3);
+    let f = 0.1;
+    println(f + 0.2);
+}

@@ -1,0 +1,5 @@
+fn main() {
+    let nan = 0.0 / 0.0;
+    let inf = 1.0 / 0.0;
+    println(f"[{nan:>5}][{nan:+}][{inf:+}][{inf:08.2}][{nan:08.2}][{inf:.3}]");
+}

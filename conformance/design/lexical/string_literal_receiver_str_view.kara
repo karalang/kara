@@ -1,0 +1,5 @@
+fn main() {
+    let hex = "0123456789abcdef".bytes();
+    println(hex[10]);
+    println(hex.len());
+}

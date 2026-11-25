@@ -1,0 +1,8 @@
+struct Buf[const N: i64] { len: i64 }
+fn size[const N: i64](b: Buf[N]) -> i64 { N }
+fn main() {
+    const K: i64 = 5;
+    let b: Buf[3] = Buf { len: 0 };
+    println(K);
+    println(size(b));
+}

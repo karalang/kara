@@ -1,0 +1,10 @@
+struct Handle { v: i64 }
+impl Handle {
+    fn type() -> Handle { Handle { v: 7 } }
+    fn match(x: i64) -> i64 { x + 1 }
+}
+fn main() {
+    let h = Handle.type();
+    println(h.v);
+    println(Handle.match(2));
+}

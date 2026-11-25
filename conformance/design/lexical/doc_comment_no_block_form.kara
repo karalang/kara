@@ -1,0 +1,3 @@
+/** a block comment, not a doc comment */
+fn one() -> i64 { 1 }
+fn main() { println(one()); }

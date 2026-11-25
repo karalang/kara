@@ -1,0 +1,2 @@
+type user_id = i64;
+fn main() { let u: user_id = 3; println(u); }

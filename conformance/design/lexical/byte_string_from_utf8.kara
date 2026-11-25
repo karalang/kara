@@ -1,0 +1,12 @@
+fn main() {
+    let good = b"hi";
+    match String.from_utf8(good) {
+        Ok(s) => println(s),
+        Err(_) => println("bad"),
+    }
+    let bad = b"\xFF\xFE";
+    match String.from_utf8(bad) {
+        Ok(s) => println(s),
+        Err(_) => println("bad"),
+    }
+}

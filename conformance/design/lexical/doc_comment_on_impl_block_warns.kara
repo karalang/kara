@@ -1,0 +1,4 @@
+struct P { a: i64 }
+/// An impl block takes no doc comment.
+impl P { fn get(self) -> i64 { self.a } }
+fn main() { println(P { a: 4 }.get()); }

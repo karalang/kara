@@ -1,0 +1,1 @@
+fn main() { let extern = 1; }

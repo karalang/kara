@@ -1,0 +1,7 @@
+fn main() {
+    let r#true = 18;
+    let r#false = 19;
+    let t = true;
+    println(r#true + r#false);
+    println(t);
+}

@@ -1,0 +1,2 @@
+fn false() -> i64 { 1 }
+fn main() {}

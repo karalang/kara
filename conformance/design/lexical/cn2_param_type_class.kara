@@ -1,0 +1,2 @@
+fn double(Value: i64) -> i64 { Value * 2 }
+fn main() { println(double(2)); }

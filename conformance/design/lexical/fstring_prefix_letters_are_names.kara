@@ -1,0 +1,5 @@
+fn main() {
+    let f = 1; let r = 2; let b = 3; let c = 4;
+    println(f + r + b + c);
+    println(f"{f}{r}{b}{c}");
+}

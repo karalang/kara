@@ -1,0 +1,8 @@
+fn count(s: ref CStr) -> i64 { s.len() }
+fn main() {
+    let a: ref CStr = c"café";
+    let b = a;
+    println(count(a) + count(b));
+    for x in a.bytes() { println(x); }
+    println(a.to_str().unwrap());
+}

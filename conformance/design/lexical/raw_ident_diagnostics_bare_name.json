@@ -1,0 +1,3 @@
+check --output=json {}
+any("Async" in x["message"] for x in d["diagnostics"])
+not any("r#" in x["message"] for x in d["diagnostics"])

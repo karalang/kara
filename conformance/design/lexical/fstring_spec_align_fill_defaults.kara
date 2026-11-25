@@ -1,0 +1,12 @@
+fn main() {
+    let n = 42;
+    let s = "ab";
+    let flag = true;
+    let c = 'z';
+    let x = 1.5;
+    println(f"[{n:6}][{s:6}][{flag:6}][{c:3}]");
+    println(f"[{n:<6}][{s:>6}][{flag:>6}][{c:^3}][{x:>8}]");
+    println(f"[{n:-^7}][{s:0>4}]");
+    println(f"[{-5:05}][{n:+05}][{-n:+}][{0:+}]");
+    println(f"[{x:.3}][{2.0:.0}][{x:+}][{x:8.2}]");
+}

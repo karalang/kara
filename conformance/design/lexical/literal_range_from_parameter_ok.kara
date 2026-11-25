@@ -1,0 +1,2 @@
+fn take(x: i8) -> i8 { x }
+fn main() { println(take(127)); println(take(-128)); }

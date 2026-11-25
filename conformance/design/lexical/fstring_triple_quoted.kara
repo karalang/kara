@@ -1,0 +1,10 @@
+fn main() {
+    let name = "kara";
+    let n = 2;
+    let s = f"""
+        hello {name}
+          {n + 1} items\t!
+        {{braces}}
+        """;
+    println(s);
+}

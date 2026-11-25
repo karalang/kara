@@ -1,0 +1,11 @@
+fn main() {
+    let pi = 3.14159;
+    let n = 42;
+    let name = "world";
+    println(f"[{pi:.2}]");
+    println(f"[{n:>5}]");
+    println(f"[{n:05}]");
+    println(f"[{n:x}]");
+    println(f"[{n:+}]");
+    println(f"[{name:*^9}]");
+}

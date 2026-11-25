@@ -1,0 +1,15 @@
+struct Item { r#type: i64, r#impl: i64 }
+fn r#if(r#else: i64) -> i64 { r#else * 2 }
+fn main() {
+    let r#enum = 1; let r#trait = 2; let r#const = 3; let r#import = 4;
+    let r#extern = 5; let r#unsafe = 6; let r#while = 7; let r#for = 8;
+    let r#return = 9; let r#break = 10; let r#continue = 11; let r#errdefer = 12;
+    let r#as = 13; let r#or = 14; let r#and = 15; let r#not = 16; let r#dyn = 17;
+    let r#in = 20; let r#loop = 21; let r#match = 22;
+    let r#let = 23; let r#struct = 24; let r#defer = 25; let r#fn = 26;
+    println(r#enum + r#trait + r#const + r#import + r#extern + r#unsafe + r#while + r#for);
+    println(r#return + r#break + r#continue + r#errdefer + r#as + r#or + r#and + r#not + r#dyn);
+    println(r#in + r#loop + r#match + r#let + r#struct + r#defer + r#fn);
+    let it = Item { r#type: 1, r#impl: 2 };
+    println(it.r#type + it.r#impl + r#if(3));
+}

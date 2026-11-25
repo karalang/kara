@@ -1,0 +1,6 @@
+fn main() {
+    let n = 255;
+    println(f"{n:x} {n:X} {n:o} {n:b} {n:d} {n:+d}");
+    println(f"{-1i8:x} {-2i32:x} {-1i16:b} {-8i8:o} {-1i64:X}");
+    println(f"0x{n:04x} {n:>6b}");
+}

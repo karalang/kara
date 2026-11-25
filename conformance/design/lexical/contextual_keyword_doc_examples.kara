@@ -1,0 +1,16 @@
+struct IoStats { reads: i64, writes: i64, blocks: i64 }
+struct Sets { parent: Vec[i64] }
+impl Sets {
+    fn union(mut ref self, a: i64, b: i64) { self.parent[a] = b; }
+}
+fn create_server(host: String, port: u16) -> String { f"{host}:{port}" }
+fn main() {
+    let s = IoStats { reads: 1, writes: 2, blocks: 3 };
+    let mut d = Sets { parent: [0, 1, 2] };
+    d.union(0, 2);
+    let sends = 4; let receives = 5; let allocates = 6; let test = 7; let host = 8;
+    println(s.reads + s.writes + s.blocks);
+    println(d.parent[0]);
+    println(sends + receives + allocates + test + host);
+    println(create_server("localhost".to_string(), 8080));
+}

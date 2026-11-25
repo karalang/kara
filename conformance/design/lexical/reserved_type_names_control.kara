@@ -1,0 +1,14 @@
+struct FnBox { a: i64 }
+enum MutFnKind { A }
+trait OnceFnLike { fn go(self) -> i64; }
+impl OnceFnLike for FnBox { fn go(self) -> i64 { self.a } }
+fn to_u8(x: i64) -> u8 { x as u8 }
+struct S { ch: char }
+fn main() {
+    let b = FnBox { a: 3 };
+    let _k = MutFnKind.A;
+    let s = S { ch: 'q' };
+    println(b.go());
+    println(to_u8(7));
+    println(s.ch);
+}

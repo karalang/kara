@@ -1,0 +1,10 @@
+fn total(bytes: Slice[u8]) -> i64 {
+    let mut t = 0;
+    for b in bytes { t += b as i64; }
+    t
+}
+fn main() {
+    let magic: Array[u8, 4] = b"\xDE\xAD\xBE\xEF";
+    println(total(magic));
+    println(total(b"AB"));
+}

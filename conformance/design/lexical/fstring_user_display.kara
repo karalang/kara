@@ -1,0 +1,8 @@
+struct Point { x: i64, y: i64 }
+impl Display for Point {
+    fn to_string(self) -> String { f"<{self.x}|{self.y}>" }
+}
+fn main() {
+    let p = Point { x: 1, y: 2 };
+    println(f"p = {p}, again {p.to_string()}");
+}

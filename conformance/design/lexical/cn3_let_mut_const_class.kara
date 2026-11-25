@@ -1,0 +1,1 @@
+fn main() { let mut COUNT = 0; COUNT += 1; println(COUNT); }

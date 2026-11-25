@@ -1,0 +1,2 @@
+enum io_error { NotFound }
+fn main() {}

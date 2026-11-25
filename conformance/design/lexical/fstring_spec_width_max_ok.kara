@@ -1,0 +1,1 @@
+fn main() { let s = f"{1:65535}"; println(s.len()); }

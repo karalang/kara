@@ -1,0 +1,2 @@
+#[warn(unused_variable)]
+fn main() { let tmp = 4; println(1); }

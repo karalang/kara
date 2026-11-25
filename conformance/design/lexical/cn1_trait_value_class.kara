@@ -1,0 +1,2 @@
+trait shape { fn area(self) -> i64; }
+fn main() {}

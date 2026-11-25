@@ -1,0 +1,5 @@
+struct r#Async { v: i64 }
+fn main() {
+    let r#async = r#Async { v: 3 };
+    println(r#async.v);
+}

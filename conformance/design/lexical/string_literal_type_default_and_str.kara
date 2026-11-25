@@ -1,0 +1,13 @@
+fn width(s: Str) -> i64 { s.len() }
+const NAME: Str = "kara";
+fn main() {
+    let mut s = "hi";
+    s.push_str("!");
+    println(s);
+    let v: Str = "view";
+    println(width(v) + width("abc") + width(NAME));
+    let m: Map[char, Str] = [('a', "eiu")].into_iter().collect();
+    println(m.get('a').unwrap());
+    let l: Vec[(char, Str)] = [('b', "xy")];
+    println(l[0].1);
+}

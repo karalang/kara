@@ -1,0 +1,8 @@
+fn main() {
+    let msg: ref CStr = c"hi";
+    let p: *const u8 = msg.as_ptr();
+    let b0 = unsafe { *p };
+    let b2 = unsafe { *p.add(2) };
+    println(b0);
+    println(b2);
+}

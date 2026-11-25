@@ -1,0 +1,11 @@
+fn main() {
+    let a = 2.5f64;
+    println(a);
+    println(1e+5 == 100000.0);
+    println(1E5 == 1e5);
+    println(1.5e-3f32 == 0.0015f32);
+    println(5e-324 > 0.0);
+    println(1e-45f32 > 0.0f32);
+    let tiny: f32 = 1e-50;
+    println(tiny == 0.0f32);
+}

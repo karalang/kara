@@ -1,0 +1,1 @@
+fn main() { let r#Async = 1; println(r#Async); }

@@ -1,0 +1,13 @@
+struct Handle { v: i64 }
+trait Gen { fn yield(self) -> i64; }
+impl Gen for Handle { fn yield(self) -> i64 { self.v + 1 } }
+impl Handle {
+    fn await(self) -> i64 { self.v * 10 }
+    fn const(self, x: i64) -> i64 { self.v + x }
+}
+fn main() {
+    let h = Handle { v: 7 };
+    println(h.await());
+    println(h.yield());
+    println(h.const(5));
+}

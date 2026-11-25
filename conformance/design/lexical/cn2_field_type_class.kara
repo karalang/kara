@@ -1,0 +1,2 @@
+struct Point { X: i64, y: i64 }
+fn main() {}

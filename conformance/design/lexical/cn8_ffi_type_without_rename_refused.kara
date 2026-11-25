@@ -1,0 +1,4 @@
+unsafe extern "C" {
+    type xcb_window_t;
+}
+fn main() {}

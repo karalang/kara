@@ -1,0 +1,1 @@
+fn main() { let MAX_RETRIES = 3; println(MAX_RETRIES); }

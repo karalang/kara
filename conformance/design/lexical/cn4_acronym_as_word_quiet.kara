@@ -1,0 +1,3 @@
+struct HttpClient { port: i64 }
+enum IoError { NotFound }
+fn main() { let c = HttpClient { port: 80 }; let _e = IoError.NotFound; println(c.port); }

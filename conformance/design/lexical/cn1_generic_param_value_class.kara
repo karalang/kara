@@ -1,0 +1,2 @@
+fn first[t](xs: Vec[t]) -> i64 { xs.len() as i64 }
+fn main() { let v: Vec[i64] = [1]; println(first(v)); }

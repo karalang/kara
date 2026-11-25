@@ -1,0 +1,2 @@
+struct r#Async { v: i64 }
+fn main() { let x: r#Async = 1; println(x.v); }

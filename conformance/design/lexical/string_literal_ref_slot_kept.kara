@@ -1,0 +1,11 @@
+fn main() {
+    let mut m: Map[String, String] = Map.new();
+    m.insert("a".to_string(), "x".to_string());
+    let got = m.get("b").unwrap_or("");
+    let got2 = m.get("a").unwrap_or("");
+    let mut counts: Map[String, i64] = Map.new();
+    counts.insert("k".to_string(), 3);
+    let n = counts.get("z").unwrap_or(0);
+    let k = counts.get("k").unwrap_or(0);
+    println(f"[{got}][{got2}] {n} {k}");
+}

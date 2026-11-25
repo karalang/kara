@@ -1,0 +1,4 @@
+/// Ended by the plain comment below.
+// plain
+fn one() -> i64 { 1 }
+fn main() { println(one()); }

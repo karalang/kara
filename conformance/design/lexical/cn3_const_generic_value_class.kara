@@ -1,0 +1,2 @@
+struct Buf[const n: i64] { len: i64 }
+fn main() {}

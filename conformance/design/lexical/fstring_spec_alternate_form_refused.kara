@@ -1,0 +1,1 @@
+fn main() { let n = 255; println(f"{n:#x}"); }
