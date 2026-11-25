@@ -71,7 +71,14 @@ fn karac(cell: &Path, args: &[&str], after: Option<&str>) -> Output {
         .file_name()
         .unwrap()
         .to_string_lossy();
-    let dir = std::env::temp_dir().join(format!("karac-book-{}-{ch}-{name}", std::process::id()));
+    // The static and compiled tests run the same cells in parallel in one
+    // process, so the directory carries a per-call count: with the pid and
+    // cell alone, one test's `remove_dir_all` deleted the other's
+    // `main.kara` mid-run ("cannot read 'main.kara'").
+    static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let dir =
+        std::env::temp_dir().join(format!("karac-book-{}-{n}-{ch}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_karac"));
     if is_package(cell) {
@@ -86,7 +93,9 @@ fn karac(cell: &Path, args: &[&str], after: Option<&str>) -> Output {
             None => cmd.arg("main.kara"),
         };
     }
-    cmd.output().unwrap()
+    let out = cmd.output().unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    out
 }
 
 fn text(o: &Output) -> String {
