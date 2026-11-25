@@ -31611,6 +31611,20 @@ impl<'l, 'a> Bx<'l, 'a> {
                         rest.push(self.owned_operand(&a.value, base)?);
                         continue;
                     }
+                    // So is a `ref` to a narrower integer, at its own width,
+                    // which both backends widen as they widen a narrower
+                    // integer passed by value: `mx.max(f)` with `mx: i64` and
+                    // `f: ref i32` from `flips.iter().rev()`. It reached the
+                    // native as its address, which neither backend lowers
+                    // (B-2026-11-25-23; the checker's side is B-2026-11-21-66).
+                    if let (HK::Int(_) | HK::UInt(_), HK::Ref(t) | HK::MutRef(t)) =
+                        (self.tys().tcx().kind(base), self.tys().tcx().kind(at))
+                    {
+                        if matches!(self.tys().tcx().kind(t), HK::Int(_) | HK::UInt(_)) {
+                            rest.push(self.owned_operand(&a.value, t)?);
+                            continue;
+                        }
+                    }
                     // Text's char argument (`push`, `find`, `split`) reads
                     // a `ref char` as its value (§5.10; B-2026-10-14-2).
                     if matches!(self.tys().tcx().kind(base), HK::Str | HK::StaticStr) {
