@@ -1,0 +1,6 @@
+// core-semantics §11.2 (6a329e30a7): each iteration of `par for x in v.iter_mut()` gets its own element, so writes through `x` do not conflict.
+fn main() {
+    let mut v = [1, 2, 3];
+    let _ = par for x in v.iter_mut() { *x += 1; };
+    println(f"{v}");
+}
