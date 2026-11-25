@@ -8992,6 +8992,9 @@ impl<'l, 'a> Bx<'l, 'a> {
             // `i64.MAX` lent to a `ref` parameter is a value, not a field
             // of a local `i64`: built in a temporary, which is lent.
             ExprKind::FieldAccess { .. } if self.int_limit_of(e).is_some() => self.temp_place(e),
+            // `i64.abs` lent to a `Fn` parameter is a function value, built
+            // in a temporary (B-2026-11-25-40).
+            ExprKind::FieldAccess { .. } if self.builtin_fn_def(e).is_some() => self.temp_place(e),
             ExprKind::FieldAccess { object, field } => {
                 // A field of a `shared` value is written through any
                 // handle to it (core-semantics §5.9), so the handle is
@@ -11416,6 +11419,14 @@ impl<'l, 'a> Bx<'l, 'a> {
         // The receiver of `Slot.Empty.to_string()` ([`Self::variant_method`]).
         if let Some(&(t, idx)) = self.lcx.variant_paths.get(&e.id) {
             self.build_variant(t, idx, Vec::new(), dest);
+            return Ok(());
+        }
+        // `Vec.contains` as a value is the library's wrapper the checker
+        // typed it as, ahead of the generic impl's method (B-2026-11-25-40).
+        if let Some(d) = self.builtin_method_value(e) {
+            let want = self.place_type(&dest);
+            let (op, _) = self.fn_item_value(e, d, Some(want))?;
+            self.assign(dest, Rvalue::Use(op));
             return Ok(());
         }
         match self.lcx.res.get(&e.id) {
@@ -28301,6 +28312,15 @@ impl<'l, 'a> Bx<'l, 'a> {
                 Some(HK::Adt { def, args }) if Some(def) == info.impl_target && n_generic == 0 => {
                     info.impl_args(&tcx.list(args))
                 }
+                // `Vec.first`: a library container's impl, whose receiver
+                // is the intrinsic type of that name (B-2026-11-25-40).
+                Some(HK::Intrinsic { kind, args })
+                    if n_generic == 0
+                        && info.impl_target.is_some()
+                        && self.lcx.defs.lookup(0, kind.name()) == info.impl_target =>
+                {
+                    info.impl_args(&tcx.list(args))
+                }
                 _ => None,
             };
             let Some(args) = args else {
@@ -28541,7 +28561,20 @@ impl<'l, 'a> Bx<'l, 'a> {
     fn builtin_method_value(&self, e: &Expr) -> Option<DefId> {
         let (ty, m) = match &e.kind {
             ExprKind::Path { segments, .. } if segments.len() == 2 => {
-                if !matches!(self.lcx.res.get(&e.id), Some(Res::Builtin(_))) {
+                // `Vec.contains` resolves to the library impl's method, which
+                // the checker passed over for the wrapper (B-2026-11-25-40).
+                let container = matches!(
+                    segments[0].as_str(),
+                    "Vec"
+                        | "VecDeque"
+                        | "Map"
+                        | "Set"
+                        | "SortedMap"
+                        | "SortedSet"
+                        | "String"
+                        | "Str"
+                );
+                if !container && !matches!(self.lcx.res.get(&e.id), Some(Res::Builtin(_))) {
                     return None;
                 }
                 (segments[0].as_str(), segments[1].as_str())
@@ -28611,6 +28644,9 @@ impl<'l, 'a> Bx<'l, 'a> {
         match &e.kind {
             ExprKind::Closure { .. } => self.closure_value(e),
             ExprKind::Identifier(_) | ExprKind::Path { .. } => {
+                if let Some(d) = self.builtin_method_value(e) {
+                    return self.fn_item_value(e, d, None);
+                }
                 if let Some(Res::Def(d)) = self.lcx.res.get(&e.id) {
                     return self.fn_item_value(e, *d, None);
                 }

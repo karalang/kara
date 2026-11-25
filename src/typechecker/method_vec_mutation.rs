@@ -1523,7 +1523,7 @@ fn only_number_literals(e: &Expr) -> bool {
 
 /// collections.md's `VecDeque[T]` table (857e45825) plus iteration, the
 /// traits and the fallible twins the page cites for it.
-const DEQUE_METHODS: &[&str] = &[
+pub(super) const DEQUE_METHODS: &[&str] = &[
     "back",
     "clear",
     "clone",

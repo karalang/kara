@@ -3485,7 +3485,8 @@ pub fn rewrite_ufcs_call(expr: &mut Expr, ufcs: &FxHashMap<SpanKey, String>) {
                         if matches!(segments.as_slice(), [n] if n == name)))
                     && !args.is_empty() =>
             {
-                let recv = args.remove(0);
+                let mut recv = args.remove(0);
+                pin_ufcs_literal_receiver(name, &mut recv.value);
                 **object = recv.value;
             }
             ExprKind::Call { callee, args } if !args.is_empty() => {
@@ -3498,7 +3499,8 @@ pub fn rewrite_ufcs_call(expr: &mut Expr, ufcs: &FxHashMap<SpanKey, String>) {
                         if n == name {
                             let method = method.clone();
                             let mut args = std::mem::take(args);
-                            let recv = args.remove(0);
+                            let mut recv = args.remove(0);
+                            pin_ufcs_literal_receiver(name, &mut recv.value);
                             let close = Span {
                                 offset: (self_span.offset + self_span.length).saturating_sub(1),
                                 length: 1,
@@ -3517,6 +3519,52 @@ pub fn rewrite_ufcs_call(expr: &mut Expr, ufcs: &FxHashMap<SpanKey, String>) {
             }
             _ => {}
         }
+    }
+}
+
+/// `i32.wrapping_add(1, 2)`: a bare number literal receiver of a built-in
+/// number type's UFCS call is that type's, as `1i32` (B-2026-11-25-40). The
+/// checker types the call through the same rewrite, so both read the
+/// literal the same way. `true` when the literal was pinned.
+pub fn pin_ufcs_literal_receiver(type_name: &str, e: &mut Expr) -> bool {
+    use crate::token::{FloatSuffix, IntSuffix};
+    let int = match type_name {
+        "i8" => Some(IntSuffix::I8),
+        "i16" => Some(IntSuffix::I16),
+        "i32" => Some(IntSuffix::I32),
+        // `i64` and `f64` are what a bare literal already is: a suffix there
+        // would only draw the redundant-suffix lint.
+        "i128" => Some(IntSuffix::I128),
+        "u8" => Some(IntSuffix::U8),
+        "u16" => Some(IntSuffix::U16),
+        "u32" => Some(IntSuffix::U32),
+        "u64" => Some(IntSuffix::U64),
+        "u128" => Some(IntSuffix::U128),
+        "usize" => Some(IntSuffix::Usize),
+        "isize" => Some(IntSuffix::Isize),
+        _ => None,
+    };
+    let float = match type_name {
+        "f32" => Some(FloatSuffix::F32),
+        _ => None,
+    };
+    let lit = match &mut e.kind {
+        ExprKind::Unary {
+            op: UnaryOp::Neg,
+            operand,
+        } => &mut operand.kind,
+        k => k,
+    };
+    match lit {
+        ExprKind::Integer(_, s @ None) if int.is_some() => {
+            *s = int;
+            true
+        }
+        ExprKind::Float(_, s @ None) if float.is_some() => {
+            *s = float;
+            true
+        }
+        _ => false,
     }
 }
 

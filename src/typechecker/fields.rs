@@ -78,15 +78,25 @@ impl<'a> super::TypeChecker<'a> {
     /// library's `method_value_{ty}_{method}`, which the MIR builder lowers
     /// the value to (runtime/stdlib/source/method_values.kara;
     /// B-2026-11-24-7).
-    pub(super) fn builtin_method_value(&self, ty: &str, method: &str) -> Option<Type> {
+    pub(super) fn builtin_method_value(&mut self, ty: &str, method: &str) -> Option<Type> {
         let sig = self
             .env
             .functions
             .get(&format!("method_value_{ty}_{method}"))?;
+        // A container's (`Vec.len`) is generic over its elements: each use
+        // takes fresh parameters, solved from where the value goes, as a
+        // generic function named as a value does (B-2026-11-25-40).
+        let (params, return_type) = (sig.params.clone(), sig.return_type.clone());
+        let fresh = super::inference::instantiate_signature_with_fresh_vars(
+            &params,
+            &return_type,
+            &mut self.env.next_type_var,
+            &mut self.env.next_const_var,
+        );
         Some(Type::Function {
             cross_task: Default::default(),
-            params: sig.params.clone(),
-            return_type: Box::new(sig.return_type.clone()),
+            params: fresh.params,
+            return_type: Box::new(fresh.return_type),
         })
     }
 
@@ -160,6 +170,21 @@ impl<'a> super::TypeChecker<'a> {
                         args: Vec::new(),
                     }),
                 };
+            }
+        }
+        // `i64.checked_add` as a value: a method with no library function to
+        // stand for it is refused as that, not as a missing constant
+        // (B-2026-11-25-40).
+        if let ExprKind::Identifier(name) = &object.kind {
+            if self.local_scope.lookup(name).is_none()
+                && super::method_ufcs::builtin_type_has_method(name, field)
+            {
+                self.type_error(
+                    super::method_ufcs::builtin_method_value_refusal(name, field),
+                    *span,
+                    TypeErrorKind::TypeMismatch,
+                );
+                return Type::Error;
             }
         }
         // B-2026-10-20-23 — an unknown constant on a primitive type

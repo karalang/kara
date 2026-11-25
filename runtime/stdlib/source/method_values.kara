@@ -205,3 +205,915 @@ fn method_value_char_to_ascii_uppercase(x: char) -> char {
 fn method_value_char_to_ascii_lowercase(x: char) -> char {
     x.to_ascii_lowercase()
 }
+
+fn method_value_i8_signum(x: i8) -> i8 {
+    x.signum()
+}
+
+fn method_value_i8_pow(x: i8, e: u32) -> i8 {
+    x.pow(e)
+}
+
+fn method_value_i8_max(x: i8, y: i8) -> i8 {
+    x.max(y)
+}
+
+fn method_value_i8_min(x: i8, y: i8) -> i8 {
+    x.min(y)
+}
+
+fn method_value_i8_wrapping_add(x: i8, y: i8) -> i8 {
+    x.wrapping_add(y)
+}
+
+fn method_value_i8_wrapping_sub(x: i8, y: i8) -> i8 {
+    x.wrapping_sub(y)
+}
+
+fn method_value_i8_wrapping_mul(x: i8, y: i8) -> i8 {
+    x.wrapping_mul(y)
+}
+
+fn method_value_i8_saturating_add(x: i8, y: i8) -> i8 {
+    x.saturating_add(y)
+}
+
+fn method_value_i8_saturating_sub(x: i8, y: i8) -> i8 {
+    x.saturating_sub(y)
+}
+
+fn method_value_i8_saturating_mul(x: i8, y: i8) -> i8 {
+    x.saturating_mul(y)
+}
+
+fn method_value_i8_count_ones(x: i8) -> i64 {
+    x.count_ones()
+}
+
+fn method_value_i8_count_zeros(x: i8) -> i64 {
+    x.count_zeros()
+}
+
+fn method_value_i8_leading_zeros(x: i8) -> i64 {
+    x.leading_zeros()
+}
+
+fn method_value_i8_trailing_zeros(x: i8) -> i64 {
+    x.trailing_zeros()
+}
+
+fn method_value_i16_signum(x: i16) -> i16 {
+    x.signum()
+}
+
+fn method_value_i16_pow(x: i16, e: u32) -> i16 {
+    x.pow(e)
+}
+
+fn method_value_i16_max(x: i16, y: i16) -> i16 {
+    x.max(y)
+}
+
+fn method_value_i16_min(x: i16, y: i16) -> i16 {
+    x.min(y)
+}
+
+fn method_value_i16_wrapping_add(x: i16, y: i16) -> i16 {
+    x.wrapping_add(y)
+}
+
+fn method_value_i16_wrapping_sub(x: i16, y: i16) -> i16 {
+    x.wrapping_sub(y)
+}
+
+fn method_value_i16_wrapping_mul(x: i16, y: i16) -> i16 {
+    x.wrapping_mul(y)
+}
+
+fn method_value_i16_saturating_add(x: i16, y: i16) -> i16 {
+    x.saturating_add(y)
+}
+
+fn method_value_i16_saturating_sub(x: i16, y: i16) -> i16 {
+    x.saturating_sub(y)
+}
+
+fn method_value_i16_saturating_mul(x: i16, y: i16) -> i16 {
+    x.saturating_mul(y)
+}
+
+fn method_value_i16_count_ones(x: i16) -> i64 {
+    x.count_ones()
+}
+
+fn method_value_i16_count_zeros(x: i16) -> i64 {
+    x.count_zeros()
+}
+
+fn method_value_i16_leading_zeros(x: i16) -> i64 {
+    x.leading_zeros()
+}
+
+fn method_value_i16_trailing_zeros(x: i16) -> i64 {
+    x.trailing_zeros()
+}
+
+fn method_value_i32_signum(x: i32) -> i32 {
+    x.signum()
+}
+
+fn method_value_i32_pow(x: i32, e: u32) -> i32 {
+    x.pow(e)
+}
+
+fn method_value_i32_max(x: i32, y: i32) -> i32 {
+    x.max(y)
+}
+
+fn method_value_i32_min(x: i32, y: i32) -> i32 {
+    x.min(y)
+}
+
+fn method_value_i32_wrapping_add(x: i32, y: i32) -> i32 {
+    x.wrapping_add(y)
+}
+
+fn method_value_i32_wrapping_sub(x: i32, y: i32) -> i32 {
+    x.wrapping_sub(y)
+}
+
+fn method_value_i32_wrapping_mul(x: i32, y: i32) -> i32 {
+    x.wrapping_mul(y)
+}
+
+fn method_value_i32_saturating_add(x: i32, y: i32) -> i32 {
+    x.saturating_add(y)
+}
+
+fn method_value_i32_saturating_sub(x: i32, y: i32) -> i32 {
+    x.saturating_sub(y)
+}
+
+fn method_value_i32_saturating_mul(x: i32, y: i32) -> i32 {
+    x.saturating_mul(y)
+}
+
+fn method_value_i32_count_ones(x: i32) -> i64 {
+    x.count_ones()
+}
+
+fn method_value_i32_count_zeros(x: i32) -> i64 {
+    x.count_zeros()
+}
+
+fn method_value_i32_leading_zeros(x: i32) -> i64 {
+    x.leading_zeros()
+}
+
+fn method_value_i32_trailing_zeros(x: i32) -> i64 {
+    x.trailing_zeros()
+}
+
+fn method_value_i64_signum(x: i64) -> i64 {
+    x.signum()
+}
+
+fn method_value_i64_pow(x: i64, e: u32) -> i64 {
+    x.pow(e)
+}
+
+fn method_value_i64_max(x: i64, y: i64) -> i64 {
+    x.max(y)
+}
+
+fn method_value_i64_min(x: i64, y: i64) -> i64 {
+    x.min(y)
+}
+
+fn method_value_i64_wrapping_add(x: i64, y: i64) -> i64 {
+    x.wrapping_add(y)
+}
+
+fn method_value_i64_wrapping_sub(x: i64, y: i64) -> i64 {
+    x.wrapping_sub(y)
+}
+
+fn method_value_i64_wrapping_mul(x: i64, y: i64) -> i64 {
+    x.wrapping_mul(y)
+}
+
+fn method_value_i64_saturating_add(x: i64, y: i64) -> i64 {
+    x.saturating_add(y)
+}
+
+fn method_value_i64_saturating_sub(x: i64, y: i64) -> i64 {
+    x.saturating_sub(y)
+}
+
+fn method_value_i64_saturating_mul(x: i64, y: i64) -> i64 {
+    x.saturating_mul(y)
+}
+
+fn method_value_i64_count_ones(x: i64) -> i64 {
+    x.count_ones()
+}
+
+fn method_value_i64_count_zeros(x: i64) -> i64 {
+    x.count_zeros()
+}
+
+fn method_value_i64_leading_zeros(x: i64) -> i64 {
+    x.leading_zeros()
+}
+
+fn method_value_i64_trailing_zeros(x: i64) -> i64 {
+    x.trailing_zeros()
+}
+
+fn method_value_i128_signum(x: i128) -> i128 {
+    x.signum()
+}
+
+fn method_value_i128_pow(x: i128, e: u32) -> i128 {
+    x.pow(e)
+}
+
+fn method_value_i128_max(x: i128, y: i128) -> i128 {
+    x.max(y)
+}
+
+fn method_value_i128_min(x: i128, y: i128) -> i128 {
+    x.min(y)
+}
+
+fn method_value_i128_wrapping_add(x: i128, y: i128) -> i128 {
+    x.wrapping_add(y)
+}
+
+fn method_value_i128_wrapping_sub(x: i128, y: i128) -> i128 {
+    x.wrapping_sub(y)
+}
+
+fn method_value_i128_wrapping_mul(x: i128, y: i128) -> i128 {
+    x.wrapping_mul(y)
+}
+
+fn method_value_i128_saturating_add(x: i128, y: i128) -> i128 {
+    x.saturating_add(y)
+}
+
+fn method_value_i128_saturating_sub(x: i128, y: i128) -> i128 {
+    x.saturating_sub(y)
+}
+
+fn method_value_i128_saturating_mul(x: i128, y: i128) -> i128 {
+    x.saturating_mul(y)
+}
+
+fn method_value_i128_count_ones(x: i128) -> i64 {
+    x.count_ones()
+}
+
+fn method_value_i128_count_zeros(x: i128) -> i64 {
+    x.count_zeros()
+}
+
+fn method_value_i128_leading_zeros(x: i128) -> i64 {
+    x.leading_zeros()
+}
+
+fn method_value_i128_trailing_zeros(x: i128) -> i64 {
+    x.trailing_zeros()
+}
+
+fn method_value_isize_to_string(x: isize) -> String {
+    x.to_string()
+}
+
+fn method_value_isize_abs(x: isize) -> isize {
+    x.abs()
+}
+
+fn method_value_isize_signum(x: isize) -> isize {
+    x.signum()
+}
+
+fn method_value_isize_pow(x: isize, e: u32) -> isize {
+    x.pow(e)
+}
+
+fn method_value_isize_max(x: isize, y: isize) -> isize {
+    x.max(y)
+}
+
+fn method_value_isize_min(x: isize, y: isize) -> isize {
+    x.min(y)
+}
+
+fn method_value_isize_wrapping_add(x: isize, y: isize) -> isize {
+    x.wrapping_add(y)
+}
+
+fn method_value_isize_wrapping_sub(x: isize, y: isize) -> isize {
+    x.wrapping_sub(y)
+}
+
+fn method_value_isize_wrapping_mul(x: isize, y: isize) -> isize {
+    x.wrapping_mul(y)
+}
+
+fn method_value_isize_saturating_add(x: isize, y: isize) -> isize {
+    x.saturating_add(y)
+}
+
+fn method_value_isize_saturating_sub(x: isize, y: isize) -> isize {
+    x.saturating_sub(y)
+}
+
+fn method_value_isize_saturating_mul(x: isize, y: isize) -> isize {
+    x.saturating_mul(y)
+}
+
+fn method_value_isize_count_ones(x: isize) -> i64 {
+    x.count_ones()
+}
+
+fn method_value_isize_count_zeros(x: isize) -> i64 {
+    x.count_zeros()
+}
+
+fn method_value_isize_leading_zeros(x: isize) -> i64 {
+    x.leading_zeros()
+}
+
+fn method_value_isize_trailing_zeros(x: isize) -> i64 {
+    x.trailing_zeros()
+}
+
+fn method_value_u8_is_power_of_two(x: u8) -> bool {
+    x.is_power_of_two()
+}
+
+fn method_value_u8_pow(x: u8, e: u32) -> u8 {
+    x.pow(e)
+}
+
+fn method_value_u8_max(x: u8, y: u8) -> u8 {
+    x.max(y)
+}
+
+fn method_value_u8_min(x: u8, y: u8) -> u8 {
+    x.min(y)
+}
+
+fn method_value_u8_wrapping_add(x: u8, y: u8) -> u8 {
+    x.wrapping_add(y)
+}
+
+fn method_value_u8_wrapping_sub(x: u8, y: u8) -> u8 {
+    x.wrapping_sub(y)
+}
+
+fn method_value_u8_wrapping_mul(x: u8, y: u8) -> u8 {
+    x.wrapping_mul(y)
+}
+
+fn method_value_u8_saturating_add(x: u8, y: u8) -> u8 {
+    x.saturating_add(y)
+}
+
+fn method_value_u8_saturating_sub(x: u8, y: u8) -> u8 {
+    x.saturating_sub(y)
+}
+
+fn method_value_u8_saturating_mul(x: u8, y: u8) -> u8 {
+    x.saturating_mul(y)
+}
+
+fn method_value_u8_count_ones(x: u8) -> i64 {
+    x.count_ones()
+}
+
+fn method_value_u8_count_zeros(x: u8) -> i64 {
+    x.count_zeros()
+}
+
+fn method_value_u8_leading_zeros(x: u8) -> i64 {
+    x.leading_zeros()
+}
+
+fn method_value_u8_trailing_zeros(x: u8) -> i64 {
+    x.trailing_zeros()
+}
+
+fn method_value_u16_is_power_of_two(x: u16) -> bool {
+    x.is_power_of_two()
+}
+
+fn method_value_u16_pow(x: u16, e: u32) -> u16 {
+    x.pow(e)
+}
+
+fn method_value_u16_max(x: u16, y: u16) -> u16 {
+    x.max(y)
+}
+
+fn method_value_u16_min(x: u16, y: u16) -> u16 {
+    x.min(y)
+}
+
+fn method_value_u16_wrapping_add(x: u16, y: u16) -> u16 {
+    x.wrapping_add(y)
+}
+
+fn method_value_u16_wrapping_sub(x: u16, y: u16) -> u16 {
+    x.wrapping_sub(y)
+}
+
+fn method_value_u16_wrapping_mul(x: u16, y: u16) -> u16 {
+    x.wrapping_mul(y)
+}
+
+fn method_value_u16_saturating_add(x: u16, y: u16) -> u16 {
+    x.saturating_add(y)
+}
+
+fn method_value_u16_saturating_sub(x: u16, y: u16) -> u16 {
+    x.saturating_sub(y)
+}
+
+fn method_value_u16_saturating_mul(x: u16, y: u16) -> u16 {
+    x.saturating_mul(y)
+}
+
+fn method_value_u16_count_ones(x: u16) -> i64 {
+    x.count_ones()
+}
+
+fn method_value_u16_count_zeros(x: u16) -> i64 {
+    x.count_zeros()
+}
+
+fn method_value_u16_leading_zeros(x: u16) -> i64 {
+    x.leading_zeros()
+}
+
+fn method_value_u16_trailing_zeros(x: u16) -> i64 {
+    x.trailing_zeros()
+}
+
+fn method_value_u32_is_power_of_two(x: u32) -> bool {
+    x.is_power_of_two()
+}
+
+fn method_value_u32_pow(x: u32, e: u32) -> u32 {
+    x.pow(e)
+}
+
+fn method_value_u32_max(x: u32, y: u32) -> u32 {
+    x.max(y)
+}
+
+fn method_value_u32_min(x: u32, y: u32) -> u32 {
+    x.min(y)
+}
+
+fn method_value_u32_wrapping_add(x: u32, y: u32) -> u32 {
+    x.wrapping_add(y)
+}
+
+fn method_value_u32_wrapping_sub(x: u32, y: u32) -> u32 {
+    x.wrapping_sub(y)
+}
+
+fn method_value_u32_wrapping_mul(x: u32, y: u32) -> u32 {
+    x.wrapping_mul(y)
+}
+
+fn method_value_u32_saturating_add(x: u32, y: u32) -> u32 {
+    x.saturating_add(y)
+}
+
+fn method_value_u32_saturating_sub(x: u32, y: u32) -> u32 {
+    x.saturating_sub(y)
+}
+
+fn method_value_u32_saturating_mul(x: u32, y: u32) -> u32 {
+    x.saturating_mul(y)
+}
+
+fn method_value_u32_count_ones(x: u32) -> i64 {
+    x.count_ones()
+}
+
+fn method_value_u32_count_zeros(x: u32) -> i64 {
+    x.count_zeros()
+}
+
+fn method_value_u32_leading_zeros(x: u32) -> i64 {
+    x.leading_zeros()
+}
+
+fn method_value_u32_trailing_zeros(x: u32) -> i64 {
+    x.trailing_zeros()
+}
+
+fn method_value_u64_is_power_of_two(x: u64) -> bool {
+    x.is_power_of_two()
+}
+
+fn method_value_u64_pow(x: u64, e: u32) -> u64 {
+    x.pow(e)
+}
+
+fn method_value_u64_max(x: u64, y: u64) -> u64 {
+    x.max(y)
+}
+
+fn method_value_u64_min(x: u64, y: u64) -> u64 {
+    x.min(y)
+}
+
+fn method_value_u64_wrapping_add(x: u64, y: u64) -> u64 {
+    x.wrapping_add(y)
+}
+
+fn method_value_u64_wrapping_sub(x: u64, y: u64) -> u64 {
+    x.wrapping_sub(y)
+}
+
+fn method_value_u64_wrapping_mul(x: u64, y: u64) -> u64 {
+    x.wrapping_mul(y)
+}
+
+fn method_value_u64_saturating_add(x: u64, y: u64) -> u64 {
+    x.saturating_add(y)
+}
+
+fn method_value_u64_saturating_sub(x: u64, y: u64) -> u64 {
+    x.saturating_sub(y)
+}
+
+fn method_value_u64_saturating_mul(x: u64, y: u64) -> u64 {
+    x.saturating_mul(y)
+}
+
+fn method_value_u64_count_ones(x: u64) -> i64 {
+    x.count_ones()
+}
+
+fn method_value_u64_count_zeros(x: u64) -> i64 {
+    x.count_zeros()
+}
+
+fn method_value_u64_leading_zeros(x: u64) -> i64 {
+    x.leading_zeros()
+}
+
+fn method_value_u64_trailing_zeros(x: u64) -> i64 {
+    x.trailing_zeros()
+}
+
+fn method_value_u128_is_power_of_two(x: u128) -> bool {
+    x.is_power_of_two()
+}
+
+fn method_value_u128_pow(x: u128, e: u32) -> u128 {
+    x.pow(e)
+}
+
+fn method_value_u128_max(x: u128, y: u128) -> u128 {
+    x.max(y)
+}
+
+fn method_value_u128_min(x: u128, y: u128) -> u128 {
+    x.min(y)
+}
+
+fn method_value_u128_wrapping_add(x: u128, y: u128) -> u128 {
+    x.wrapping_add(y)
+}
+
+fn method_value_u128_wrapping_sub(x: u128, y: u128) -> u128 {
+    x.wrapping_sub(y)
+}
+
+fn method_value_u128_wrapping_mul(x: u128, y: u128) -> u128 {
+    x.wrapping_mul(y)
+}
+
+fn method_value_u128_saturating_add(x: u128, y: u128) -> u128 {
+    x.saturating_add(y)
+}
+
+fn method_value_u128_saturating_sub(x: u128, y: u128) -> u128 {
+    x.saturating_sub(y)
+}
+
+fn method_value_u128_saturating_mul(x: u128, y: u128) -> u128 {
+    x.saturating_mul(y)
+}
+
+fn method_value_u128_count_ones(x: u128) -> i64 {
+    x.count_ones()
+}
+
+fn method_value_u128_count_zeros(x: u128) -> i64 {
+    x.count_zeros()
+}
+
+fn method_value_u128_leading_zeros(x: u128) -> i64 {
+    x.leading_zeros()
+}
+
+fn method_value_u128_trailing_zeros(x: u128) -> i64 {
+    x.trailing_zeros()
+}
+
+fn method_value_usize_to_string(x: usize) -> String {
+    x.to_string()
+}
+
+fn method_value_usize_is_power_of_two(x: usize) -> bool {
+    x.is_power_of_two()
+}
+
+fn method_value_usize_pow(x: usize, e: u32) -> usize {
+    x.pow(e)
+}
+
+fn method_value_usize_max(x: usize, y: usize) -> usize {
+    x.max(y)
+}
+
+fn method_value_usize_min(x: usize, y: usize) -> usize {
+    x.min(y)
+}
+
+fn method_value_usize_wrapping_add(x: usize, y: usize) -> usize {
+    x.wrapping_add(y)
+}
+
+fn method_value_usize_wrapping_sub(x: usize, y: usize) -> usize {
+    x.wrapping_sub(y)
+}
+
+fn method_value_usize_wrapping_mul(x: usize, y: usize) -> usize {
+    x.wrapping_mul(y)
+}
+
+fn method_value_usize_saturating_add(x: usize, y: usize) -> usize {
+    x.saturating_add(y)
+}
+
+fn method_value_usize_saturating_sub(x: usize, y: usize) -> usize {
+    x.saturating_sub(y)
+}
+
+fn method_value_usize_saturating_mul(x: usize, y: usize) -> usize {
+    x.saturating_mul(y)
+}
+
+fn method_value_usize_count_ones(x: usize) -> i64 {
+    x.count_ones()
+}
+
+fn method_value_usize_count_zeros(x: usize) -> i64 {
+    x.count_zeros()
+}
+
+fn method_value_usize_leading_zeros(x: usize) -> i64 {
+    x.leading_zeros()
+}
+
+fn method_value_usize_trailing_zeros(x: usize) -> i64 {
+    x.trailing_zeros()
+}
+
+fn method_value_f32_trunc(x: f32) -> f32 {
+    x.trunc()
+}
+
+fn method_value_f32_signum(x: f32) -> f32 {
+    x.signum()
+}
+
+fn method_value_f32_max(x: f32, y: f32) -> f32 {
+    x.max(y)
+}
+
+fn method_value_f32_min(x: f32, y: f32) -> f32 {
+    x.min(y)
+}
+
+fn method_value_f32_pow(x: f32, y: f32) -> f32 {
+    x.pow(y)
+}
+
+fn method_value_f32_powi(x: f32, e: i32) -> f32 {
+    x.powi(e)
+}
+
+fn method_value_f64_trunc(x: f64) -> f64 {
+    x.trunc()
+}
+
+fn method_value_f64_signum(x: f64) -> f64 {
+    x.signum()
+}
+
+fn method_value_f64_max(x: f64, y: f64) -> f64 {
+    x.max(y)
+}
+
+fn method_value_f64_min(x: f64, y: f64) -> f64 {
+    x.min(y)
+}
+
+fn method_value_f64_pow(x: f64, y: f64) -> f64 {
+    x.pow(y)
+}
+
+fn method_value_f64_powi(x: f64, e: i32) -> f64 {
+    x.powi(e)
+}
+
+fn method_value_u8_is_ascii_digit(x: u8) -> bool {
+    x.is_ascii_digit()
+}
+
+fn method_value_u8_is_ascii_alphabetic(x: u8) -> bool {
+    x.is_ascii_alphabetic()
+}
+
+fn method_value_char_is_ascii_alphabetic(x: char) -> bool {
+    x.is_ascii_alphabetic()
+}
+
+fn method_value_u8_is_ascii_alphanumeric(x: u8) -> bool {
+    x.is_ascii_alphanumeric()
+}
+
+fn method_value_char_is_ascii_alphanumeric(x: char) -> bool {
+    x.is_ascii_alphanumeric()
+}
+
+fn method_value_u8_is_ascii_whitespace(x: u8) -> bool {
+    x.is_ascii_whitespace()
+}
+
+fn method_value_char_is_ascii_whitespace(x: char) -> bool {
+    x.is_ascii_whitespace()
+}
+
+fn method_value_u8_is_ascii_uppercase(x: u8) -> bool {
+    x.is_ascii_uppercase()
+}
+
+fn method_value_char_is_ascii_uppercase(x: char) -> bool {
+    x.is_ascii_uppercase()
+}
+
+fn method_value_u8_is_ascii_lowercase(x: u8) -> bool {
+    x.is_ascii_lowercase()
+}
+
+fn method_value_char_is_ascii_lowercase(x: char) -> bool {
+    x.is_ascii_lowercase()
+}
+
+fn method_value_u8_is_ascii_punctuation(x: u8) -> bool {
+    x.is_ascii_punctuation()
+}
+
+fn method_value_char_is_ascii_punctuation(x: char) -> bool {
+    x.is_ascii_punctuation()
+}
+
+fn method_value_u8_to_ascii_uppercase(x: u8) -> u8 {
+    x.to_ascii_uppercase()
+}
+
+fn method_value_u8_to_ascii_lowercase(x: u8) -> u8 {
+    x.to_ascii_lowercase()
+}
+
+fn method_value_String_contains(x: String, p: Str) -> bool {
+    x.contains(p)
+}
+
+fn method_value_String_starts_with(x: String, p: Str) -> bool {
+    x.starts_with(p)
+}
+
+fn method_value_String_ends_with(x: String, p: Str) -> bool {
+    x.ends_with(p)
+}
+
+fn method_value_String_trim_start(x: String) -> Str {
+    x.trim_start()
+}
+
+fn method_value_String_trim_end(x: String) -> Str {
+    x.trim_end()
+}
+
+fn method_value_Str_contains(x: Str, p: Str) -> bool {
+    x.contains(p)
+}
+
+fn method_value_Str_starts_with(x: Str, p: Str) -> bool {
+    x.starts_with(p)
+}
+
+fn method_value_Str_ends_with(x: Str, p: Str) -> bool {
+    x.ends_with(p)
+}
+
+fn method_value_Str_trim_start(x: Str) -> Str {
+    x.trim_start()
+}
+
+fn method_value_Str_trim_end(x: Str) -> Str {
+    x.trim_end()
+}
+
+fn method_value_Vec_len[T](x: Vec[T]) -> i64 {
+    x.len()
+}
+
+fn method_value_Vec_is_empty[T](x: Vec[T]) -> bool {
+    x.is_empty()
+}
+
+fn method_value_VecDeque_len[T](x: VecDeque[T]) -> i64 {
+    x.len()
+}
+
+fn method_value_VecDeque_is_empty[T](x: VecDeque[T]) -> bool {
+    x.is_empty()
+}
+
+fn method_value_Set_len[T: Hash + Eq](x: Set[T]) -> i64 {
+    x.len()
+}
+
+fn method_value_Set_is_empty[T: Hash + Eq](x: Set[T]) -> bool {
+    x.is_empty()
+}
+
+fn method_value_SortedSet_len[T: Ord](x: SortedSet[T]) -> i64 {
+    x.len()
+}
+
+fn method_value_SortedSet_is_empty[T: Ord](x: SortedSet[T]) -> bool {
+    x.is_empty()
+}
+
+fn method_value_Map_len[K: Hash + Eq, V](x: Map[K, V]) -> i64 {
+    x.len()
+}
+
+fn method_value_Map_is_empty[K: Hash + Eq, V](x: Map[K, V]) -> bool {
+    x.is_empty()
+}
+
+fn method_value_SortedMap_len[K: Ord, V](x: SortedMap[K, V]) -> i64 {
+    x.len()
+}
+
+fn method_value_SortedMap_is_empty[K: Ord, V](x: SortedMap[K, V]) -> bool {
+    x.is_empty()
+}
+
+fn method_value_Vec_contains[T: Eq](x: Vec[T], v: T) -> bool {
+    x.contains(v)
+}
+
+fn method_value_VecDeque_contains[T: Eq](x: VecDeque[T], v: T) -> bool {
+    x.contains(v)
+}
+
+fn method_value_Set_contains[T: Hash + Eq](x: Set[T], v: T) -> bool {
+    x.contains(v)
+}
+
+fn method_value_SortedSet_contains[T: Ord](x: SortedSet[T], v: T) -> bool {
+    x.contains(v)
+}
+
+fn method_value_Map_contains_key[K: Hash + Eq, V](x: Map[K, V], k: K) -> bool {
+    x.contains_key(k)
+}
+
+fn method_value_SortedMap_contains_key[K: Ord, V](x: SortedMap[K, V], k: K) -> bool {
+    x.contains_key(k)
+}
+
+fn method_value_SortedSet_min[T: Ord + Clone](x: SortedSet[T]) -> Option[T] {
+    x.min().cloned()
+}
+
+fn method_value_SortedSet_max[T: Ord + Clone](x: SortedSet[T]) -> Option[T] {
+    x.max().cloned()
+}

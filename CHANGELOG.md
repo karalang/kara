@@ -601,6 +601,17 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 - `String`/`Str` have Rust's `eq_ignore_ascii_case(other: Str) -> bool`, as
   `char` and `u8` did (B-2026-11-25-81).
 
+- A built-in type's own method in the UFCS form, `i64.abs(-3)`,
+  `i64.pow(2, 10)`, `Vec.len(v)`, `char.is_alphabetic(c)`, `Map.contains_key(m, k)`,
+  is the receiver call, as a user type's is (design.md § Method calls); a
+  bare literal receiver takes the named type, so `i32.wrapping_add(2147483647, 1)`
+  wraps at 32 bits. Named as a value, the integer, float, ASCII, string
+  and container methods (`i64.pow`, `u64.count_ones`, `String.contains`,
+  `Vec.len`, `Set.contains`, `Vec.first`) are function values, also when
+  passed straight to a `Fn` parameter (`run(i64.abs, -5)`); one with no
+  function value yet is refused with the closure to write, not as a missing
+  constant (B-2026-11-25-40).
+
 - `karac explain <file>.<fn>` on a function in a recursive group, or one
   that calls itself, adds a `Fixpoint:` section: the group, then the
   chain `φ0 = ∅`, `φ1`, … up to `φ*`, each step with the atoms it added

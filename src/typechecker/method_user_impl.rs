@@ -2594,7 +2594,7 @@ impl<'a> super::TypeChecker<'a> {
 
 /// `Vec` methods an iterator lacks: one of them called on a name bound to a
 /// library iterator means a `Vec` was wanted.
-const VEC_ONLY_METHODS: &[&str] = &[
+pub(super) const VEC_ONLY_METHODS: &[&str] = &[
     "len", "is_empty", "iter", "get", "first", "last", "pop", "push", "join", "sort", "reverse",
     "contains", "swap", "truncate", "remove", "insert", "concat",
 ];

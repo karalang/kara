@@ -2100,6 +2100,14 @@ impl<'a> super::TypeChecker<'a> {
                     );
                     return Type::Error;
                 }
+                if super::method_ufcs::builtin_type_has_method(type_name, member) {
+                    self.type_error(
+                        super::method_ufcs::builtin_method_value_refusal(type_name, member),
+                        *span,
+                        TypeErrorKind::NoMethodFound,
+                    );
+                    return Type::Error;
+                }
                 let hint = match (type_name.as_str(), member.as_str()) {
                     ("Array", "filled" | "new" | "with_capacity") => {
                         ": a fixed array is built with the repeat literal `[v; N]`, N a \

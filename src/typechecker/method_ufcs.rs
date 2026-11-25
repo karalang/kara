@@ -102,9 +102,19 @@ impl<'a> super::TypeChecker<'a> {
             && alias == "Clone"
             && method == "clone"
             && self.local_scope.lookup("Clone").is_none();
+        // `i64.abs(x)`, `Vec.len(v)`, `char.is_alphabetic(c)`: a built-in
+        // type's own method, which no impl declares (B-2026-11-25-40).
+        let builtin = trait_name.is_none()
+            && alias == name
+            && trait_args.is_none()
+            && builtin_type_has_method(name, method);
         let takes_self = match &trait_name {
             Some(t) => self.trait_method_takes_self(t, method)?,
-            None if is_type => self.type_method_takes_self(name, method)?,
+            None if is_type || builtin => match self.type_method_takes_self(name, method) {
+                Some(b) => b,
+                None if builtin => true,
+                None => return None,
+            },
             None if builtin_clone => true,
             None => return None,
         };
@@ -199,12 +209,55 @@ impl<'a> super::TypeChecker<'a> {
         let saved_args = self.env.ufcs_trait_args.take();
         self.env.ufcs_trait_args = trait_name.as_ref().and(trait_args);
         self.env.ufcs_trait = trait_name.map(|t| (t, method.to_string()));
-        let ret = self.infer_method_call(&recv.value, method, rest, span, args_close_span);
+        // `i32.wrapping_add(1, 2)`: a bare literal receiver is the named
+        // type's, as `lowering::rewrite_ufcs_call` writes it.
+        let pinned = builtin.then(|| recv.value.clone()).and_then(|mut e| {
+            crate::lowering::pin_ufcs_literal_receiver(name, &mut e).then_some(e)
+        });
+        let recv_expr = pinned.as_ref().unwrap_or(&recv.value);
+        let ret = self.infer_method_call(recv_expr, method, rest, span, args_close_span);
         self.env.ufcs_trait = saved;
         self.env.ufcs_trait_args = saved_args;
         // The name as written: `lowering` matches it against the callee.
         self.ufcs_calls
             .insert(SpanKey::from_span(span), alias.to_string());
+        // `i64.abs(x)` calls `i64`'s method, so `x` is an `i64`.
+        if builtin && !is_type && self.errors.len() == errors {
+            let rt = self
+                .expr_types
+                .get(&SpanKey::from_span(&recv.value.span))
+                .cloned()
+                .unwrap_or(Type::Error);
+            let rt = super::inference::resolve_type_var_top(&rt, &self.env.substitutions);
+            let mut base = &rt;
+            while let Type::Ref(inner) | Type::MutRef(inner) = base {
+                base = inner;
+            }
+            let fits = match (self.primitive_type(name), base) {
+                (_, Type::Error | Type::TypeVar(_)) => true,
+                (Some(Type::Str), Type::Str) => true,
+                (Some(Type::Str) | Some(Type::Named { .. }), Type::Named { name: n, .. })
+                    if matches!(name, "String" | "Str") =>
+                {
+                    n == "StringSlice"
+                }
+                (Some(Type::Named { .. }), Type::Str) => name == "Str",
+                (Some(want), got) => want == *got,
+                (None, Type::Named { name: n, .. }) => n.as_str() == name,
+                (None, _) => false,
+            };
+            if !fits {
+                self.type_error(
+                    format!(
+                        "`{name}.{method}` takes a `{name}` receiver, found `{}`",
+                        type_display(&rt)
+                    ),
+                    recv.value.span,
+                    TypeErrorKind::TypeMismatch,
+                );
+                return Some(Type::Error);
+            }
+        }
         // `User.validate(x)` calls `User`'s method, so `x` is a `User`.
         if is_type && self.errors.len() == errors {
             let rt = self
@@ -543,4 +596,82 @@ fn self_from_expected(te: &TypeExpr, expected: &Type) -> Option<Type> {
             .find_map(|(t, e)| self_from_expected(t, e)),
         _ => None,
     }
+}
+
+/// Whether `name` is a built-in type with a method `method` the compiler
+/// implements natively, so that `name.method(recv, ..)` is the receiver
+/// form `recv.method(..)` (design.md § Method calls: "Method calls and UFCS
+/// are the same call"; B-2026-11-25-40). An associated function of the type
+/// (`Vec.new`, `char.from_u32`, `i64.parse`) is not one of these names, so
+/// it keeps the type-receiver path.
+pub(super) fn builtin_type_has_method(name: &str, method: &str) -> bool {
+    use super::expr_method_call::{
+        MAP_BUILTIN_METHODS, SET_BUILTIN_METHODS, SLICE_BUILTIN_METHODS, SLICE_MUTATING_METHODS,
+        SORTED_MAP_BUILTIN_METHODS, SORTED_SET_BUILTIN_METHODS, STRING_BUILTIN_METHODS,
+    };
+    use super::method_numeric::{
+        FLOAT_METHODS, INT_METHODS, SIGNED_INT_METHODS, UNSIGNED_INT_METHODS,
+    };
+    let any = |lists: &[&[&str]]| lists.iter().any(|l| l.contains(&method));
+    // Every scalar renders, copies and compares itself.
+    let scalar_common = matches!(method, "to_string" | "clone" | "cmp" | "eq" | "hash");
+    // The ASCII surface a `char` and a `u8` share.
+    let ascii = method.starts_with("is_ascii")
+        || matches!(
+            method,
+            "to_ascii_uppercase" | "to_ascii_lowercase" | "eq_ignore_ascii_case"
+        );
+    match name {
+        "i8" | "i16" | "i32" | "i64" | "i128" | "isize" => {
+            scalar_common || any(&[INT_METHODS, SIGNED_INT_METHODS])
+        }
+        "u16" | "u32" | "u64" | "u128" | "usize" => {
+            scalar_common || any(&[INT_METHODS, UNSIGNED_INT_METHODS])
+        }
+        "u8" => scalar_common || ascii || any(&[INT_METHODS, UNSIGNED_INT_METHODS]),
+        "f16" | "bf16" | "f32" | "f64" => scalar_common || any(&[FLOAT_METHODS]),
+        "bool" => scalar_common,
+        "char" => {
+            scalar_common
+                || ascii
+                || matches!(
+                    method,
+                    "is_alphabetic"
+                        | "is_numeric"
+                        | "is_alphanumeric"
+                        | "is_whitespace"
+                        | "is_uppercase"
+                        | "is_lowercase"
+                        | "is_control"
+                        | "is_digit"
+                        | "to_digit"
+                        | "to_uppercase"
+                        | "to_lowercase"
+                        | "len_utf8"
+                )
+        }
+        "String" | "Str" => any(&[STRING_BUILTIN_METHODS]),
+        "Vec" => any(&[
+            SLICE_BUILTIN_METHODS,
+            SLICE_MUTATING_METHODS,
+            super::method_user_impl::VEC_ONLY_METHODS,
+        ]),
+        "VecDeque" => any(&[super::method_vec_mutation::DEQUE_METHODS]),
+        "Map" => any(&[MAP_BUILTIN_METHODS]),
+        "Set" => any(&[SET_BUILTIN_METHODS]),
+        "SortedMap" => any(&[SORTED_MAP_BUILTIN_METHODS]),
+        "SortedSet" => any(&[SORTED_SET_BUILTIN_METHODS]),
+        _ => false,
+    }
+}
+
+/// The refusal for `ty.method` named as a value when the library has no
+/// function to stand for that method (runtime/stdlib/source/method_values.kara):
+/// the call form and a closure both work (B-2026-11-25-40).
+pub(super) fn builtin_method_value_refusal(ty: &str, method: &str) -> String {
+    format!(
+        "`{ty}.{method}` names a method of `{ty}`, which has no function value yet: write \
+         a closure that calls it, `|x| x.{method}(..)`, or call it with the receiver first, \
+         `{ty}.{method}(x, ..)`"
+    )
 }
