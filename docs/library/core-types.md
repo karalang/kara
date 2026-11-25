@@ -143,6 +143,8 @@ What the plain operators do on overflow, and the other numeric rules, are in [de
 
 **ASCII case.** As Rust's: `a.eq_ignore_ascii_case(b) -> bool` on two `char`s or two `u8`s is whether they are equal once each is put in ASCII lower case, so `'a'` and `'A'` are, and `'é'` and `'É'` are not. Rust takes `&Self`; the scalar is passed here. `b.to_ascii_lowercase()` and `b.to_ascii_uppercase()` map a `u8` as they map a `char`, and return a `u8`.
 
+**Unicode case of a `char`.** `c.to_uppercase()` and `c.to_lowercase()` return a `char`, not Rust's iterator. The full Unicode case mapping applies when it gives exactly one scalar (`'é'.to_uppercase() == 'É'`, `'Σ'.to_lowercase() == 'σ'`). A scalar whose mapping expands to more than one is returned unchanged: `'ß'.to_uppercase()` is `'ß'` and `'İ'.to_lowercase()` is `'İ'`. `String.to_uppercase()` and `String.to_lowercase()` apply the full mapping, expansions included, so `"ß".to_uppercase() == "SS"`. (B-2026-08-12-25.)
+
 **Float methods.** `f32` and `f64` have these methods, each returning `Self` unless noted. Kāra's power method is `pow`, not Rust's `powf`.
 
 | Group | Methods |

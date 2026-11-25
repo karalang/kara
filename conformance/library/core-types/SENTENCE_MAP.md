@@ -132,6 +132,11 @@ One row per normative unit of docs/library/core-types.md (each prose sentence, e
 | cor.126 | Numbers | `a.eq_ignore_ascii_case(b) -> bool` on two `char`s or two `u8`s is whether they are equal once each is put in ASCII lower case, so `'a'` and | char_digits_and_ascii_case ('é' and 'É' are not equal; u8 forms return u8); ct_ct2 (ASCII case) |
 | cor.127 | Numbers | Rust takes `&Self`; the scalar is passed here. | char_digits_and_ascii_case ('é' and 'É' are not equal; u8 forms return u8); ct_ct2 (ASCII case) |
 | cor.128 | Numbers | `b.to_ascii_lowercase()` and `b.to_ascii_uppercase()` map a `u8` as they map a `char`, and return a `u8`. | char_digits_and_ascii_case ('é' and 'É' are not equal; u8 forms return u8); ct_ct2 (ASCII case) |
+| cor.128a | Numbers | **Unicode case of a `char`.** `c.to_uppercase()` and `c.to_lowercase()` return a `char`, not Rust's iterator. | char_unicode_case_one_scalar |
+| cor.128b | Numbers | The full Unicode case mapping applies when it gives exactly one scalar (`'é'.to_uppercase() == 'É'`, `'Σ'.to_lowercase() == 'σ'`). | char_unicode_case_one_scalar |
+| cor.128c | Numbers | A scalar whose mapping expands to more than one is returned unchanged: `'ß'.to_uppercase()` is `'ß'` and `'İ'.to_lowercase()` is `'İ'`. | char_unicode_case_one_scalar ('ß', 'İ' unchanged) |
+| cor.128d | Numbers | `String.to_uppercase()` and `String.to_lowercase()` apply the full mapping, expansions included, so `"ß".to_uppercase() == "SS"`. | char_unicode_case_one_scalar ("ß" gives "SS") |
+| cor.128e | Numbers | (B-2026-08-12-25.) | citation |
 | cor.129 | Numbers | **Float methods.** `f32` and `f64` have these methods, each returning `Self` unless noted. | float_methods_by_group; ct_ct3 |
 | cor.130 | Numbers | Kāra's power method is `pow`, not Rust's `powf`. | float_power_is_pow_not_powf_refused |
 | cor.131 | Numbers | row: Group / Methods | float_methods_by_group (every method of every group, f64 and f32); ct_ct3 (by group, NaN in min/max) |

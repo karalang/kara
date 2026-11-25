@@ -1,0 +1,9 @@
+fn main() {
+    println('a'.to_uppercase());
+    println('Z'.to_lowercase());
+    println('é'.to_uppercase());
+    println('Σ'.to_lowercase());
+    println('ß'.to_uppercase());
+    println('İ'.to_lowercase());
+    println("ß".to_uppercase());
+}
