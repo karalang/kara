@@ -1414,7 +1414,7 @@ impl<'a> Lexer<'a> {
                                 self.advance();
                             }
                             return self.make_spanned(Token::Error(
-                                "Unicode escapes are not permitted in byte literals — use \\xFF for byte 0xFF."
+                                "Unicode escapes are not permitted in byte literals; use \\xFF for byte 0xFF."
                                     .to_string(),
                             ));
                         }
@@ -1523,7 +1523,7 @@ impl<'a> Lexer<'a> {
                         self.advance();
                     }
                     return self.make_spanned(Token::Error(
-                        "Unicode escapes are not permitted in byte literals — use \\xFF for byte 0xFF.".to_string(),
+                        "Unicode escapes are not permitted in byte literals; use \\xFF for byte 0xFF.".to_string(),
                     ));
                 }
                 _ => {

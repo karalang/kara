@@ -75,3 +75,15 @@ fn one_letter_const_help_names_the_capital() {
         "{out}"
     );
 }
+
+/// B-2026-11-25-5: the byte-literal `\u{...}` error is the page's sentence.
+#[test]
+fn byte_unicode_escape_error_is_the_pages_sentence() {
+    let out = check("lexical", "byte_unicode_escape_full_message");
+    assert!(
+        out.contains(
+            "Unicode escapes are not permitted in byte literals; use \\xFF for byte 0xFF."
+        ),
+        "{out}"
+    );
+}

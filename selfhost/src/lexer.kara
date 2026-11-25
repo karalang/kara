@@ -1381,7 +1381,7 @@ impl Lexer {
                 if self.peek() == b'\'' {
                     self.advance();
                 }
-                return self.make_spanned(Token.Error("Unicode escapes are not permitted in byte literals — use \\xFF for byte 0xFF.".to_string()));
+                return self.make_spanned(Token.Error("Unicode escapes are not permitted in byte literals; use \\xFF for byte 0xFF.".to_string()));
             } else {
                 let bad = self.consumed_escape_char(e);
                 let mut m = "Unknown escape sequence in byte literal: \\".to_string();
@@ -1479,7 +1479,7 @@ impl Lexer {
                     if self.peek() == b'"' {
                         self.advance();
                     }
-                    return self.make_spanned(Token.Error("Unicode escapes are not permitted in byte literals — use \\xFF for byte 0xFF.".to_string()));
+                    return self.make_spanned(Token.Error("Unicode escapes are not permitted in byte literals; use \\xFF for byte 0xFF.".to_string()));
                 } else {
                     let bad = self.consumed_escape_char(e);
                     let mut m = "Unknown escape sequence in byte literal: \\".to_string();
