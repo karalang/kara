@@ -541,6 +541,13 @@ impl<'a> super::TypeChecker<'a> {
                         return Some(Type::Unit);
                     }
                     self.check_assignable(&resolved_elem, &resolved_src, args[0].value.span);
+                    if method == "extend_from_slice" {
+                        self.require_value_clone(
+                            "extend_from_slice",
+                            &resolved_elem,
+                            &args[0].value.span,
+                        );
+                    }
                     return Some(Type::Unit);
                 }
                 if method == "extend" && !matches!(arg_inner, Type::Error) {

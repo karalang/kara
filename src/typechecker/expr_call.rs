@@ -2930,6 +2930,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     _ => elem_ty,
                 };
+                self.require_value_clone("Vec.filled", &elem_ty, &args[1].value.span);
                 let ty = Type::Named {
                     name: "Vec".to_string(),
                     args: vec![elem_ty],

@@ -5,6 +5,7 @@
 // by following the steps from the first letters. O(|a| |b|) steps, O(|b|)
 // lengths.
 
+#[derive(Copy, Clone)]
 enum Step {
     Both,
     FromA,

@@ -1689,6 +1689,7 @@ impl<'a> super::TypeChecker<'a> {
                     // element.
                     self.record_float_coercion(&arg.value, &elem, &at);
                     self.check_assignable(&elem, &at, arg.value.span);
+                    self.require_value_clone("fill", &elem, &arg.value.span);
                 }
                 Type::Unit
             }
@@ -1947,6 +1948,7 @@ impl<'a> super::TypeChecker<'a> {
                     self.check_i64_arg(&args[0].value, &at);
                     let vt = self.infer_expr(&args[1].value);
                     self.check_assignable(&elem, &vt, args[1].value.span);
+                    self.require_value_clone("Vec.resize", &elem, &args[1].value.span);
                 }
                 Type::Unit
             }
@@ -2216,6 +2218,7 @@ impl<'a> super::TypeChecker<'a> {
                     // element.
                     self.record_float_coercion(&arg.value, &elem, &at);
                     self.check_assignable(&elem, &at, arg.value.span);
+                    self.require_value_clone("fill", &elem, &arg.value.span);
                 }
                 Type::Unit
             }

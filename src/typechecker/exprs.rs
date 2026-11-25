@@ -4884,6 +4884,11 @@ impl<'a> super::TypeChecker<'a> {
                                 // `Vec.with_capacity(n)` constructor at
                                 // that position can short-circuit on it.
                                 self.check_expr(&args[1].value, &type_args[0]);
+                                self.require_value_clone(
+                                    "Vec.filled",
+                                    &type_args[0],
+                                    &args[1].value.span,
+                                );
                                 self.record_expr_type(&expr.span, expected);
                                 return expected.clone();
                             }
@@ -5106,6 +5111,7 @@ impl<'a> super::TypeChecker<'a> {
                 self.infer_expr(count);
             }
             self.check_expr(value, element);
+            self.require_value_clone("[v; n]", element, &value.span);
             self.record_expr_type(&expr.span, expected);
             return expected.clone();
         }
@@ -5233,6 +5239,7 @@ impl<'a> super::TypeChecker<'a> {
                         );
                     }
                     self.check_expr(value, &element);
+                    self.require_value_clone("[v; n]", &element, &value.span);
                     self.warn_partial_move_of_drop_struct(value, &element);
                 }
                 _ => unreachable!("gated by contextual_sequence_element_pushdown"),
@@ -22278,6 +22285,7 @@ impl<'a> super::TypeChecker<'a> {
                 } else {
                     self.infer_expr(value)
                 };
+                self.require_value_clone("[v; n]", &elem_ty, &value.span);
                 let count_ty = self.infer_expr(count);
                 // Count must be an integer type; report otherwise but keep going.
                 let count_is_int = matches!(count_ty, Type::Int(_) | Type::UInt(_) | Type::Error);

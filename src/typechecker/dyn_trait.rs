@@ -378,6 +378,149 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// `what` copies one value of `elem` into each new slot (`resize`,
+    /// `fill`, `Vec.filled`, `extend_from_slice`, `[v; n]`), so `elem`
+    /// needs `.clone()`: each is `where T: Clone` (collections.md,
+    /// design.md § Collection literals), and `Clone` is never implied
+    /// (design.md § Derive). The bound went unchecked, so a struct with
+    /// no `Clone`, an unbounded `T` and a `Mutex` each got field-by-field
+    /// copies (B-2026-11-25-48). A `Copy` value copies.
+    pub(super) fn require_value_clone(&mut self, what: &str, elem: &Type, span: &Span) {
+        if !self.cli_lint_overrides.strict_core {
+            return;
+        }
+        let elem = self.resolved_now(elem);
+        if self.value_clones(&elem) {
+            return;
+        }
+        let shown = type_display(&elem);
+        if let Some(p) = self.unbounded_clone_param_within(&elem) {
+            self.type_error(
+                format!(
+                    "`{what}` copies its value into each new slot, so '{shown}' needs \
+                     `.clone()`, and the type parameter `{p}` has no `Clone` bound: declare \
+                     it `{p}: Clone`"
+                ),
+                *span,
+                TypeErrorKind::TraitBoundNotSatisfied,
+            );
+        } else if let Some((name, fix)) = self.copy_derive_fix_named(&elem) {
+            self.type_error_with_fix_it(
+                format!(
+                    "`{what}` copies its value into each new slot, and '{name}' has no \
+                     `.clone()`: add `{}` to it",
+                    fix.replacement.trim()
+                ),
+                *span,
+                TypeErrorKind::TraitBoundNotSatisfied,
+                fix,
+            );
+        } else {
+            self.type_error(
+                format!(
+                    "`{what}` copies its value into each new slot, and '{shown}' does not \
+                     implement `Clone`: build each element on its own (a loop that \
+                     `push`es a new value)"
+                ),
+                *span,
+                TypeErrorKind::TraitBoundNotSatisfied,
+            );
+        }
+    }
+
+    /// Whether a value of `ty` copies or clones, with a type parameter
+    /// held to its declared bounds (`type_supports_clone` lets any `T`
+    /// through) and a view copying as the `Copy` value it is.
+    fn value_clones(&self, ty: &Type) -> bool {
+        match ty {
+            Type::TypeParam(p) => {
+                !self.enclosing_bounds.contains_key(p)
+                    || self.type_param_satisfies_bound(p, "Clone")
+            }
+            Type::Ref(_) => true,
+            Type::Refinement { base, .. } => self.value_clones(base),
+            Type::Tuple(elems) => elems.iter().all(|e| self.value_clones(e)),
+            Type::Array { element, .. } | Type::Vector { element, .. } => {
+                self.value_clones(element)
+            }
+            Type::Named { name, args }
+                if matches!(
+                    name.as_str(),
+                    "Option"
+                        | "Result"
+                        | "Vec"
+                        | "VecDeque"
+                        | "Map"
+                        | "SortedMap"
+                        | "Set"
+                        | "SortedSet"
+                ) =>
+            {
+                super::types::element_args(name, args)
+                    .iter()
+                    .all(|a| self.value_clones(a))
+            }
+            _ => self.is_type_copy(ty) || self.type_supports_clone(ty),
+        }
+    }
+
+    /// The first type parameter inside `ty` with no `Clone` bound.
+    fn unbounded_clone_param_within(&self, ty: &Type) -> Option<String> {
+        self.unbounded_param_within(ty, "Clone")
+    }
+
+    /// The first type parameter inside `ty` (not behind a view) that
+    /// carries no `trait_name` bound.
+    pub(super) fn unbounded_param_within(&self, ty: &Type, trait_name: &str) -> Option<String> {
+        match ty {
+            // Only a parameter of an enclosing item: a library signature's
+            // own `T` can reach here unsolved, and is not the caller's.
+            Type::TypeParam(p) => (self.enclosing_bounds.contains_key(p)
+                && !self.type_param_satisfies_bound(p, trait_name))
+            .then(|| p.clone()),
+            Type::Named { args, .. } | Type::Tuple(args) => args
+                .iter()
+                .find_map(|a| self.unbounded_param_within(a, trait_name)),
+            Type::Array { element, .. }
+            | Type::Vector { element, .. }
+            | Type::Refinement { base: element, .. } => {
+                self.unbounded_param_within(element, trait_name)
+            }
+            _ => None,
+        }
+    }
+
+    /// `dedup` compares neighbouring elements with `==`, so its element
+    /// needs `PartialEq` (collections.md, `where T: PartialEq`), which went
+    /// unchecked (B-2026-11-25-48).
+    pub(super) fn require_value_eq(&mut self, what: &str, elem: &Type, span: &Span) {
+        if !self.cli_lint_overrides.strict_core {
+            return;
+        }
+        let elem = self.resolved_now(elem);
+        let shown = type_display(&elem);
+        if let Some(p) = self.unbounded_param_within(&elem, "PartialEq") {
+            self.type_error(
+                format!(
+                    "`{what}` compares elements with `==`, so '{shown}' needs `PartialEq`, \
+                     and the type parameter `{p}` has no `PartialEq` bound: declare it \
+                     `{p}: PartialEq`"
+                ),
+                *span,
+                TypeErrorKind::TraitBoundNotSatisfied,
+            );
+        } else if !self.type_supports_partial_eq(&elem) {
+            self.type_error(
+                format!(
+                    "`{what}` compares elements with `==`, and '{shown}' does not implement \
+                     PartialEq: add `#[derive(PartialEq)]` to it"
+                ),
+                *span,
+                TypeErrorKind::TraitBoundNotSatisfied,
+            );
+        }
+    }
+
     /// The trait of the first `dyn` inside `ty` whose values do not clone.
     fn uncloneable_dyn_within(&self, ty: &Type) -> Option<String> {
         match ty {

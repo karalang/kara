@@ -1,3 +1,4 @@
+#[derive(Clone)]
 struct P { xs: Vec[i64] }
 fn main() {
     let mut dp: Vec[Vec[bool]] = vec![vec![false; 2]; 3];

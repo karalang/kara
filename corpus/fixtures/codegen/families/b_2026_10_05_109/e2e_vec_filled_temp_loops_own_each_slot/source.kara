@@ -1,3 +1,4 @@
+#[derive(Clone)]
 struct P { name: String, k: i64 }
 fn total(v: Vec[String]) -> i64 { let mut n = 0; for s in v { n = n + s.len(); } return n; }
 fn main() {

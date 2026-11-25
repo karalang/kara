@@ -122,6 +122,14 @@ impl<'a> super::TypeChecker<'a> {
                 _ => false,
             };
             if is_vec {
+                let elem = match obj_ty {
+                    Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+                    t => t,
+                };
+                if let Type::Named { args: ea, .. } = elem {
+                    let elem = ea[0].clone();
+                    self.require_value_eq("dedup", &elem, span);
+                }
                 if !args.is_empty() {
                     self.type_error(
                         format!("Vec.dedup() takes no arguments, found {}", args.len()),
