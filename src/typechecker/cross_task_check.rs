@@ -414,8 +414,9 @@ impl<'a> super::TypeChecker<'a> {
         )
     }
 
-    /// A function value bound from a closure literal in this body is not
-    /// erased: its environment is in sight, and `fn_env_cross_task.rs`
+    /// A function value bound from a closure literal, a named function or a
+    /// method path in this body is not erased: its environment is in sight
+    /// (empty for the last two, B-2026-11-25-43), and `fn_env_cross_task.rs`
     /// checks what it reaches (core semantics §6.3, B-2026-11-01-26). So the
     /// erased-function refusal does not apply to the binding itself.
     fn fn_value_in_sight(

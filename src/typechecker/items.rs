@@ -13551,6 +13551,19 @@ impl<'a> super::TypeChecker<'a> {
                     let inferred = self.open_unsolved_let_params(inferred, value);
                     self.check_unsolved_type_param(&inferred, &value.span);
                     self.record_uninferrable_binding_origin(pattern, &inferred, value);
+                    // `let f = sq;` / `let g = i64.abs;`: a named function or
+                    // a method path has an empty environment, in sight as a
+                    // closure literal's is (core semantics §6.3,
+                    // B-2026-11-25-43). An annotation (`let f: Fn(..) = sq;`)
+                    // erases it, so only the unannotated form is in sight.
+                    if let PatternKind::Binding(name) = &pattern.kind {
+                        if self
+                            .fn_item_spans
+                            .contains(&crate::resolver::SpanKey::from_span(&value.span))
+                        {
+                            self.current_fn_closure_lets.insert(name.clone());
+                        }
+                    }
                     inferred
                 };
                 // core §5.10: `let mut t = since` with `since: ref i64` keeps a

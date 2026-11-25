@@ -7447,11 +7447,17 @@ impl<'l, 'a> Bx<'l, 'a> {
                 if let PatternKind::Binding(name) = &pattern.kind {
                     // A closure or function item keeps its own type; any
                     // other function-typed value (a call's result, a
-                    // field) is an erased `Fn` value.
-                    let item = matches!(
-                        value.kind,
-                        ExprKind::Closure { .. } | ExprKind::Identifier(_) | ExprKind::Path { .. }
-                    );
+                    // field) is an erased `Fn` value. A built-in type's
+                    // method named as a value (`let g = i64.abs;`) is an
+                    // item too, so a call through `g` is seen
+                    // (B-2026-11-25-43).
+                    let item = match value.kind {
+                        ExprKind::Closure { .. }
+                        | ExprKind::Identifier(_)
+                        | ExprKind::Path { .. } => true,
+                        ExprKind::FieldAccess { .. } => self.builtin_fn_def(value).is_some(),
+                        _ => false,
+                    };
                     if item && self.is_fn_typed(pattern.id) {
                         self.push_scope();
                         if self.escaping_lets.contains(&pattern.id) {

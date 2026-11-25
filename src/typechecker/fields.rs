@@ -131,6 +131,10 @@ impl<'a> super::TypeChecker<'a> {
         if let ExprKind::Identifier(name) = &object.kind {
             if self.local_scope.lookup(name).is_none() {
                 if let Some(t) = self.builtin_method_value(name, field) {
+                    // Environment-free, as a function item is: `let g =
+                    // i64.abs;` crosses into a task (B-2026-11-25-43).
+                    self.fn_item_spans
+                        .insert(crate::resolver::SpanKey::from_span(span));
                     return t;
                 }
             }
