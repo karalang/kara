@@ -4740,6 +4740,9 @@ pub struct TypeChecker<'a> {
     /// strict check reads as a view (core semantics §4.6), by its span. A
     /// shared handle bound so is counted in the MIR (B-2026-11-25-22).
     pub(super) pattern_view_bindings: FxHashSet<SpanKey>,
+    /// Where the body of the function being checked begins: a name
+    /// declared before it is a parameter (B-2026-11-25-22).
+    pub(super) current_fn_body_offset: usize,
     /// `let x = <library iterator>` with no annotation, by name: where
     /// `karac fix` writes `: Vec[T]` and `.collect()` when `x` is used as a
     /// `Vec` (B-2026-10-12-7).
@@ -5397,6 +5400,7 @@ impl<'a> TypeChecker<'a> {
             prefix_let_sites: FxHashMap::default(),
             let_binding_ends: FxHashMap::default(),
             pattern_view_bindings: FxHashSet::default(),
+            current_fn_body_offset: 0,
             iter_lets: FxHashMap::default(),
             untyped_let_names: FxHashMap::default(),
             collect_items: FxHashMap::default(),

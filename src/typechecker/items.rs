@@ -3417,6 +3417,8 @@ impl<'a> super::TypeChecker<'a> {
                 Default::default()
             },
         );
+        let saved_body_offset =
+            std::mem::replace(&mut self.current_fn_body_offset, f.body.span.offset);
         let errors_before_body = self.errors.len();
         let cursor_mark = self.d5_cursor_steps.len();
         let literal_mark = self.body_literal_vars.len();
@@ -3507,6 +3509,7 @@ impl<'a> super::TypeChecker<'a> {
         self.current_fn_fn_markers = saved_fn_markers;
         self.current_fn_ref_params = saved_ref_params;
         self.current_fn_d5_params = saved_d5_params;
+        self.current_fn_body_offset = saved_body_offset;
         self.current_fn_is_pub = saved_fn_is_pub;
         self.current_fn_mut_self = saved_mut_self;
         if comptime_fn {
@@ -14949,13 +14952,15 @@ impl<'a> super::TypeChecker<'a> {
             return;
         };
         // Only where the MIR counts the handle: a binding over a borrowed
-        // or shared scrutinee, or a `let` that took the handle by value. A
-        // parameter and a view of a `for` item are borrows there.
+        // or shared scrutinee, or any other local but a parameter and a view
+        // of a `for` item, which are borrows there. A binding over an owned
+        // local holding the handle (`let next = at.left; let Some(child) =
+        // next else { .. };`) is counted too (kata 1372's differential,
+        // B-2026-11-25-64).
         let key = SpanKey::from_span(&src_decl);
+        let param = src_decl.offset < self.current_fn_body_offset;
         let counted = self.pattern_view_bindings.contains(&key)
-            || (self.let_binding_ends.contains_key(&key)
-                && !self.local_scope.is_view(src)
-                && !self.view_let_bindings.contains(&key));
+            || !(param || self.local_scope.is_view(src) || self.view_let_bindings.contains(&key));
         if !counted {
             return;
         }

@@ -124,6 +124,36 @@ fn kata_1372_ref_cursor_while_let_and_let_copy_are_fixed() {
     mends("while-let", &body(""), &body(": Node"), "3 2 3\n");
 }
 
+/// B-2026-11-25-64: the cursor's child read into a local first, as kata
+/// 1372's differential walks, still reached the MIR as a borrow.
+#[test]
+fn kata_1372_ref_cursor_through_an_owned_local_is_fixed() {
+    let body = |decl: &str| {
+        format!(
+            "fn main() {{
+    let c = Node {{ val: 3, next: None }};
+    let b = Node {{ val: 2, next: Some(c) }};
+    let nodes: Vec[Node] = [b, c];
+    let mut total = 0;
+    for start in nodes.iter() {{
+        let mut at{decl} = start;
+        loop {{
+            total += at.val;
+            let next = at.next;
+            let Some(n) = next else {{
+                break;
+            }};
+            at = n;
+        }}
+    }}
+    println(f\"{{total}}\");
+}}
+"
+        )
+    };
+    mends("owned-local", &body(""), &body(": Node"), "8\n");
+}
+
 #[test]
 fn kata_1372_ref_cursor_from_param_or_view_stays_a_borrow() {
     runs(
