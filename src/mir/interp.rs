@@ -3871,11 +3871,13 @@ impl<'a> Interp<'a> {
                 Ok(self.alloc_box("String", Value::Str(text)))
             }
             ("String", "from_utf8" | "from_utf8_lossy") => {
-                // The bytes by value (a `Vec[u8]`, freed here) or a view.
+                // The bytes by value (a `Vec[u8]`, freed here, or an
+                // `Array[u8, N]` such as a `b"..."` literal) or a view.
                 let [v] = args.as_slice() else {
                     return err(format!("{name} takes one argument"));
                 };
                 let held: Vec<Value> = match v {
+                    Value::Agg(fs) => fs.clone(),
                     Value::Box(id) => {
                         let fs = std::mem::take(self.vec_elems(*id)?);
                         self.free_slot(*id);

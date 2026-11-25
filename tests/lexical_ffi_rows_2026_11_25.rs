@@ -87,3 +87,9 @@ fn byte_unicode_escape_error_is_the_pages_sentence() {
         "{out}"
     );
 }
+
+/// B-2026-11-25-6: `String.from_utf8` takes a `b"..."` array by value.
+#[test]
+fn from_utf8_takes_a_byte_string_by_value() {
+    runs("lexical", "byte_string_from_utf8");
+}
