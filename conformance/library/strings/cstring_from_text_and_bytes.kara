@@ -1,0 +1,16 @@
+fn main() {
+    let c = "abc".to_string().to_cstring().unwrap();
+    println(c.len());
+    println(c.to_str() ?? "bad");
+    println(c.bytes().len());
+    println(c.is_empty());
+    println(c.as_ptr().is_null());
+    let nul = "a\0b".to_string().to_cstring();
+    println(nul.is_err());
+    let raw: Vec[u8] = [0xff, 0x41];
+    let fb = CString.from_bytes(raw).unwrap();
+    println(fb.len());
+    println(fb.to_str().is_err());
+    let z: Vec[u8] = [1, 0, 2];
+    println(CString.from_bytes(z).is_err());
+}

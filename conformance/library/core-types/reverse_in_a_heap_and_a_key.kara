@@ -1,0 +1,17 @@
+import std.cmp.Reverse;
+struct P { name: String, score: i64 }
+fn main() {
+    let mut pq: PriorityQueue[(Reverse[i64], String)] = PriorityQueue.new();
+    pq.push((Reverse { value: 5 }, "five".to_string()));
+    pq.push((Reverse { value: 1 }, "one".to_string()));
+    pq.push((Reverse { value: 3 }, "three".to_string()));
+    let (Reverse { value: s }, n) = pq.pop().unwrap();
+    println(f"{s} {n}");
+    let mut v: Vec[P] = [P { name: "b", score: 1 }, P { name: "a", score: 1 }, P { name: "c", score: 2 }];
+    v.sort_by_key(|p| (Reverse { value: p.score }, p.name.clone()));
+    let names: Vec[String] = v.iter().map(|p| p.name.clone()).collect();
+    println(names);
+    let r = Reverse { value: 4 };
+    println(r.value);
+    println(Reverse { value: 1 } > Reverse { value: 2 });
+}

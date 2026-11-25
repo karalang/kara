@@ -1,0 +1,12 @@
+fn main() {
+    let cmd: Str = "dec";
+    println(["inc", "dec"].contains(cmd));
+    let names: Vec[String] = ["ann".to_string(), "bo".to_string()].to_vec();
+    let s: Str = "bo";
+    println(names.contains(s));
+    let sorted: Vec[String] = ["a".to_string(), "c".to_string()].to_vec();
+    println(sorted.binary_search("c") ?? -1);
+    let mut dq: VecDeque[String] = VecDeque.new();
+    dq.push_back("x".to_string());
+    println(dq.contains("x"));
+}

@@ -1,0 +1,17 @@
+user map=[16,9,4,1]
+user cycle=[2,1,2,1,2]
+user empty cycle=[]
+user peek=3 sum=6
+user rev=[4,3,2,1,0] map.rev=[104,103,102,101,100]
+user by_ref=01 rest.rev=[4,3,2]
+array rev=[8,7,6,5] array len after next=3 array rposition=3
+slice skip.rev=[5,4,3,2] slice len=5
+deque rev=[3,2,1] deque cycle=[1,2,3,1,2]
+chars cycle=ababa
+doc by_ref flags=2 rest=2 xy
+option iter=[4] into_iter=[4]
+successors doc=[9071,907,90,9]
+cloned.cycle=[4,5,1,2]
+enumerate.cycle last=1/2
+zip.cycle last=2/6
+step_by.cycle=[0,2,4,0,2] rev.cycle=[2,1,0,2,1] chain.cycle=[0,1,7,0,1]

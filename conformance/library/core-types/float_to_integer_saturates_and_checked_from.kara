@@ -1,0 +1,11 @@
+fn main() {
+    println(1e20 as i64);
+    println(-1e20 as i64);
+    println((0.0 / 0.0) as i32);
+    println(300.7 as u8);
+    println(i8.checked_from(-3.9) ?? 0);
+    println(i8.checked_from(200.0).is_none());
+    println(u8.checked_from(0.0 / 0.0).is_none());
+    let x: f32 = 2.5;
+    println(i64.checked_from(x) ?? 0);
+}

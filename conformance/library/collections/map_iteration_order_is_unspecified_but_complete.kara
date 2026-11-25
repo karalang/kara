@@ -1,0 +1,9 @@
+fn main() {
+    let mut m: Map[i64, i64] = Map.new();
+    for i in 0..50 { m[i] = i * i; }
+    let mut seen: Vec[i64] = Vec.new();
+    for (k, v) in m.iter() { if *v == *k * *k { seen.push(*k); } }
+    seen.sort();
+    println(seen.len());
+    println(seen[49]);
+}

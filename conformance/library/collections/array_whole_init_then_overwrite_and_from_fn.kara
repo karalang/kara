@@ -1,0 +1,10 @@
+fn main() {
+    let arr: Array[i64, 3];
+    arr = [7, 8, 9];
+    println(arr[1]);
+    let mut b: Array[i64, 8] = [0; 8];
+    b[3] = 5;
+    println(b[3] + b[4]);
+    let c: Array[i64, 4] = Array.from_fn(4, |i| i * i);
+    println(c);
+}

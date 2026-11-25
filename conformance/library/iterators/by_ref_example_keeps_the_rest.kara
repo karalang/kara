@@ -1,0 +1,12 @@
+fn main() {
+    let line = "-a -b -- x y";
+    let mut words = line.split_whitespace();
+    let mut flags: Vec[Str] = Vec.new();
+    for w in words.by_ref() {
+        if w == "--" { break; }
+        flags.push(w);
+    }
+    let rest: Vec[Str] = words.collect();
+    println(flags);
+    println(rest);
+}

@@ -1,0 +1,10 @@
+fn main() {
+    let s = "abc".to_string();
+    let mut a = SipHash13BuildHasher {}.build();
+    let mut b = SipHash13BuildHasher {}.build();
+    s.hash(mut a);
+    s.as_str().hash(mut b);
+    println(a.finish() == b.finish());
+    println(s.as_str() == s);
+    println(s.cmp(s.as_str()) == Ordering.Equal);
+}

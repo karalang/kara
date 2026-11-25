@@ -1,0 +1,6 @@
+fn main() {
+    let forms = [NormalizationForm.Nfc, NormalizationForm.Nfd, NormalizationForm.Nfkc, NormalizationForm.Nfkd];
+    let mut n = 0;
+    for f in forms { n += "\u{fb01}".normalize(f).len(); }
+    println(n);
+}

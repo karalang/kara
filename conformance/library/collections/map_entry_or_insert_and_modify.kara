@@ -1,0 +1,14 @@
+fn main() {
+    let mut m: Map[String, Vec[i64]] = Map.new();
+    m.entry("a".to_string()).or_insert_with(Vec.new).push(1);
+    m.entry("a".to_string()).or_insert_with(Vec.new).push(2);
+    println(m["a"]);
+    let mut c: Map[i64, i64] = Map.new();
+    *c.entry(5).or_insert(0) += 1;
+    *c.entry(5).or_insert(0) += 1;
+    println(c[5]);
+    c.entry(5).and_modify(|v| { *v *= 10; }).or_insert(0);
+    c.entry(6).and_modify(|v| { *v *= 10; }).or_insert(7);
+    println(c[5]);
+    println(c[6]);
+}

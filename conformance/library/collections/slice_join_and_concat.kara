@@ -1,0 +1,12 @@
+fn main() {
+    let v: Vec[i64] = [1, 2, 3].to_vec();
+    println(v.join(", "));
+    let vv: Vec[Vec[i64]] = [[1, 2].to_vec(), [3].to_vec()].to_vec();
+    println(vv.concat());
+    let ss: Vec[String] = ["ab".to_string(), "c".to_string()].to_vec();
+    println(ss.concat());
+    let x: Array[i64, 2] = [1, 2];
+    let y: Array[i64, 2] = [3, 4];
+    let arrs: Vec[Array[i64, 2]] = [x, y];
+    println(arrs.concat());
+}

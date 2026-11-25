@@ -1,0 +1,3 @@
+[None, Some(1), Some(3)]
+true
+[Ok(2), Ok(5), Err(-1), Err(0)]

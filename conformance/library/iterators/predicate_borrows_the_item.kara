@@ -1,0 +1,8 @@
+fn main() {
+    let names: Vec[String] = ["al".to_string(), "bob".to_string(), "c".to_string()];
+    let long: Vec[String] = names.into_iter().filter(|s| s.len() > 1).collect();
+    println(long);
+    let words: Vec[String] = ["x".to_string(), "yy".to_string()];
+    let found = words.into_iter().find(|s| s.len() == 2);
+    println(found ?? "none".to_string());
+}

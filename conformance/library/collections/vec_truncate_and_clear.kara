@@ -1,0 +1,12 @@
+fn main() {
+    let mut v: Vec[i64] = [1, 2, 3, 4].to_vec();
+    v.truncate(9);
+    println(v);
+    v.truncate(2);
+    println(v);
+    v.truncate(-1);
+    println(v);
+    let mut w: Vec[i64] = [1].to_vec();
+    w.clear();
+    println(w.len());
+}

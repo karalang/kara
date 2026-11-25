@@ -1,0 +1,13 @@
+fn main() {
+    let s = "1234";
+    let digits: Option[Vec[u32]] = s.chars().map(|c| c.to_digit(10)).collect();
+    println(digits);
+    let bad: Option[Vec[u32]] = "12x4".chars().map(|c| c.to_digit(10)).collect();
+    println(bad.is_none());
+    let words: Vec[Str] = ["1", "2", "3"];
+    let numbers: Result[Vec[i64], ParseError] = words.iter().map(|w| i64.parse(w)).collect();
+    println(numbers.is_ok());
+    let more: Vec[Str] = ["1", "q", "3"];
+    let r: Result[Vec[i64], ParseError] = more.iter().map(|w| i64.parse(w)).collect();
+    println(r.is_err());
+}

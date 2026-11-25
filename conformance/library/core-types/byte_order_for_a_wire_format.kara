@@ -1,0 +1,9 @@
+fn main() {
+    let port: u16 = 1080;
+    let b = port.to_be_bytes();
+    println(f"{b[0]} {b[1]}");
+    println(u16.from_be_bytes([b[0], b[1]]));
+    let l = 0x01020304u32.to_le_bytes();
+    println(f"{l[0]} {l[3]}");
+    println(u32.from_le_bytes(l));
+}

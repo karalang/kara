@@ -1,0 +1,7 @@
+fn main() {
+    let mut s = "a1b2c3d4".to_string();
+    let mut seen = 0;
+    s.retain(|c| { seen += 1; c.is_alphabetic() });
+    println(s);
+    println(seen);
+}

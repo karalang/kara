@@ -1,0 +1,16 @@
+struct MyErr { msg: String }
+impl From[ParseError] for MyErr {
+    fn from(e: ParseError) -> MyErr { MyErr { msg: f"bad: {e}" } }
+}
+fn any(s: Str) -> Result[i64, AnyError] { let n = i64.parse(s)?; Ok(n * 2) }
+fn mine(s: Str) -> Result[i64, MyErr] { let n = i64.parse(s)?; Ok(n + 1) }
+fn main() {
+    println(any("21") ?? 0);
+    println(any("q").is_err());
+    match mine("z") {
+        Ok(_) => println("ok"),
+        Err(e) => println(e.msg),
+    }
+    let e: ParseError = ParseError.Empty;
+    println(f"{e}");
+}

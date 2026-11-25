@@ -1,0 +1,20 @@
+i8 checked: None None None None None None None None 0 None None None 64
+i8 wrapping: -56 56 44 -128 0 -128 2 -64 -13
+i8 saturating: 127 -128 -128 127 127 -128 127
+i8 overflowing: -56 true -128 true -128 true 2 true -128 false 0 true -13 true 6 false
+u8: None 44 255 None 255 0 255 None 0 255 50 None 255
+u8 overflowing_neg: 0 false 255 true
+i64: None -9223372036854775808 9223372036854775807 None 1000000000000000000 None 9223372036854775807 -9223372036854775808
+bits: 32 0 4 8 4 0 32 8 64 3
+BITS: 8 16 32 64 128 64 len=6 k=32
+bytes: 4 56 56 4 1080 14340
+i32 bytes: 255 255 255 254 -2 -2 -2
+u64 le: 8 1 8
+euclid: 2 -3 1 -2 2 3 3 1 0
+float euclid: 0.5 -4.0 1.5 -3.0
+abs_diff: 131 255 4 10
+isqrt: 3 0 1 9 10 15 3037000499 4294967295
+digits: 7 15 15 99 35 99 99
+is_digit: true false true true false
+from_digit: 7 b z ? 1
+ascii: true false true true 97 65 200 q é

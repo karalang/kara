@@ -1,0 +1,1 @@
+`Option[Vec[i64]]` gathers each `Some`'s value into `Vec[i64]`, which implements `FromIterator[i64]`, not `FromIterator[ref i64]`

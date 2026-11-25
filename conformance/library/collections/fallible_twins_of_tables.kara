@@ -1,0 +1,17 @@
+fn run() -> Result[(), AllocError] {
+    let m: Map[i64, i64] = Map.from([(1, 2)]);
+    let s: Set[i64] = Set.from([3]);
+    let mut d: VecDeque[i64] = VecDeque.new();
+    d.push_back(4);
+    let ss: SortedSet[i64] = SortedSet.from([5]);
+    let mut s2 = s.try_clone()?;
+    s2.try_reserve(8)?;
+    println(m.try_clone()?[1]);
+    println(s2.contains(3));
+    println(d.try_clone()?.len());
+    println(ss.try_clone()?.contains(5));
+    Ok(())
+}
+fn main() {
+    match run() { Ok(()) => println("ok"), Err(e) => println(e) }
+}

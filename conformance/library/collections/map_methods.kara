@@ -1,0 +1,17 @@
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    println(m.insert("a".to_string(), 1) ?? -1);
+    println(m.insert("a".to_string(), 2) ?? -1);
+    m.extend([("b".to_string(), 3), ("b".to_string(), 4)]);
+    println(m.get("b") ?? -1);
+    println(m.get("q") ?? 0);
+    match m.get_mut("a") { Some(v) => { *v += 10; } None => {} }
+    println(m["a"]);
+    println(m.contains_key("a"));
+    println(m.remove("a") ?? -1);
+    println(m.remove("a") ?? -1);
+    println(m.len());
+    println(m.is_empty());
+    m.clear();
+    println(m.is_empty());
+}

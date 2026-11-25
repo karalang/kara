@@ -1,0 +1,30 @@
+import std.hash.{Hasher, BuildHasher};
+struct Rec { n: u64 }
+impl Hasher for Rec {
+    fn write(mut ref self, bytes: ref Slice[u8]) {
+        for b in bytes.iter() { self.n = self.n.wrapping_mul(31).wrapping_add(*b as u64); }
+    }
+    fn finish(ref self) -> u64 { self.n }
+}
+struct RecBuild {}
+impl BuildHasher for RecBuild {
+    type Hasher = Rec;
+    fn build(ref self) -> Rec { Rec { n: 7 } }
+}
+struct Tap {}
+impl BuildHasher for Tap {
+    type Hasher = Rec;
+    fn build(ref self) -> Rec { println("build"); Rec { n: 7 } }
+}
+fn main() {
+    let m: Map[i64, i64, RecBuild] = (0..2).map(|i| (i, i * 10)).collect();
+    let s: Set[i64, RecBuild] = (0..3).collect();
+    let t: Set[i64, Tap] = [5].to_vec().into_iter().collect();
+    println(f"{m.get(1) ?? -1} {m.get(0) ?? -1} {m.len()} {s.contains(2)} {s.len()} {t.contains(5)}");
+    let d: Map[i64, i64] = Map.from([(1, 2)].to_vec());
+    let q = Map.from([(3, 4)].to_vec());
+    let x: Map[i64, i64, FxBuildHasher] = Map.from([(5, 6)].to_vec());
+    let c: Map[i64, i64] = (0..3).map(|i| (i, i)).collect();
+    let u: Set[i64, FxBuildHasher] = (0..4).collect();
+    println(f"{d[1]} {q[3]} {x[5]} {c.len()} {c[2]} {u.len()}");
+}

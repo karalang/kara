@@ -1,0 +1,10 @@
+fn main() {
+    let mut s = String.new();
+    let r = s.try_push_str("abc");
+    println(r.is_ok());
+    let w = String.try_with_capacity(16);
+    println(w.is_ok());
+    let c = s.try_clone();
+    println(c.is_ok());
+    println(s);
+}

@@ -1,0 +1,15 @@
+fn main() {
+    let d: Map[i64, i64] = Map.from([(1, 2)].to_vec());
+    println(f"d {d.get(1) ?? -1} {d.len()}");
+    let q = Map.from([(3, 4)].to_vec());
+    println(f"q {q.get(3) ?? -1}");
+    let x: Map[i64, i64, FxBuildHasher] = Map.from([(5, 6)].to_vec());
+    println(f"x {x.get(5) ?? -1} {x.len()}");
+    let c: Map[i64, i64] = (0..3).map(|i| (i, i)).collect();
+    println(f"c {c.get(2) ?? -1} {c.len()}");
+    let u: Set[i64, FxBuildHasher] = (0..4).collect();
+    println(f"u {u.contains(2)} {u.len()}");
+    let mut e: Map[i64, i64] = Map.new();
+    e.extend([(3, 4)].to_vec());
+    println(f"e {e.get(3) ?? -1}");
+}

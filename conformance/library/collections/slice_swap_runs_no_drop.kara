@@ -1,0 +1,8 @@
+struct D { n: i64 }
+impl Drop for D { fn drop(mut ref self) { println(f"drop {self.n}"); } }
+fn main() {
+    let mut v: Vec[D] = [D { n: 1 }, D { n: 2 }];
+    v.swap(0, 1);
+    println("swapped");
+    println(v[0].n);
+}

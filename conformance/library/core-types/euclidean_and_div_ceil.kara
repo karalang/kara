@@ -1,0 +1,14 @@
+fn main() {
+    println((-7).rem_euclid(3));
+    println((-7).div_euclid(3));
+    println(7u32.div_euclid(2));
+    println(7.div_ceil(2));
+    println((-7).div_ceil(2));
+    println((-7).div_ceil(-2));
+    println(7u8.div_ceil(2));
+    println((-7.5).rem_euclid(2.0));
+    println((-7.5).div_euclid(2.0));
+    println(i64.MIN.rem_euclid(-1));
+    let d: u8 = (-100i8).abs_diff(100);
+    println(d);
+}

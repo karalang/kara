@@ -1,0 +1,17 @@
+fn main() {
+    let mut a: Vec[String] = ["a".to_string()].to_vec();
+    let b: Vec[String] = ["b".to_string(), "c".to_string()].to_vec();
+    a.extend(b);
+    println(a);
+    let mut c: Vec[String] = ["z".to_string()].to_vec();
+    a.extend(mem.take(mut c));
+    println(a);
+    println(c.len());
+    let mut buf: Vec[u8] = Vec.new();
+    let s = "hi";
+    buf.extend_from_slice(s.bytes());
+    println(buf);
+    let mut r: Vec[i64] = Vec.new();
+    r.extend(0..3);
+    println(r);
+}

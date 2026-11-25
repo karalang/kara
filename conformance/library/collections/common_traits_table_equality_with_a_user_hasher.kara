@@ -1,0 +1,25 @@
+struct Rec { n: u64 }
+impl Hasher for Rec {
+    fn write(mut ref self, bytes: Slice[u8]) { for b in bytes { self.n = self.n.wrapping_mul(31).wrapping_add(b as u64); } }
+    fn finish(self) -> u64 { self.n }
+}
+struct RecBuild {}
+impl BuildHasher for RecBuild {
+    type Hasher = Rec;
+    fn build(self) -> Rec { Rec { n: 7 } }
+}
+fn main() {
+    let mut s: Set[i64, RecBuild] = Set.new();
+    s.insert(1);
+    s.insert(2);
+    println(s == s.clone());
+    let mut t: Set[i64, RecBuild] = Set.new();
+    t.insert(1);
+    println(s == t);
+    let mut m: Map[String, i64, RecBuild] = Map.new();
+    m["a"] = 1;
+    println(m == m.clone());
+    let mut f: Map[i64, i64, FxBuildHasher] = Map.new();
+    f[1] = 1;
+    println(f == f.clone());
+}

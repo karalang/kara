@@ -1,0 +1,5 @@
+fn main() {
+    let mut v: Vec[i64] = [1, 2].to_vec();
+    let m = 0 - v.len();
+    v.rotate_right(m);
+}

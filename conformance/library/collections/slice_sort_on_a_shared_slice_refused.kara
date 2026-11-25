@@ -1,0 +1,2 @@
+fn f(s: Slice[i64]) { s.sort(); }
+fn main() { let v: Vec[i64] = [2, 1].to_vec(); f(v); }

@@ -1,0 +1,6 @@
+fn show(o: Option[ref i64]) -> i64 { o ?? -1 }
+fn main() {
+    let a: Array[i64, 4] = [4, 3, 2, 1];
+    let s: Array[String, 2] = ["x".to_string(), "y".to_string()];
+    println(a.join(","));
+}

@@ -1,0 +1,40 @@
+fold=2725 fold empty=7
+reduce=Some(-33) reduce empty=None
+count=10 sum=39 product=97200 sum empty=0 product empty=1
+min=Some(1) max=Some(9) min empty=None
+maxref=9
+min_by=Some(1/1) max_by=Some(3/4)
+min_by_key=Some(1/1) max_by_key=Some(3/4)
+min_by_key empty=None
+any=true pulled=3
+all=false pulled=5 any empty=false all empty=true
+find=Some(5) pulled=5 find none=None
+find_map=Some(50)
+try_fold none=None pulled=6
+try_fold sum=Some(39) overflow=None
+try_fold result err big 9
+position=Some(1) position none=None
+last=Some(3) last empty=None
+nth0=Some(3) nth9=Some(3) nth10=None nth-1=None
+for_each=3;1;4;
+partition=[4,2,6] [3,1,1,5,9,5,3]
+collect String=olléh
+collect SortedSet=[1,2,3,4,5,6,9]
+collect SortedMap=1:1 2:4 3:9 4:16 5:25 6:36 9:81 
+collect Set len=7
+collect Option none=true pulled=3
+collect Option some len=4 last=5
+collect Result err=true pulled=3
+collect Result ok=[1,-22]
+collect Some(*x)=true
+map.rev=[51,41,31,21,11] filter.rev=[50,40,20,10] skip1.rev=[50,40,30,20] take3.rev=[30,20,10] rev.rev=[10,20,30,40,50] skip9.rev=[] take99.rev=[50,40,30,20,10]
+enumerate.rev=4:50 3:40 2:30 1:20 0:10 
+zip.rev=30-3 20-2 10-1 
+split.rev=<c><><bb><aaa> split aa rev=<a><><> ws.rev=<c><b><a>
+chars.rev=本olléh char_indices.rev=5:o 4:l 3:l 1:é 0:h 
+range.rev=[4,3,2,1,0] incl.rev=[5,4,3,2,1,0] empty.rev=[]
+front/back=Some(10),Some(50),Some(20) mid=[30,40]
+len=5 after next=4 map.len=5 skip2.len=3 take9.len=5 zip.len=3 empty=true into_iter.len=5 enumerate.rev.len=5
+rposition=Some(8) rposition none=None
+rposition after 2 nexts=Some(1)
+windows rposition=Some(3)

@@ -1,0 +1,13 @@
+fn main() {
+    let mut v: Vec[i64] = [1, 2, 3].to_vec();
+    println(v.capacity() >= v.len());
+    v.reserve(10);
+    println(v.capacity() >= v.len() + 10);
+    println(v.len());
+    v.reserve(-4);
+    v.reserve(0);
+    println(v.len());
+    v.reserve_exact(20);
+    println(v.capacity() >= 23);
+    println(v.len());
+}

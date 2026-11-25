@@ -1,0 +1,8 @@
+fn evens(v: own Vec[i64]) -> impl Iterator[Item = i64] {
+    v.into_iter().filter(|x| x % 2 == 0).map(|x| x * 10)
+}
+fn main() {
+    let it = evens([1, 2, 3, 4]);
+    let w: Vec[i64] = it.collect();
+    println(w);
+}

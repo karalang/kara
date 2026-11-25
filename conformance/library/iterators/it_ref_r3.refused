@@ -1,0 +1,1 @@
+`flatten` needs items that are themselves iterators (docs/library/iterators.md: `where Self.Item: Iterator`), and `Option[i64]` is not one: write `.filter_map(|v| v)` in place of `.flatten()`

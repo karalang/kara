@@ -1,0 +1,5 @@
+fn main() {
+    let v: Vec[i64] = [1, 2].to_vec();
+    let z = 0 - v.len();
+    println(v.chunks(z).len());
+}

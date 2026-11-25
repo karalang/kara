@@ -1,0 +1,11 @@
+struct K { k: i64 }
+impl PartialEq for K { fn eq(ref self, other: ref K) -> bool { self.k == other.k } }
+impl Eq for K {}
+impl PartialOrd for K { fn partial_cmp(ref self, other: ref K) -> Option[Ordering] { Some(self.cmp(other)) } }
+impl Ord for K { fn cmp(ref self, other: ref K) -> Ordering { println("cmp"); self.k.cmp(other.k) } }
+fn smallest(xs: own Vec[K]) -> i64 { (xs.into_iter().min() ?? K { k: -1 }).k }
+fn count_them(xs: own Vec[K]) -> i64 { xs.into_iter().count() }
+fn main() {
+    println(smallest([K { k: 3 }, K { k: 1 }]));
+    println(count_them([K { k: 3 }]));
+}

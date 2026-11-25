@@ -1,0 +1,10 @@
+shared struct Node { n: i64 }
+fn main() {
+    let a = Node { n: 1 };
+    let b = Node { n: 1 };
+    let mut s: Set[Identity[Node]] = Set.new();
+    s.insert(Identity { handle: a.clone() });
+    s.insert(Identity { handle: b.clone() });
+    s.insert(Identity { handle: a.clone() });
+    println(s.len());
+}

@@ -1,0 +1,13 @@
+fn main() {
+    let v: Vec[i64] = [1, 2, 3];
+    let mut s = 0;
+    for x in v { s += x; }
+    for x in v { s += x; }
+    println(s);
+    println(v.len());
+    let mut it = v.iter();
+    it.next();
+    let mut t = 0;
+    for x in it { t += *x; }
+    println(t);
+}

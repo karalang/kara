@@ -1,0 +1,6 @@
+fn main() {
+    let r: Result[i64, String] = Err("boom".to_string());
+    println("start");
+    let x = r.expect("needed a number");
+    println(x);
+}

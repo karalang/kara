@@ -1,0 +1,5 @@
+fn main() {
+    let v: Vec[u8] = [1, 2];
+    let a = v.try_into_array().unwrap();
+    println(a.len());
+}

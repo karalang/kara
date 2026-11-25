@@ -1,0 +1,4 @@
+fn main() {
+    let v: Vec[i64] = [1, 2, 3].to_vec();
+    let n = v.iter().len(); let m = v.iter().map(|x| *x).len(); println(f"{n}{m}"); let k = (0..3).len(); println(f"{k}");
+}

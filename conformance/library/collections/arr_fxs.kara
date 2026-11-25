@@ -1,0 +1,5 @@
+fn main() {
+    let src: Vec[(i64, i64)] = (0..12).map(|i| (i * 7919, i)).collect();
+    let x: Map[i64, i64] = Map.from(src);
+    for (k, _) in x.iter() { println(k); }
+}

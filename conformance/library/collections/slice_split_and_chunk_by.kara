@@ -1,0 +1,12 @@
+fn main() {
+    let v: Vec[i64] = [1, 0, 2, 3, 0].to_vec();
+    println(v.split(|x| x == 0));
+    let w: Vec[i64] = [0, 0].to_vec();
+    println(w.split(|x| x == 0).len());
+    let n: Vec[i64] = [4, 5].to_vec();
+    println(n.split(|x| x == 0));
+    let r: Vec[i64] = [1, 1, 2, 3, 3].to_vec();
+    println(r.chunk_by(|a, b| a == b));
+    let e: Vec[i64] = Vec.new();
+    println(e.chunk_by(|a, b| a == b).len());
+}

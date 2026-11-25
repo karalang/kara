@@ -3279,6 +3279,9 @@ impl super::env::TypeEnv {
             Type::Named { name, args } if name == "Vec" && args.len() == 1 => {
                 self.type_supports_hash(&args[0])
             }
+            // A `Str` view hashes as its `String` does: the UTF-8 bytes, then
+            // `0xff` (collections.md § Hashing, Lookup by view; B-2026-11-25-28).
+            Type::Named { name, .. } if name == "Str" || name == "StringSlice" => true,
             // A derive on a generic type holds for the arguments that have the
             // trait: `#[derive(Hash)] struct Pair[T]` is not `Hash` at `Pair[f64]`
             // (B-2026-10-27-25).
@@ -3733,7 +3736,10 @@ impl super::env::TypeEnv {
             Type::Array { element, .. } | Type::Slice { element, .. } => fed(element),
             Type::Ref(inner) | Type::MutRef(inner) => fed(inner),
             Type::Named { name, args } => {
-                let library = matches!(name.as_str(), "String" | "Vec" | "Option" | "Result");
+                let library = matches!(
+                    name.as_str(),
+                    "String" | "Str" | "StringSlice" | "Vec" | "Option" | "Result"
+                );
                 let program = self
                     .structs
                     .get(name)

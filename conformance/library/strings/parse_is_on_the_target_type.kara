@@ -1,0 +1,8 @@
+fn main() {
+    let n = i64.parse("42");
+    println(n.is_ok());
+    let bad = i64.parse("4x2");
+    println(bad.is_err());
+    let f = f64.parse("2.5") ?? 0.0;
+    println(f);
+}

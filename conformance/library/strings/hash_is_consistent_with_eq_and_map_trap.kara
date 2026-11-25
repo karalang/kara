@@ -1,0 +1,14 @@
+fn main() {
+    let a = "\u{e9}".to_string();
+    let b = "e\u{301}".to_string();
+    let mut m: Map[String, i64] = Map.new();
+    m[a.clone()] = 1;
+    println(m.contains_key(a));
+    println(m.contains_key(b));
+    println(m.contains_key(b.normalize(NormalizationForm.Nfc)));
+    let mut h1 = SipHash13BuildHasher {}.build();
+    let mut h2 = SipHash13BuildHasher {}.build();
+    a.hash(mut h1);
+    a.clone().hash(mut h2);
+    println(h1.finish() == h2.finish());
+}

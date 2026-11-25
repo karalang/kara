@@ -1,0 +1,36 @@
+import std.hash.{Hasher, BuildHasher};
+struct Rec { n: u64 }
+impl Hasher for Rec {
+    fn write(mut ref self, bytes: Slice[u8]) { for b in bytes.iter() { self.n = self.n.wrapping_mul(31).wrapping_add(*b as u64); } }
+    fn finish(self) -> u64 { self.n }
+}
+struct RecBuild {}
+impl BuildHasher for RecBuild {
+    type Hasher = Rec;
+    fn build(self) -> Rec { Rec { n: 7 } }
+}
+fn main() {
+    let mut m: Map[i64, i64, RecBuild] = Map.new();
+    m.extend([(1, 10), (2, 20)].to_vec());
+    println(f"extend: {m.get(1) ?? -1} {m.contains_key(2)}");
+    m.retain(|k, v| k != 2);
+    println(f"retain: {m.get(1) ?? -1} {m.contains_key(2)} {m.len()}");
+    let c = m.clone();
+    println(f"clone: {c.get(1) ?? -1}");
+    let mut s: Set[i64, RecBuild] = Set.new();
+    s.extend([1, 2].to_vec());
+    println(f"set extend: {s.contains(1)} {s.contains(2)}");
+    let mut t: Set[i64, RecBuild] = Set.new();
+    let _ = t.insert(3); let _ = t.insert(1);
+    let u = s.union(t);
+    let i = s.intersection(t);
+    let d = s.difference(t);
+    println(f"union: {u.contains(3)} {u.contains(2)} {u.len()} inter: {i.contains(1)} {i.len()} diff: {d.contains(2)} {d.len()} subset: {i.is_subset(s)} eq: {s == s.clone()}");
+    s.retain(|x| x != 1);
+    println(f"set retain: {s.contains(2)} {s.contains(1)}");
+    let mut e = m.entry(9);
+    let _ = m.entry(9).or_insert(90);
+    println(f"entry: {m.get(9) ?? -1}");
+    m[5] = 50;
+    println(f"index set: {m.get(5) ?? -1} {m[5]}");
+}

@@ -1,0 +1,10 @@
+struct D { n: String }
+impl Drop for D { fn drop(mut ref self) { println(f"drop {self.n}"); } }
+impl PartialEq for D { fn eq(ref self, other: ref D) -> bool { self.n == other.n } }
+impl Eq for D {}
+impl Hash for D { fn hash[H: Hasher](self, hasher: mut ref H) { self.n.hash(mut hasher); } }
+fn main() {
+    let mut m: Map[D, D] = Map.new();
+    m.insert(D { n: "k1".to_string() }, D { n: "v1".to_string() });
+    println("end");
+}

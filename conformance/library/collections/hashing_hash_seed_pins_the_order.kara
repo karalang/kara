@@ -1,0 +1,7 @@
+fn main() {
+    let mut m: Map[i64, i64] = Map.new();
+    for i in 0..12 { m[i] = i; }
+    let mut o = "";
+    for (k, _) in m.iter() { o = o + f"{k} "; }
+    println(o);
+}

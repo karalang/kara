@@ -1,0 +1,8 @@
+fn main() {
+    let mut s: Set[F64] = Set.new();
+    s.insert(F64.from(0.0));
+    s.insert(F64.from(-0.0));
+    s.insert(F64.from(f64.NAN));
+    s.insert(F64.from(f64.NAN));
+    println(s.len());
+}

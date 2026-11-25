@@ -1,0 +1,16 @@
+struct M { v: i64 }
+impl Add for M {
+    type Output = M;
+    fn add(self, other: M) -> M { println("add"); M { v: self.v + other.v } }
+}
+impl Clone for M { fn clone(self) -> M { eprintln("clone"); M { v: self.v } } }
+fn total(xs: own Vec[M]) -> i64 {
+    let mut acc = M { v: 0 };
+    for x in xs { acc = acc + x; }
+    acc.v
+}
+fn copies(xs: ref Vec[M]) -> i64 { let c: Vec[M] = xs.iter().cloned().collect(); c.len() }
+fn main() {
+    println(total([M { v: 1 }, M { v: 2 }]));
+    println(copies([M { v: 1 }]));
+}

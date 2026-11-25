@@ -1,0 +1,24 @@
+fn sorted(s: Set[i64]) -> Vec[i64] { let mut v: Vec[i64] = s.iter().cloned().collect(); v.sort(); v }
+fn main() {
+    let mut s: Set[i64] = Set.from([1, 2, 2, 3]);
+    println(s.len());
+    println(s.insert(4));
+    println(s.insert(4));
+    s.extend([5, 6]);
+    println(s.remove(6));
+    println(s.remove(6));
+    println(s.contains(5));
+    println(s.is_empty());
+    let t: Set[i64] = Set.from([4, 5, 9]);
+    println(sorted(s.union(t)));
+    println(sorted(s.intersection(t)));
+    println(sorted(s.difference(t)));
+    println(s.is_disjoint(Set.from([7])));
+    println(Set.from([1, 2]).is_subset(s));
+    println(s.is_superset(Set.from([1, 9])));
+    s.retain(|x| x > 2);
+    println(sorted(s.clone()));
+    s.reserve(10);
+    s.clear();
+    println(s.len());
+}

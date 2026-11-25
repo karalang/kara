@@ -1,0 +1,7 @@
+fn main() {
+    let m: Map[i64, String] = Map.from([(1, "x".to_string())]);
+    let a = m.get(1).cloned() ?? "none".to_string();
+    let b = m.get(2).cloned() ?? "none".to_string();
+    println(a);
+    println(b);
+}

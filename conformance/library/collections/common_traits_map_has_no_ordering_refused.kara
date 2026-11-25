@@ -1,0 +1,5 @@
+fn main() {
+    let a: SortedMap[i64, i64] = SortedMap.new();
+    let b: SortedMap[i64, i64] = SortedMap.new();
+    println(a < b);
+}

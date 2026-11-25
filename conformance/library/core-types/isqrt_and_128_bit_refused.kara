@@ -1,0 +1,4 @@
+fn main() {
+    let x: u128 = 10;
+    println(x.isqrt());
+}

@@ -1,0 +1,52 @@
+is: true false false true
+is_some_and: true false false
+is_none_or: true false true
+unwrap: 4 expect: 4
+unwrap_or: 4 9
+unwrap_or_else: 4 7 calls=1
+unwrap_or_default: 4 0
+unwrap_or_default String: []
+map: Some(40) None
+map_or: 5 0
+map_or_else: 5 -1
+and_then: Some(8) None None
+and: Some(8) None None
+or: Some(4) Some(8) None
+or_else: Some(4) Some(8)
+filter: Some(4) None None
+ok_or: Ok(4) Err(none)
+ok_or_else: Err(lazy)
+zip: 4 a true
+take: Some(3) None
+replace: Some(3) Some(5) None Some(6)
+get_or_insert: Some(111)
+get_or_insert_with: Some(3) calls=1
+as_ref: hi still true
+as_mut: Some(2)
+as_deref: true false
+as_deref vec: 2
+cloned: one d
+flatten: Some(3) None
+iter: 1 0
+into_iter: 1 0
+sort: None None Some(1) Some(3) 
+cmp: true true true
+r is: true false false true
+r ok/err: Some(2) None true bad
+r map: Ok(3) Err(bad)
+r map_err: 3
+r map_or: 6 0
+r map_or_else: 6 3
+r and_then: Ok(10) Err(bad)
+r or_else: 6 3
+r unwrap: 2 2 bad bad
+r unwrap_or: 2 0 30 0
+r sort: Ok(2) Ok(5) Err(0) Err(1) 
+ord: Less Equal Greater rev Greater Equal Less
+preds: true true false false false true true true true
+then: Less Greater Less
+then_with: Greater Less
+players: ana 9, bo 7, cleo 7, 
+reverse key: 3a 1a 1b 
+reverse ord: true true 5 5
+pq min: 3 c

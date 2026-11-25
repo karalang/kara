@@ -1,0 +1,10 @@
+fn main() {
+    let r: Result[Vec[i64], AllocError] = Vec.try_with_capacity(i64.MAX);
+    match r {
+        Ok(_) => println("ok"),
+        Err(AllocError.CapacityOverflow) => println("capacity overflow"),
+        Err(AllocError.OutOfMemory { requested_bytes }) => println(requested_bytes > 0),
+    }
+    let mut v: Vec[i64] = Vec.new();
+    match v.try_reserve(i64.MAX) { Ok(()) => println("ok"), Err(e) => println(e) }
+}

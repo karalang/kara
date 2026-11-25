@@ -1,0 +1,1 @@
+no method 'cycle' on type 'IterFilter': `cycle` starts each round from a copy of the iterator, and this one holds a closure

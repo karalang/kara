@@ -1,0 +1,5 @@
+fn main() {
+    let z = 0;
+    println("start");
+    println(7.div_ceil(z));
+}

@@ -1,0 +1,18 @@
+fn main() {
+    let a: Vec[i64] = Vec.new();
+    println(a.len());
+    let b: Vec[i64] = Vec.with_capacity(10);
+    println(b.len());
+    println(b.capacity() >= 10);
+    let c: Vec[i64] = Vec.with_capacity(-5);
+    println(c.len());
+    println(Vec.filled(3, 7));
+    let d: Vec[i64] = Vec.filled(-2, 7);
+    println(d.len());
+    println(Vec.from_fn(4, |i| i * 10));
+    let e: Vec[i64] = Vec.from_fn(-1, |i| i);
+    println(e.len());
+    let f: Vec[i64] = [1, 2].to_vec();
+    let s: Slice[i64] = f.as_slice();
+    println(s);
+}

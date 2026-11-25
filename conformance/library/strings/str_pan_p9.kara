@@ -1,0 +1,5 @@
+fn main() {
+    let s = "héllo".to_string();
+    println("start");
+    println(f"{s.bytes()[99]}");
+}

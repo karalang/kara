@@ -1,0 +1,5 @@
+fn main() {
+    let v: Vec[i64] = [1, 2, 3].to_vec();
+    println("start");
+    println(f"{(-9223372036854775807 - 1..=9223372036854775807).take(2).count()}");
+}

@@ -1,0 +1,5 @@
+fn make() -> Str {
+    let s = "abc".to_string();
+    s.as_str()
+}
+fn main() { println(make()); }

@@ -1,0 +1,9 @@
+fn main() {
+    let mut v: Vec[Option[i64]] = [Some(3), None, Some(1)];
+    v.sort();
+    println(v);
+    println(None < Some(-100));
+    let mut r: Vec[Result[i64, i64]] = [Err(0), Ok(5), Err(-1), Ok(2)];
+    r.sort();
+    println(r);
+}

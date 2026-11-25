@@ -1,0 +1,14 @@
+You guessed 42
+not a number: invalid digit found in string
+5
+5
+InvalidDigit
+InvalidDigit
+Underflow
+Overflow
+Empty
+Ok(0)
+Ok(0)
+true
+-inf
+inf

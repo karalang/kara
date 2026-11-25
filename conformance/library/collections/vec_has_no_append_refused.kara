@@ -1,0 +1,5 @@
+fn main() {
+    let mut a: Vec[i64] = [1].to_vec();
+    let mut b: Vec[i64] = [2].to_vec();
+    a.append(mut b);
+}

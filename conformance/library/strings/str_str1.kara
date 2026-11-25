@@ -1,0 +1,53 @@
+// Str reading methods over a fixed set of texts and patterns.
+fn q(s: Str) -> String {
+    let mut o = "\"".to_string();
+    for c in s.chars() {
+        if c == '\n' { o.push_str("\\n"); }
+        else if c == '\r' { o.push_str("\\r"); }
+        else if c == '\t' { o.push_str("\\t"); }
+        else if c == '"' { o.push_str("\\\""); }
+        else { o.push(c); }
+    }
+    o.push_str("\"");
+    o
+}
+fn qv(v: Vec[Str]) -> String {
+    let mut o = "[".to_string();
+    let mut first = true;
+    for s in v { if not first { o.push_str(", "); } first = false; o.push_str(q(s)); }
+    o.push_str("]");
+    o
+}
+fn oi(x: Option[i64]) -> String { match x { Some(n) => f"Some({n})", None => "None".to_string() } }
+fn os(x: Option[Str]) -> String { match x { Some(s) => f"Some({q(s)})", None => "None".to_string() } }
+fn op(x: Option[(Str, Str)]) -> String { match x { Some((a, b)) => f"Some({q(a)}, {q(b)})", None => "None".to_string() } }
+fn oc(x: Option[char]) -> String { match x { Some(c) => f"Some({c as u32})", None => "None".to_string() } }
+
+fn main() {
+    let texts = ["", "abc", "a,b,,c", ",a,", "aaa", "héllo wörld", "日本語テキスト", "  \tx y\n ", "\u{3000}\u{a0}mid\u{85}\u{2003}", "a\r\nb\rc\n", "\n\n", "line\n", "aXbXXc", "ﬁß"];
+    let pats = ["", ",", "a", "aa", "X", "ö", "本", "zz", "\n"];
+    for s in texts {
+        println(f"== {q(s)} len={s.len()} empty={s.is_empty()} chars={s.chars().count()}");
+        let rv: String = s.chars().rev().collect();
+        println(f"rev={q(rv)} upper={q(s.to_uppercase())} lower={q(s.to_lowercase())}");
+        println(f"trim={q(s.trim())} trim_start={q(s.trim_start())} trim_end={q(s.trim_end())}");
+        println(f"ws={qv(s.split_whitespace().collect())} lines={qv(s.lines().collect())}");
+        let mut ci = "".to_string();
+        for (i, c) in s.char_indices() { ci.push_str(f"{i}:{c as u32} "); }
+        println(f"char_indices={ci}");
+        println(f"char_at0={oc(s.char_at(0))} char_at2={oc(s.char_at(2))} char_at-1={oc(s.char_at(-1))} char_at99={oc(s.char_at(99))}");
+        for p in pats {
+            let mi: Vec[(i64, Str)] = s.match_indices(p).collect();
+            let mut ms = "".to_string();
+            for (i, m) in mi { ms.push_str(f"{i}:{q(m)} "); }
+            println(f"  pat {q(p)}: contains={s.contains(p)} sw={s.starts_with(p)} ew={s.ends_with(p)} find={oi(s.find(p))} rfind={oi(s.rfind(p))} count={s.matches(p).count()}");
+            println(f"    mi={ms}");
+            println(f"    split={qv(s.split(p).collect())} splitn2={qv(s.splitn(2, p).collect())} splitn0={qv(s.splitn(0, p).collect())} splitn1={qv(s.splitn(1, p).collect())}");
+            println(f"    once={op(s.split_once(p))} ronce={op(s.rsplit_once(p))} sp={os(s.strip_prefix(p))} ss={os(s.strip_suffix(p))}");
+            println(f"    replace={q(s.replace(p, "<>"))}");
+            if p != "" {
+                println(f"    split_rev={qv(s.split(p).rev().collect())}");
+            }
+        }
+    }
+}

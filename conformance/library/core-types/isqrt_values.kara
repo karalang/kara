@@ -1,0 +1,7 @@
+fn main() {
+    println(10.isqrt());
+    println(0.isqrt());
+    println(u64.MAX.isqrt());
+    let s: u8 = 255;
+    println(s.isqrt());
+}

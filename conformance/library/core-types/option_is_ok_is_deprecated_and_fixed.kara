@@ -1,0 +1,5 @@
+fn main() {
+    let o: Option[i64] = Some(1);
+    println(o.is_ok());
+    println(o.is_err());
+}

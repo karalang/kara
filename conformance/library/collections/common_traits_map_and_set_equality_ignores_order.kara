@@ -1,0 +1,19 @@
+#[derive(PartialEq)]
+struct Holder { m: Map[i64, i64] }
+fn main() {
+    let mut a: Map[i64, i64] = Map.new();
+    let mut b: Map[i64, i64] = Map.new();
+    for i in 0..20 { a[i] = i; }
+    for i in 0..20 { b[19 - i] = 19 - i; }
+    println(a == b);
+    b[3] = 99;
+    println(a == b);
+    let s: Set[i64] = Set.from([1, 2, 3]);
+    let t: Set[i64] = Set.from([3, 2, 1]);
+    println(s == t);
+    let ss: SortedSet[i64] = SortedSet.from([1]);
+    println(ss == SortedSet.from([1]));
+    let sm: SortedMap[i64, i64] = SortedMap.from([(1, 1)]);
+    println(sm != SortedMap.from([(1, 2)]));
+    println(Holder { m: a.clone() } == Holder { m: a });
+}

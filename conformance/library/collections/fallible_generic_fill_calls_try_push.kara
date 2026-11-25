@@ -1,0 +1,8 @@
+fn fill[T: Clone](v: mut ref Vec[T], n: i64, val: T) -> Result[(), AllocError] {
+    for _ in 0..n { v.try_push(val.clone())?; }
+    Ok(())
+}
+fn main() {
+    let mut v: Vec[String] = Vec.new();
+    match fill(mut v, 2, "x".to_string()) { Ok(()) => println(v), Err(e) => println(e) }
+}

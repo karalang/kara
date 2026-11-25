@@ -2301,9 +2301,12 @@ fn deque_contains_slice[T: PartialEq](d: ref VecDeque[Vec[T]], x: Slice[T]) -> b
 // `a == b` on two maps or two sets: the MIR builder calls one of these
 // (docs/library/collections.md § Common traits, B-2026-11-08-82). Two maps
 // are equal when they hold the same keys and each key's values are equal,
-// two sets when they hold the same elements; order plays no part.
+// two sets when they hold the same elements; order plays no part. `map_eq`
+// and `set_eq` are over any hasher: written over the default one, a table of
+// a program's own hasher was looked up with SipHash, so `s == s.clone()` was
+// false compiled (B-2026-11-25-29).
 
-fn map_eq[K: Hash + Eq, V: PartialEq](a: ref Map[K, V], b: ref Map[K, V]) -> bool {
+fn map_eq[K: Hash + Eq, V: PartialEq, H: BuildHasher](a: ref Map[K, V, H], b: ref Map[K, V, H]) -> bool {
     if a.len() != b.len() {
         return false;
     }
@@ -2337,7 +2340,7 @@ fn sorted_map_eq[K: Ord, V: PartialEq](a: ref SortedMap[K, V], b: ref SortedMap[
     true
 }
 
-fn set_eq[T: Hash + Eq](a: ref Set[T], b: ref Set[T]) -> bool {
+fn set_eq[T: Hash + Eq, H: BuildHasher](a: ref Set[T, H], b: ref Set[T, H]) -> bool {
     a.len() == b.len() and a.iter().all(|x| b.contains(x))
 }
 

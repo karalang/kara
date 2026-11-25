@@ -12,6 +12,9 @@ expectation, written from the page it checks (the oracle is the page).
   panic), and `<name>.err` then holds lines stderr must contain.
 - `<name>.refused`: `karac check` must refuse it and print every line of
   this file somewhere in its output.
+- `<name>.stdin`: bytes fed to the program's standard input on every run.
+  Each run starts in a fresh, empty working directory, so a program that
+  writes relative paths sees none of another run's files.
 - `<name>.env` / `<name>.args`: a Python literal (a dict of variables to
   add to the environment, a list of command-line arguments); a bytes value
   is passed as those bytes, for a non-UTF-8 one.
@@ -213,7 +216,9 @@ def main():
             rfile = src.with_suffix(".repeat")
             repeat = int(rfile.read_text().strip() or 20) if rfile.exists() else 1
             envf, argsf = src.with_suffix(".env"), src.with_suffix(".args")
+            stdinf = src.with_suffix(".stdin")
             res = run(text, backends=LANES, repeat=repeat, timeout=300,
+                      stdin=stdinf.read_text(errors="surrogateescape") if stdinf.exists() else "",
                       env=ast.literal_eval(envf.read_text()) if envf.exists() else None,
                       args=ast.literal_eval(argsf.read_text()) if argsf.exists() else None)
             if res["check"][0] != 0:

@@ -1,0 +1,6 @@
+fn main() {
+    let mut a: Vec[String] = Vec.new();
+    let b: Vec[String] = ["b".to_string()].to_vec();
+    a.extend(b);
+    println(b.len());
+}

@@ -1,0 +1,5 @@
+import std.cmp.Reverse;
+fn main() {
+    let r: Reverse[i64] = Reverse { value: 3 };
+    println(r.value);
+}

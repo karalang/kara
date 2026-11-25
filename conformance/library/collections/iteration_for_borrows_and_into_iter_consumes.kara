@@ -1,0 +1,7 @@
+fn main() {
+    let v: Vec[String] = ["a".to_string()].to_vec();
+    for s in v { print(s); }
+    println(v.len());
+    for s in v.into_iter() { println(s); }
+    println(v.len());
+}

@@ -1,0 +1,24 @@
+fn main() {
+    let mut v: Vec[i64] = [1, 2].to_vec();
+    for x in v.iter_mut() { *x *= 10; }
+    for x in v { print(f"{x} "); }
+    println("");
+    let mut d: VecDeque[i64] = VecDeque.new();
+    d.push_back(2); d.push_front(1);
+    for x in d.iter_mut() { *x += 1; }
+    for x in d.iter() { print(f"{x} "); }
+    println("");
+    let mut sm: SortedMap[i64, i64] = SortedMap.from([(2, 0), (1, 0)]);
+    for (k, v) in sm.iter_mut() { *v = k * 3; }
+    for (k, v) in sm.iter() { print(f"{k}:{v} "); }
+    println("");
+    let ss: SortedSet[i64] = SortedSet.from([3, 1, 2]);
+    for x in ss.into_iter() { print(f"{x} "); }
+    println("");
+    let mut m: Map[i64, i64] = Map.from([(1, 1)]);
+    for (_, v) in m.iter_mut() { *v = 5; }
+    println(m[1]);
+    let a: Array[i64, 2] = [7, 8];
+    for x in a.into_iter() { print(f"{x} "); }
+    println("");
+}

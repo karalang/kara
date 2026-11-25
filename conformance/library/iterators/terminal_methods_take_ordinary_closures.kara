@@ -1,0 +1,9 @@
+fn main() {
+    let v: Vec[i64] = [1, 2, 3];
+    let mut seen = 0;
+    v.iter().for_each(|x| { seen += *x; });
+    println(seen);
+    let mut calls = 0;
+    let f = v.iter().fold(0, |a, x| { calls += 1; a + *x });
+    println(f"{f} {calls}");
+}

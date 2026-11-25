@@ -1,0 +1,9 @@
+fn main() {
+    let s: Set[i64, FxBuildHasher] = (0..50).collect();
+    let mut ok = 0;
+    for i in 0..50 { if s.contains(i) { ok += 1; } }
+    let m: Map[String, i64, FxBuildHasher] = (0..50).map(|i| (f"k{i}", i)).collect();
+    let mut mk = 0;
+    for i in 0..50 { if m.contains_key(f"k{i}") { mk += 1; } }
+    println(f"{ok} {mk}");
+}

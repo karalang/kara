@@ -1,0 +1,14 @@
+struct C { n: i64 }
+impl Clone for C { fn clone(self) -> C { println("clone"); C { n: self.n } } }
+fn main() {
+    let mut v: Vec[C] = Vec.new();
+    v.resize(3, C { n: 1 });
+    println(v.len());
+    v.resize(1, C { n: 2 });
+    println(v.len());
+    v.resize(-3, C { n: 3 });
+    println(v.len());
+    let mut n: Vec[i64] = [1, 2].to_vec();
+    n.resize(4, 0);
+    println(n);
+}

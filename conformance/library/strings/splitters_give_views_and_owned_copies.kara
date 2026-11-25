@@ -1,0 +1,8 @@
+fn main() {
+    let line = "a,bb,ccc";
+    let parts: Vec[Str] = line.split(",").collect();
+    let fields: Vec[String] = line.split(",").map(|p| p.to_string()).collect();
+    println(parts.len());
+    println(parts[2]);
+    println(fields);
+}

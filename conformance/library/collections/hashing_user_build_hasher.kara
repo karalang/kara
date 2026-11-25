@@ -1,0 +1,19 @@
+struct Sum { t: u64 }
+impl Hasher for Sum {
+    fn write(mut ref self, bytes: Slice[u8]) { for b in bytes { self.t = self.t * 31 + (b as u64); } }
+    fn finish(self) -> u64 { self.t }
+}
+struct SumBuild {}
+impl BuildHasher for SumBuild {
+    type Hasher = Sum;
+    fn build(self) -> Sum { Sum { t: 7 } }
+}
+fn main() {
+    let mut m: Map[String, i64, SumBuild] = Map.new();
+    m["a"] = 1;
+    m["b"] = 2;
+    m.extend([("c".to_string(), 3)]);
+    println(m["a"] + m["b"] + m["c"]);
+    let s: Set[i64, SumBuild] = Set.from([1, 2, 2]);
+    println(s.len());
+}

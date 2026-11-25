@@ -1,0 +1,101 @@
+// String building methods, slicing, substring, chars().as_str(), C strings.
+fn q(s: Str) -> String {
+    let mut o = "\"".to_string();
+    for c in s.chars() {
+        if c == '\n' { o.push_str("\\n"); }
+        else if (c as u32) < 32 or (c as u32) > 126 { o.push_str(f"\\u{{{c as u32}}}"); }
+        else if c == '"' { o.push_str("\\\""); }
+        else { o.push(c); }
+    }
+    o.push_str("\"");
+    o
+}
+fn oc(x: Option[char]) -> String { match x { Some(c) => f"Some({c as u32})", None => "None".to_string() } }
+
+fn main() {
+    let a = String.new();
+    println(f"new={q(a)} len={a.len()} empty={a.is_empty()}");
+    let mut b = String.with_capacity(-1);
+    b.push_str("cap");
+    println(f"with_capacity(-1)+push_str={q(b)}");
+    let mut c = String.with_capacity(100);
+    c.push('x'); c.push('é'); c.push('本'); c.push('\u{1F600}');
+    println(f"push={q(c)} len={c.len()}");
+    let ok: Vec[u8] = [104u8, 105u8, 0xC3u8, 0xA9u8].to_vec();
+    match String.from_utf8(ok.as_slice()) { Ok(s) => println(f"from_utf8 ok={q(s)}"), Err(_) => println("from_utf8 ok=Err") }
+    let bad: Vec[u8] = [104u8, 105u8, 255u8].to_vec();
+    match String.from_utf8(bad.as_slice()) { Ok(s) => println(f"from_utf8 bad={q(s)}"), Err(_) => println("from_utf8 bad=Err") }
+    println(f"lossy={q(String.from_utf8_lossy(bad.as_slice()))}");
+    let bad2: Vec[u8] = [0xE6u8, 0x97u8, 0x41u8, 0xF0u8, 0x9Fu8, 0x98u8, 0xC0u8, 0x80u8, 0xEDu8, 0xA0u8, 0x80u8, 0x62u8, 0xF0u8].to_vec();
+    println(f"lossy2={q(String.from_utf8_lossy(bad2.as_slice()))}");
+    let mut d = "hello".to_string();
+    let v: Str = d.as_str();
+    println(f"as_str={q(v)}");
+    d.extend("wörld".chars());
+    println(f"extend chars={q(d)}");
+    let parts: Vec[String] = ["-a".to_string(), "-bc".to_string(), "".to_string()].to_vec();
+    d.extend(parts);
+    println(f"extend strings={q(d)}");
+    d.retain(|ch| ch != 'l' and ch != 'ö');
+    println(f"retain={q(d)}");
+    println(f"pop={oc(d.pop())} after={q(d)}");
+    let mut e = String.new();
+    println(f"pop empty={oc(e.pop())}");
+    let mut f = "aé本\u{1F600}".to_string();
+    println(f"pop4={oc(f.pop())} rest={q(f)}");
+    let mut g = "héllo".to_string();
+    g.truncate(99); println(f"truncate99={q(g)}");
+    g.truncate(6); println(f"truncate6={q(g)}");
+    g.truncate(3); println(f"truncate3={q(g)}");
+    g.truncate(-5); println(f"truncate-5={q(g)}");
+    let mut h = "abc".to_string();
+    h.reserve(-3); h.reserve(0); h.reserve(1000);
+    println(f"reserve={q(h)}");
+    h.clear(); println(f"clear={q(h)} empty={h.is_empty()}");
+    let x = "foo".to_string();
+    let y = "bär".to_string();
+    let z = x + y;
+    println(f"add={q(z)} x={q(x)} y={q(y)}");
+    // slicing and substring
+    let s = "héllo本";
+    println(f"s[0..1]={q(s[0..1])} s[1..3]={q(s[1..3])} s[3..9]={q(s[3..9])} s[9..9]={q(s[9..9])}");
+    println(f"sub(3)={q(s.substring(3))} sub(1,3)={q(s.substring(1, 3))} sub(-5,1)={q(s.substring(-5, 1))} sub(5,3)={q(s.substring(5, 3))} sub(0,99)={q(s.substring(0, 99))} sub(99)={q(s.substring(99))} sub(-1)={q(s.substring(-1))}");
+    let (l, r) = s.split_at(3);
+    println(f"split_at3={q(l)},{q(r)}");
+    let (l0, r0) = s.split_at(0);
+    let (l9, r9) = s.split_at(9);
+    println(f"split_at0={q(l0)},{q(r0)} split_at9={q(l9)},{q(r9)}");
+    let mut it = s.chars();
+    let _ = it.next(); let _ = it.next();
+    println(f"chars.as_str after 2={q(it.as_str())}");
+    let _ = it.next_back();
+    println(f"after next_back={q(it.as_str())}");
+    let o1 = s.to_string();
+    let o2 = o1.clone();
+    let st: Str = s.as_str();
+    let o3 = st.clone();
+    println(f"to_string={q(o1)} clone={q(o2)} strclone={q(o3)} eq={o1 == o2} streq={s == o3}");
+    // equality bytes
+    let nfc = "\u{e9}";
+    let nfd = "e\u{301}";
+    println(f"nfc==nfd {nfc == nfd}");
+    // C strings
+    let cs = c"hi there";
+    println(f"cstr len={cs.len()} empty={cs.is_empty()} bytes={cs.bytes().len()}");
+    match cs.to_str() { Ok(t) => println(f"cstr to_str={q(t)}"), Err(_) => println("cstr to_str=Err") }
+    match cs.to_string() { Ok(t) => println(f"cstr to_string={q(t)}"), Err(_) => println("cstr to_string=Err") }
+    let ec = c"";
+    println(f"empty cstr len={ec.len()} empty={ec.is_empty()}");
+    match "abc".to_string().to_cstring() { Ok(cc) => println(f"to_cstring ok len={cc.len()}"), Err(_) => println("to_cstring ok=Err") }
+    match "a\u{0}b".to_string().to_cstring() { Ok(cc) => println(f"to_cstring nul len={cc.len()}"), Err(_) => println("to_cstring nul=Err") }
+    let raw: Vec[u8] = [0xFFu8, 65u8].to_vec();
+    match CString.from_bytes(raw.as_slice()) {
+        Ok(cc) => {
+            println(f"from_bytes len={cc.len()} b0={cc.bytes()[0]}");
+            match cc.to_str() { Ok(t) => println(f"  to_str={q(t)}"), Err(_) => println("  to_str=Err") }
+        }
+        Err(_) => println("from_bytes=Err"),
+    }
+    let rawn: Vec[u8] = [65u8, 0u8].to_vec();
+    match CString.from_bytes(rawn.as_slice()) { Ok(_) => println("from_bytes nul=Ok"), Err(_) => println("from_bytes nul=Err") }
+}

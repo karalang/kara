@@ -1,0 +1,9 @@
+fn main() {
+    let v: Vec[i64] = [1, 2, 3, 4].to_vec();
+    let (a, b) = v.split_at(1);
+    println(a);
+    println(b);
+    let (c, d) = v.split_at(4);
+    println(c);
+    println(d);
+}

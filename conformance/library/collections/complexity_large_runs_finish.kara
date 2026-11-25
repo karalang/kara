@@ -1,0 +1,25 @@
+fn main() {
+    let n = 200000;
+    let mut m: SortedMap[i64, i64] = SortedMap.new();
+    let mut i = n;
+    while i > 0 { m.insert(i, i); i -= 1; }
+    let mut s: SortedSet[i64] = SortedSet.new();
+    for k in 0..n { s.insert(n - k); }
+    let mut removed = 0;
+    for k in 0..n { if k % 2 == 0 and s.remove(k) { removed += 1; } }
+    let mut d: VecDeque[i64] = VecDeque.new();
+    for k in 0..n { d.push_front(k); }
+    let mut front = 0;
+    for _ in 0..n { front = d.pop_front() ?? -1; }
+    let v: Vec[i64] = Vec.from_fn(n, |k| n - k);
+    let mut q = PriorityQueue.from(v);
+    for k in 0..n { q.push(k); }
+    let mut last = -1;
+    for _ in 0..n { last = q.pop() ?? -1; }
+    println(m.len());
+    match m.first() { Some((k, _)) => println(k), None => println(0) }
+    println(removed);
+    println(front);
+    println(last);
+    println(q.len());
+}

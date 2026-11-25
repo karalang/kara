@@ -1,0 +1,5 @@
+fn main() {
+    let mut v: Vec[i64] = [1, 2].to_vec();
+    let i = v.len();
+    v[i] = 3;
+}

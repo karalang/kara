@@ -1,0 +1,5 @@
+fn main() {
+    let v: Vec[i64] = [1, 2, 3].to_vec();
+    println("start");
+    let it = v.iter().cloned().step_by(0); println("built");
+}

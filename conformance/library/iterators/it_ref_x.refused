@@ -1,0 +1,1 @@
+no method 'clone' on type 'VecIntoIter', an iterator: an owning iterator (`into_iter()`) is not `Clone`, nor is a view library/iterators.md § `cycle` does not list -- for a second walk, build the iterator again from its source, or `collect` it once into a `Vec` and walk that

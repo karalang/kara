@@ -1,0 +1,4 @@
+fn main() {
+    let m: Map[f64, i64] = Map.new();
+    println(m.len());
+}

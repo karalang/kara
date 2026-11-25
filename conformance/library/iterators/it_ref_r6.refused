@@ -1,0 +1,1 @@
+no method 'len' on type 'Range', an iterator: `count()` walks it and counts the items

@@ -1,0 +1,8 @@
+fn main() {
+    let v: Str;
+    {
+        let s = "  abc  ".to_string();
+        v = s.trim();
+    }
+    println(v);
+}

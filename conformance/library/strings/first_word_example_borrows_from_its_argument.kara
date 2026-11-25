@@ -1,0 +1,13 @@
+fn first_word(s: Str) -> Str {
+    let end = s.find(" ") ?? s.len();
+    s[0..end]
+}
+fn main() {
+    let line = "alice,30,engineer";
+    let w = first_word(line);
+    println(w);
+    let owned = "bob smith".to_string();
+    let w2 = first_word(owned);
+    println(w2);
+    println(first_word("one two"));
+}

@@ -1,0 +1,21 @@
+fn main() {
+    let src = "let x";
+    let mut keywords: Map[String, i64] = Map.new();
+    keywords["let"] = 1;
+    println(keywords.get(src[0..3]) ?? 0);
+    println(keywords.contains_key(src[4..5]));
+    let cand: Str = "b";
+    let seen: Set[String] = Set.from(["a".to_string(), "b".to_string()]);
+    println(seen.contains(cand));
+    let owned = "a".to_string();
+    println(seen.contains(owned));
+    let mut vm: SortedMap[Vec[i64], i64] = SortedMap.new();
+    vm.insert([1, 2].to_vec(), 5);
+    let key: Vec[i64] = [0, 1, 2].to_vec();
+    println(vm.get(key[1..3]) ?? 0);
+    match keywords.get_mut("let") { Some(v) => { *v = 7; } None => {} }
+    println(keywords.remove("let") ?? 0);
+    let mut ss: SortedSet[String] = SortedSet.new();
+    ss.insert("q".to_string());
+    println(ss.remove("q"));
+}

@@ -1,0 +1,826 @@
+== "" len=0 empty=true chars=0
+rev="" upper="" lower=""
+trim="" trim_start="" trim_end=""
+ws=[] lines=[]
+char_indices=
+char_at0=None char_at2=None char_at-1=None char_at99=None
+  pat "": contains=true sw=true ew=true find=Some(0) rfind=Some(0) count=1
+    mi=0:"" 
+    split=["", ""] splitn2=["", ""] splitn0=[] splitn1=[""]
+    once=Some("", "") ronce=Some("", "") sp=Some("") ss=Some("")
+    replace="<>"
+  pat ",": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=[""] splitn2=[""] splitn0=[] splitn1=[""]
+    once=None ronce=None sp=None ss=None
+    replace=""
+    split_rev=[""]
+  pat "a": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=[""] splitn2=[""] splitn0=[] splitn1=[""]
+    once=None ronce=None sp=None ss=None
+    replace=""
+    split_rev=[""]
+  pat "aa": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=[""] splitn2=[""] splitn0=[] splitn1=[""]
+    once=None ronce=None sp=None ss=None
+    replace=""
+    split_rev=[""]
+  pat "X": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=[""] splitn2=[""] splitn0=[] splitn1=[""]
+    once=None ronce=None sp=None ss=None
+    replace=""
+    split_rev=[""]
+  pat "ö": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=[""] splitn2=[""] splitn0=[] splitn1=[""]
+    once=None ronce=None sp=None ss=None
+    replace=""
+    split_rev=[""]
+  pat "本": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=[""] splitn2=[""] splitn0=[] splitn1=[""]
+    once=None ronce=None sp=None ss=None
+    replace=""
+    split_rev=[""]
+  pat "zz": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=[""] splitn2=[""] splitn0=[] splitn1=[""]
+    once=None ronce=None sp=None ss=None
+    replace=""
+    split_rev=[""]
+  pat "\n": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=[""] splitn2=[""] splitn0=[] splitn1=[""]
+    once=None ronce=None sp=None ss=None
+    replace=""
+    split_rev=[""]
+== "abc" len=3 empty=false chars=3
+rev="cba" upper="ABC" lower="abc"
+trim="abc" trim_start="abc" trim_end="abc"
+ws=["abc"] lines=["abc"]
+char_indices=0:97 1:98 2:99 
+char_at0=Some(97) char_at2=Some(99) char_at-1=None char_at99=None
+  pat "": contains=true sw=true ew=true find=Some(0) rfind=Some(3) count=4
+    mi=0:"" 1:"" 2:"" 3:"" 
+    split=["", "a", "b", "c", ""] splitn2=["", "abc"] splitn0=[] splitn1=["abc"]
+    once=Some("", "abc") ronce=Some("abc", "") sp=Some("abc") ss=Some("abc")
+    replace="<>a<>b<>c<>"
+  pat ",": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["abc"] splitn2=["abc"] splitn0=[] splitn1=["abc"]
+    once=None ronce=None sp=None ss=None
+    replace="abc"
+    split_rev=["abc"]
+  pat "a": contains=true sw=true ew=false find=Some(0) rfind=Some(0) count=1
+    mi=0:"a" 
+    split=["", "bc"] splitn2=["", "bc"] splitn0=[] splitn1=["abc"]
+    once=Some("", "bc") ronce=Some("", "bc") sp=Some("bc") ss=None
+    replace="<>bc"
+    split_rev=["bc", ""]
+  pat "aa": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["abc"] splitn2=["abc"] splitn0=[] splitn1=["abc"]
+    once=None ronce=None sp=None ss=None
+    replace="abc"
+    split_rev=["abc"]
+  pat "X": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["abc"] splitn2=["abc"] splitn0=[] splitn1=["abc"]
+    once=None ronce=None sp=None ss=None
+    replace="abc"
+    split_rev=["abc"]
+  pat "ö": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["abc"] splitn2=["abc"] splitn0=[] splitn1=["abc"]
+    once=None ronce=None sp=None ss=None
+    replace="abc"
+    split_rev=["abc"]
+  pat "本": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["abc"] splitn2=["abc"] splitn0=[] splitn1=["abc"]
+    once=None ronce=None sp=None ss=None
+    replace="abc"
+    split_rev=["abc"]
+  pat "zz": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["abc"] splitn2=["abc"] splitn0=[] splitn1=["abc"]
+    once=None ronce=None sp=None ss=None
+    replace="abc"
+    split_rev=["abc"]
+  pat "\n": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["abc"] splitn2=["abc"] splitn0=[] splitn1=["abc"]
+    once=None ronce=None sp=None ss=None
+    replace="abc"
+    split_rev=["abc"]
+== "a,b,,c" len=6 empty=false chars=6
+rev="c,,b,a" upper="A,B,,C" lower="a,b,,c"
+trim="a,b,,c" trim_start="a,b,,c" trim_end="a,b,,c"
+ws=["a,b,,c"] lines=["a,b,,c"]
+char_indices=0:97 1:44 2:98 3:44 4:44 5:99 
+char_at0=Some(97) char_at2=Some(98) char_at-1=None char_at99=None
+  pat "": contains=true sw=true ew=true find=Some(0) rfind=Some(6) count=7
+    mi=0:"" 1:"" 2:"" 3:"" 4:"" 5:"" 6:"" 
+    split=["", "a", ",", "b", ",", ",", "c", ""] splitn2=["", "a,b,,c"] splitn0=[] splitn1=["a,b,,c"]
+    once=Some("", "a,b,,c") ronce=Some("a,b,,c", "") sp=Some("a,b,,c") ss=Some("a,b,,c")
+    replace="<>a<>,<>b<>,<>,<>c<>"
+  pat ",": contains=true sw=false ew=false find=Some(1) rfind=Some(4) count=3
+    mi=1:"," 3:"," 4:"," 
+    split=["a", "b", "", "c"] splitn2=["a", "b,,c"] splitn0=[] splitn1=["a,b,,c"]
+    once=Some("a", "b,,c") ronce=Some("a,b,", "c") sp=None ss=None
+    replace="a<>b<><>c"
+    split_rev=["c", "", "b", "a"]
+  pat "a": contains=true sw=true ew=false find=Some(0) rfind=Some(0) count=1
+    mi=0:"a" 
+    split=["", ",b,,c"] splitn2=["", ",b,,c"] splitn0=[] splitn1=["a,b,,c"]
+    once=Some("", ",b,,c") ronce=Some("", ",b,,c") sp=Some(",b,,c") ss=None
+    replace="<>,b,,c"
+    split_rev=[",b,,c", ""]
+  pat "aa": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["a,b,,c"] splitn2=["a,b,,c"] splitn0=[] splitn1=["a,b,,c"]
+    once=None ronce=None sp=None ss=None
+    replace="a,b,,c"
+    split_rev=["a,b,,c"]
+  pat "X": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["a,b,,c"] splitn2=["a,b,,c"] splitn0=[] splitn1=["a,b,,c"]
+    once=None ronce=None sp=None ss=None
+    replace="a,b,,c"
+    split_rev=["a,b,,c"]
+  pat "ö": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["a,b,,c"] splitn2=["a,b,,c"] splitn0=[] splitn1=["a,b,,c"]
+    once=None ronce=None sp=None ss=None
+    replace="a,b,,c"
+    split_rev=["a,b,,c"]
+  pat "本": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["a,b,,c"] splitn2=["a,b,,c"] splitn0=[] splitn1=["a,b,,c"]
+    once=None ronce=None sp=None ss=None
+    replace="a,b,,c"
+    split_rev=["a,b,,c"]
+  pat "zz": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["a,b,,c"] splitn2=["a,b,,c"] splitn0=[] splitn1=["a,b,,c"]
+    once=None ronce=None sp=None ss=None
+    replace="a,b,,c"
+    split_rev=["a,b,,c"]
+  pat "\n": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["a,b,,c"] splitn2=["a,b,,c"] splitn0=[] splitn1=["a,b,,c"]
+    once=None ronce=None sp=None ss=None
+    replace="a,b,,c"
+    split_rev=["a,b,,c"]
+== ",a," len=3 empty=false chars=3
+rev=",a," upper=",A," lower=",a,"
+trim=",a," trim_start=",a," trim_end=",a,"
+ws=[",a,"] lines=[",a,"]
+char_indices=0:44 1:97 2:44 
+char_at0=Some(44) char_at2=Some(44) char_at-1=None char_at99=None
+  pat "": contains=true sw=true ew=true find=Some(0) rfind=Some(3) count=4
+    mi=0:"" 1:"" 2:"" 3:"" 
+    split=["", ",", "a", ",", ""] splitn2=["", ",a,"] splitn0=[] splitn1=[",a,"]
+    once=Some("", ",a,") ronce=Some(",a,", "") sp=Some(",a,") ss=Some(",a,")
+    replace="<>,<>a<>,<>"
+  pat ",": contains=true sw=true ew=true find=Some(0) rfind=Some(2) count=2
+    mi=0:"," 2:"," 
+    split=["", "a", ""] splitn2=["", "a,"] splitn0=[] splitn1=[",a,"]
+    once=Some("", "a,") ronce=Some(",a", "") sp=Some("a,") ss=Some(",a")
+    replace="<>a<>"
+    split_rev=["", "a", ""]
+  pat "a": contains=true sw=false ew=false find=Some(1) rfind=Some(1) count=1
+    mi=1:"a" 
+    split=[",", ","] splitn2=[",", ","] splitn0=[] splitn1=[",a,"]
+    once=Some(",", ",") ronce=Some(",", ",") sp=None ss=None
+    replace=",<>,"
+    split_rev=[",", ","]
+  pat "aa": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=[",a,"] splitn2=[",a,"] splitn0=[] splitn1=[",a,"]
+    once=None ronce=None sp=None ss=None
+    replace=",a,"
+    split_rev=[",a,"]
+  pat "X": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=[",a,"] splitn2=[",a,"] splitn0=[] splitn1=[",a,"]
+    once=None ronce=None sp=None ss=None
+    replace=",a,"
+    split_rev=[",a,"]
+  pat "ö": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=[",a,"] splitn2=[",a,"] splitn0=[] splitn1=[",a,"]
+    once=None ronce=None sp=None ss=None
+    replace=",a,"
+    split_rev=[",a,"]
+  pat "本": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=[",a,"] splitn2=[",a,"] splitn0=[] splitn1=[",a,"]
+    once=None ronce=None sp=None ss=None
+    replace=",a,"
+    split_rev=[",a,"]
+  pat "zz": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=[",a,"] splitn2=[",a,"] splitn0=[] splitn1=[",a,"]
+    once=None ronce=None sp=None ss=None
+    replace=",a,"
+    split_rev=[",a,"]
+  pat "\n": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=[",a,"] splitn2=[",a,"] splitn0=[] splitn1=[",a,"]
+    once=None ronce=None sp=None ss=None
+    replace=",a,"
+    split_rev=[",a,"]
+== "aaa" len=3 empty=false chars=3
+rev="aaa" upper="AAA" lower="aaa"
+trim="aaa" trim_start="aaa" trim_end="aaa"
+ws=["aaa"] lines=["aaa"]
+char_indices=0:97 1:97 2:97 
+char_at0=Some(97) char_at2=Some(97) char_at-1=None char_at99=None
+  pat "": contains=true sw=true ew=true find=Some(0) rfind=Some(3) count=4
+    mi=0:"" 1:"" 2:"" 3:"" 
+    split=["", "a", "a", "a", ""] splitn2=["", "aaa"] splitn0=[] splitn1=["aaa"]
+    once=Some("", "aaa") ronce=Some("aaa", "") sp=Some("aaa") ss=Some("aaa")
+    replace="<>a<>a<>a<>"
+  pat ",": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["aaa"] splitn2=["aaa"] splitn0=[] splitn1=["aaa"]
+    once=None ronce=None sp=None ss=None
+    replace="aaa"
+    split_rev=["aaa"]
+  pat "a": contains=true sw=true ew=true find=Some(0) rfind=Some(2) count=3
+    mi=0:"a" 1:"a" 2:"a" 
+    split=["", "", "", ""] splitn2=["", "aa"] splitn0=[] splitn1=["aaa"]
+    once=Some("", "aa") ronce=Some("aa", "") sp=Some("aa") ss=Some("aa")
+    replace="<><><>"
+    split_rev=["", "", "", ""]
+  pat "aa": contains=true sw=true ew=true find=Some(0) rfind=Some(1) count=1
+    mi=0:"aa" 
+    split=["", "a"] splitn2=["", "a"] splitn0=[] splitn1=["aaa"]
+    once=Some("", "a") ronce=Some("a", "") sp=Some("a") ss=Some("a")
+    replace="<>a"
+    split_rev=["a", ""]
+  pat "X": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["aaa"] splitn2=["aaa"] splitn0=[] splitn1=["aaa"]
+    once=None ronce=None sp=None ss=None
+    replace="aaa"
+    split_rev=["aaa"]
+  pat "ö": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["aaa"] splitn2=["aaa"] splitn0=[] splitn1=["aaa"]
+    once=None ronce=None sp=None ss=None
+    replace="aaa"
+    split_rev=["aaa"]
+  pat "本": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["aaa"] splitn2=["aaa"] splitn0=[] splitn1=["aaa"]
+    once=None ronce=None sp=None ss=None
+    replace="aaa"
+    split_rev=["aaa"]
+  pat "zz": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["aaa"] splitn2=["aaa"] splitn0=[] splitn1=["aaa"]
+    once=None ronce=None sp=None ss=None
+    replace="aaa"
+    split_rev=["aaa"]
+  pat "\n": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["aaa"] splitn2=["aaa"] splitn0=[] splitn1=["aaa"]
+    once=None ronce=None sp=None ss=None
+    replace="aaa"
+    split_rev=["aaa"]
+== "héllo wörld" len=13 empty=false chars=11
+rev="dlröw olléh" upper="HÉLLO WÖRLD" lower="héllo wörld"
+trim="héllo wörld" trim_start="héllo wörld" trim_end="héllo wörld"
+ws=["héllo", "wörld"] lines=["héllo wörld"]
+char_indices=0:104 1:233 3:108 4:108 5:111 6:32 7:119 8:246 10:114 11:108 12:100 
+char_at0=Some(104) char_at2=Some(108) char_at-1=None char_at99=None
+  pat "": contains=true sw=true ew=true find=Some(0) rfind=Some(13) count=12
+    mi=0:"" 1:"" 3:"" 4:"" 5:"" 6:"" 7:"" 8:"" 10:"" 11:"" 12:"" 13:"" 
+    split=["", "h", "é", "l", "l", "o", " ", "w", "ö", "r", "l", "d", ""] splitn2=["", "héllo wörld"] splitn0=[] splitn1=["héllo wörld"]
+    once=Some("", "héllo wörld") ronce=Some("héllo wörld", "") sp=Some("héllo wörld") ss=Some("héllo wörld")
+    replace="<>h<>é<>l<>l<>o<> <>w<>ö<>r<>l<>d<>"
+  pat ",": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["héllo wörld"] splitn2=["héllo wörld"] splitn0=[] splitn1=["héllo wörld"]
+    once=None ronce=None sp=None ss=None
+    replace="héllo wörld"
+    split_rev=["héllo wörld"]
+  pat "a": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["héllo wörld"] splitn2=["héllo wörld"] splitn0=[] splitn1=["héllo wörld"]
+    once=None ronce=None sp=None ss=None
+    replace="héllo wörld"
+    split_rev=["héllo wörld"]
+  pat "aa": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["héllo wörld"] splitn2=["héllo wörld"] splitn0=[] splitn1=["héllo wörld"]
+    once=None ronce=None sp=None ss=None
+    replace="héllo wörld"
+    split_rev=["héllo wörld"]
+  pat "X": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["héllo wörld"] splitn2=["héllo wörld"] splitn0=[] splitn1=["héllo wörld"]
+    once=None ronce=None sp=None ss=None
+    replace="héllo wörld"
+    split_rev=["héllo wörld"]
+  pat "ö": contains=true sw=false ew=false find=Some(8) rfind=Some(8) count=1
+    mi=8:"ö" 
+    split=["héllo w", "rld"] splitn2=["héllo w", "rld"] splitn0=[] splitn1=["héllo wörld"]
+    once=Some("héllo w", "rld") ronce=Some("héllo w", "rld") sp=None ss=None
+    replace="héllo w<>rld"
+    split_rev=["rld", "héllo w"]
+  pat "本": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["héllo wörld"] splitn2=["héllo wörld"] splitn0=[] splitn1=["héllo wörld"]
+    once=None ronce=None sp=None ss=None
+    replace="héllo wörld"
+    split_rev=["héllo wörld"]
+  pat "zz": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["héllo wörld"] splitn2=["héllo wörld"] splitn0=[] splitn1=["héllo wörld"]
+    once=None ronce=None sp=None ss=None
+    replace="héllo wörld"
+    split_rev=["héllo wörld"]
+  pat "\n": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["héllo wörld"] splitn2=["héllo wörld"] splitn0=[] splitn1=["héllo wörld"]
+    once=None ronce=None sp=None ss=None
+    replace="héllo wörld"
+    split_rev=["héllo wörld"]
+== "日本語テキスト" len=21 empty=false chars=7
+rev="トスキテ語本日" upper="日本語テキスト" lower="日本語テキスト"
+trim="日本語テキスト" trim_start="日本語テキスト" trim_end="日本語テキスト"
+ws=["日本語テキスト"] lines=["日本語テキスト"]
+char_indices=0:26085 3:26412 6:35486 9:12486 12:12461 15:12473 18:12488 
+char_at0=Some(26085) char_at2=Some(35486) char_at-1=None char_at99=None
+  pat "": contains=true sw=true ew=true find=Some(0) rfind=Some(21) count=8
+    mi=0:"" 3:"" 6:"" 9:"" 12:"" 15:"" 18:"" 21:"" 
+    split=["", "日", "本", "語", "テ", "キ", "ス", "ト", ""] splitn2=["", "日本語テキスト"] splitn0=[] splitn1=["日本語テキスト"]
+    once=Some("", "日本語テキスト") ronce=Some("日本語テキスト", "") sp=Some("日本語テキスト") ss=Some("日本語テキスト")
+    replace="<>日<>本<>語<>テ<>キ<>ス<>ト<>"
+  pat ",": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["日本語テキスト"] splitn2=["日本語テキスト"] splitn0=[] splitn1=["日本語テキスト"]
+    once=None ronce=None sp=None ss=None
+    replace="日本語テキスト"
+    split_rev=["日本語テキスト"]
+  pat "a": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["日本語テキスト"] splitn2=["日本語テキスト"] splitn0=[] splitn1=["日本語テキスト"]
+    once=None ronce=None sp=None ss=None
+    replace="日本語テキスト"
+    split_rev=["日本語テキスト"]
+  pat "aa": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["日本語テキスト"] splitn2=["日本語テキスト"] splitn0=[] splitn1=["日本語テキスト"]
+    once=None ronce=None sp=None ss=None
+    replace="日本語テキスト"
+    split_rev=["日本語テキスト"]
+  pat "X": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["日本語テキスト"] splitn2=["日本語テキスト"] splitn0=[] splitn1=["日本語テキスト"]
+    once=None ronce=None sp=None ss=None
+    replace="日本語テキスト"
+    split_rev=["日本語テキスト"]
+  pat "ö": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["日本語テキスト"] splitn2=["日本語テキスト"] splitn0=[] splitn1=["日本語テキスト"]
+    once=None ronce=None sp=None ss=None
+    replace="日本語テキスト"
+    split_rev=["日本語テキスト"]
+  pat "本": contains=true sw=false ew=false find=Some(3) rfind=Some(3) count=1
+    mi=3:"本" 
+    split=["日", "語テキスト"] splitn2=["日", "語テキスト"] splitn0=[] splitn1=["日本語テキスト"]
+    once=Some("日", "語テキスト") ronce=Some("日", "語テキスト") sp=None ss=None
+    replace="日<>語テキスト"
+    split_rev=["語テキスト", "日"]
+  pat "zz": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["日本語テキスト"] splitn2=["日本語テキスト"] splitn0=[] splitn1=["日本語テキスト"]
+    once=None ronce=None sp=None ss=None
+    replace="日本語テキスト"
+    split_rev=["日本語テキスト"]
+  pat "\n": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["日本語テキスト"] splitn2=["日本語テキスト"] splitn0=[] splitn1=["日本語テキスト"]
+    once=None ronce=None sp=None ss=None
+    replace="日本語テキスト"
+    split_rev=["日本語テキスト"]
+== "  \tx y\n " len=8 empty=false chars=8
+rev=" \ny x\t  " upper="  \tX Y\n " lower="  \tx y\n "
+trim="x y" trim_start="x y\n " trim_end="  \tx y"
+ws=["x", "y"] lines=["  \tx y", " "]
+char_indices=0:32 1:32 2:9 3:120 4:32 5:121 6:10 7:32 
+char_at0=Some(32) char_at2=Some(9) char_at-1=None char_at99=None
+  pat "": contains=true sw=true ew=true find=Some(0) rfind=Some(8) count=9
+    mi=0:"" 1:"" 2:"" 3:"" 4:"" 5:"" 6:"" 7:"" 8:"" 
+    split=["", " ", " ", "\t", "x", " ", "y", "\n", " ", ""] splitn2=["", "  \tx y\n "] splitn0=[] splitn1=["  \tx y\n "]
+    once=Some("", "  \tx y\n ") ronce=Some("  \tx y\n ", "") sp=Some("  \tx y\n ") ss=Some("  \tx y\n ")
+    replace="<> <> <>\t<>x<> <>y<>\n<> <>"
+  pat ",": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["  \tx y\n "] splitn2=["  \tx y\n "] splitn0=[] splitn1=["  \tx y\n "]
+    once=None ronce=None sp=None ss=None
+    replace="  \tx y\n "
+    split_rev=["  \tx y\n "]
+  pat "a": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["  \tx y\n "] splitn2=["  \tx y\n "] splitn0=[] splitn1=["  \tx y\n "]
+    once=None ronce=None sp=None ss=None
+    replace="  \tx y\n "
+    split_rev=["  \tx y\n "]
+  pat "aa": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["  \tx y\n "] splitn2=["  \tx y\n "] splitn0=[] splitn1=["  \tx y\n "]
+    once=None ronce=None sp=None ss=None
+    replace="  \tx y\n "
+    split_rev=["  \tx y\n "]
+  pat "X": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["  \tx y\n "] splitn2=["  \tx y\n "] splitn0=[] splitn1=["  \tx y\n "]
+    once=None ronce=None sp=None ss=None
+    replace="  \tx y\n "
+    split_rev=["  \tx y\n "]
+  pat "ö": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["  \tx y\n "] splitn2=["  \tx y\n "] splitn0=[] splitn1=["  \tx y\n "]
+    once=None ronce=None sp=None ss=None
+    replace="  \tx y\n "
+    split_rev=["  \tx y\n "]
+  pat "本": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["  \tx y\n "] splitn2=["  \tx y\n "] splitn0=[] splitn1=["  \tx y\n "]
+    once=None ronce=None sp=None ss=None
+    replace="  \tx y\n "
+    split_rev=["  \tx y\n "]
+  pat "zz": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["  \tx y\n "] splitn2=["  \tx y\n "] splitn0=[] splitn1=["  \tx y\n "]
+    once=None ronce=None sp=None ss=None
+    replace="  \tx y\n "
+    split_rev=["  \tx y\n "]
+  pat "\n": contains=true sw=false ew=false find=Some(6) rfind=Some(6) count=1
+    mi=6:"\n" 
+    split=["  \tx y", " "] splitn2=["  \tx y", " "] splitn0=[] splitn1=["  \tx y\n "]
+    once=Some("  \tx y", " ") ronce=Some("  \tx y", " ") sp=None ss=None
+    replace="  \tx y<> "
+    split_rev=[" ", "  \tx y"]
+== "　 mid " len=13 empty=false chars=7
+rev=" dim 　" upper="　 MID " lower="　 mid "
+trim="mid" trim_start="mid " trim_end="　 mid"
+ws=["mid"] lines=["　 mid "]
+char_indices=0:12288 3:160 5:109 6:105 7:100 8:133 10:8195 
+char_at0=Some(12288) char_at2=Some(109) char_at-1=None char_at99=None
+  pat "": contains=true sw=true ew=true find=Some(0) rfind=Some(13) count=8
+    mi=0:"" 3:"" 5:"" 6:"" 7:"" 8:"" 10:"" 13:"" 
+    split=["", "　", " ", "m", "i", "d", "", " ", ""] splitn2=["", "　 mid "] splitn0=[] splitn1=["　 mid "]
+    once=Some("", "　 mid ") ronce=Some("　 mid ", "") sp=Some("　 mid ") ss=Some("　 mid ")
+    replace="<>　<> <>m<>i<>d<><> <>"
+  pat ",": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["　 mid "] splitn2=["　 mid "] splitn0=[] splitn1=["　 mid "]
+    once=None ronce=None sp=None ss=None
+    replace="　 mid "
+    split_rev=["　 mid "]
+  pat "a": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["　 mid "] splitn2=["　 mid "] splitn0=[] splitn1=["　 mid "]
+    once=None ronce=None sp=None ss=None
+    replace="　 mid "
+    split_rev=["　 mid "]
+  pat "aa": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["　 mid "] splitn2=["　 mid "] splitn0=[] splitn1=["　 mid "]
+    once=None ronce=None sp=None ss=None
+    replace="　 mid "
+    split_rev=["　 mid "]
+  pat "X": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["　 mid "] splitn2=["　 mid "] splitn0=[] splitn1=["　 mid "]
+    once=None ronce=None sp=None ss=None
+    replace="　 mid "
+    split_rev=["　 mid "]
+  pat "ö": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["　 mid "] splitn2=["　 mid "] splitn0=[] splitn1=["　 mid "]
+    once=None ronce=None sp=None ss=None
+    replace="　 mid "
+    split_rev=["　 mid "]
+  pat "本": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["　 mid "] splitn2=["　 mid "] splitn0=[] splitn1=["　 mid "]
+    once=None ronce=None sp=None ss=None
+    replace="　 mid "
+    split_rev=["　 mid "]
+  pat "zz": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["　 mid "] splitn2=["　 mid "] splitn0=[] splitn1=["　 mid "]
+    once=None ronce=None sp=None ss=None
+    replace="　 mid "
+    split_rev=["　 mid "]
+  pat "\n": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["　 mid "] splitn2=["　 mid "] splitn0=[] splitn1=["　 mid "]
+    once=None ronce=None sp=None ss=None
+    replace="　 mid "
+    split_rev=["　 mid "]
+== "a\r\nb\rc\n" len=7 empty=false chars=7
+rev="\nc\rb\n\ra" upper="A\r\nB\rC\n" lower="a\r\nb\rc\n"
+trim="a\r\nb\rc" trim_start="a\r\nb\rc\n" trim_end="a\r\nb\rc"
+ws=["a", "b", "c"] lines=["a", "b\rc"]
+char_indices=0:97 1:13 2:10 3:98 4:13 5:99 6:10 
+char_at0=Some(97) char_at2=Some(10) char_at-1=None char_at99=None
+  pat "": contains=true sw=true ew=true find=Some(0) rfind=Some(7) count=8
+    mi=0:"" 1:"" 2:"" 3:"" 4:"" 5:"" 6:"" 7:"" 
+    split=["", "a", "\r", "\n", "b", "\r", "c", "\n", ""] splitn2=["", "a\r\nb\rc\n"] splitn0=[] splitn1=["a\r\nb\rc\n"]
+    once=Some("", "a\r\nb\rc\n") ronce=Some("a\r\nb\rc\n", "") sp=Some("a\r\nb\rc\n") ss=Some("a\r\nb\rc\n")
+    replace="<>a<>\r<>\n<>b<>\r<>c<>\n<>"
+  pat ",": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["a\r\nb\rc\n"] splitn2=["a\r\nb\rc\n"] splitn0=[] splitn1=["a\r\nb\rc\n"]
+    once=None ronce=None sp=None ss=None
+    replace="a\r\nb\rc\n"
+    split_rev=["a\r\nb\rc\n"]
+  pat "a": contains=true sw=true ew=false find=Some(0) rfind=Some(0) count=1
+    mi=0:"a" 
+    split=["", "\r\nb\rc\n"] splitn2=["", "\r\nb\rc\n"] splitn0=[] splitn1=["a\r\nb\rc\n"]
+    once=Some("", "\r\nb\rc\n") ronce=Some("", "\r\nb\rc\n") sp=Some("\r\nb\rc\n") ss=None
+    replace="<>\r\nb\rc\n"
+    split_rev=["\r\nb\rc\n", ""]
+  pat "aa": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["a\r\nb\rc\n"] splitn2=["a\r\nb\rc\n"] splitn0=[] splitn1=["a\r\nb\rc\n"]
+    once=None ronce=None sp=None ss=None
+    replace="a\r\nb\rc\n"
+    split_rev=["a\r\nb\rc\n"]
+  pat "X": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["a\r\nb\rc\n"] splitn2=["a\r\nb\rc\n"] splitn0=[] splitn1=["a\r\nb\rc\n"]
+    once=None ronce=None sp=None ss=None
+    replace="a\r\nb\rc\n"
+    split_rev=["a\r\nb\rc\n"]
+  pat "ö": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["a\r\nb\rc\n"] splitn2=["a\r\nb\rc\n"] splitn0=[] splitn1=["a\r\nb\rc\n"]
+    once=None ronce=None sp=None ss=None
+    replace="a\r\nb\rc\n"
+    split_rev=["a\r\nb\rc\n"]
+  pat "本": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["a\r\nb\rc\n"] splitn2=["a\r\nb\rc\n"] splitn0=[] splitn1=["a\r\nb\rc\n"]
+    once=None ronce=None sp=None ss=None
+    replace="a\r\nb\rc\n"
+    split_rev=["a\r\nb\rc\n"]
+  pat "zz": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["a\r\nb\rc\n"] splitn2=["a\r\nb\rc\n"] splitn0=[] splitn1=["a\r\nb\rc\n"]
+    once=None ronce=None sp=None ss=None
+    replace="a\r\nb\rc\n"
+    split_rev=["a\r\nb\rc\n"]
+  pat "\n": contains=true sw=false ew=true find=Some(2) rfind=Some(6) count=2
+    mi=2:"\n" 6:"\n" 
+    split=["a\r", "b\rc", ""] splitn2=["a\r", "b\rc\n"] splitn0=[] splitn1=["a\r\nb\rc\n"]
+    once=Some("a\r", "b\rc\n") ronce=Some("a\r\nb\rc", "") sp=None ss=Some("a\r\nb\rc")
+    replace="a\r<>b\rc<>"
+    split_rev=["", "b\rc", "a\r"]
+== "\n\n" len=2 empty=false chars=2
+rev="\n\n" upper="\n\n" lower="\n\n"
+trim="" trim_start="" trim_end=""
+ws=[] lines=["", ""]
+char_indices=0:10 1:10 
+char_at0=Some(10) char_at2=None char_at-1=None char_at99=None
+  pat "": contains=true sw=true ew=true find=Some(0) rfind=Some(2) count=3
+    mi=0:"" 1:"" 2:"" 
+    split=["", "\n", "\n", ""] splitn2=["", "\n\n"] splitn0=[] splitn1=["\n\n"]
+    once=Some("", "\n\n") ronce=Some("\n\n", "") sp=Some("\n\n") ss=Some("\n\n")
+    replace="<>\n<>\n<>"
+  pat ",": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["\n\n"] splitn2=["\n\n"] splitn0=[] splitn1=["\n\n"]
+    once=None ronce=None sp=None ss=None
+    replace="\n\n"
+    split_rev=["\n\n"]
+  pat "a": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["\n\n"] splitn2=["\n\n"] splitn0=[] splitn1=["\n\n"]
+    once=None ronce=None sp=None ss=None
+    replace="\n\n"
+    split_rev=["\n\n"]
+  pat "aa": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["\n\n"] splitn2=["\n\n"] splitn0=[] splitn1=["\n\n"]
+    once=None ronce=None sp=None ss=None
+    replace="\n\n"
+    split_rev=["\n\n"]
+  pat "X": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["\n\n"] splitn2=["\n\n"] splitn0=[] splitn1=["\n\n"]
+    once=None ronce=None sp=None ss=None
+    replace="\n\n"
+    split_rev=["\n\n"]
+  pat "ö": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["\n\n"] splitn2=["\n\n"] splitn0=[] splitn1=["\n\n"]
+    once=None ronce=None sp=None ss=None
+    replace="\n\n"
+    split_rev=["\n\n"]
+  pat "本": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["\n\n"] splitn2=["\n\n"] splitn0=[] splitn1=["\n\n"]
+    once=None ronce=None sp=None ss=None
+    replace="\n\n"
+    split_rev=["\n\n"]
+  pat "zz": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["\n\n"] splitn2=["\n\n"] splitn0=[] splitn1=["\n\n"]
+    once=None ronce=None sp=None ss=None
+    replace="\n\n"
+    split_rev=["\n\n"]
+  pat "\n": contains=true sw=true ew=true find=Some(0) rfind=Some(1) count=2
+    mi=0:"\n" 1:"\n" 
+    split=["", "", ""] splitn2=["", "\n"] splitn0=[] splitn1=["\n\n"]
+    once=Some("", "\n") ronce=Some("\n", "") sp=Some("\n") ss=Some("\n")
+    replace="<><>"
+    split_rev=["", "", ""]
+== "line\n" len=5 empty=false chars=5
+rev="\nenil" upper="LINE\n" lower="line\n"
+trim="line" trim_start="line\n" trim_end="line"
+ws=["line"] lines=["line"]
+char_indices=0:108 1:105 2:110 3:101 4:10 
+char_at0=Some(108) char_at2=Some(110) char_at-1=None char_at99=None
+  pat "": contains=true sw=true ew=true find=Some(0) rfind=Some(5) count=6
+    mi=0:"" 1:"" 2:"" 3:"" 4:"" 5:"" 
+    split=["", "l", "i", "n", "e", "\n", ""] splitn2=["", "line\n"] splitn0=[] splitn1=["line\n"]
+    once=Some("", "line\n") ronce=Some("line\n", "") sp=Some("line\n") ss=Some("line\n")
+    replace="<>l<>i<>n<>e<>\n<>"
+  pat ",": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["line\n"] splitn2=["line\n"] splitn0=[] splitn1=["line\n"]
+    once=None ronce=None sp=None ss=None
+    replace="line\n"
+    split_rev=["line\n"]
+  pat "a": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["line\n"] splitn2=["line\n"] splitn0=[] splitn1=["line\n"]
+    once=None ronce=None sp=None ss=None
+    replace="line\n"
+    split_rev=["line\n"]
+  pat "aa": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["line\n"] splitn2=["line\n"] splitn0=[] splitn1=["line\n"]
+    once=None ronce=None sp=None ss=None
+    replace="line\n"
+    split_rev=["line\n"]
+  pat "X": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["line\n"] splitn2=["line\n"] splitn0=[] splitn1=["line\n"]
+    once=None ronce=None sp=None ss=None
+    replace="line\n"
+    split_rev=["line\n"]
+  pat "ö": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["line\n"] splitn2=["line\n"] splitn0=[] splitn1=["line\n"]
+    once=None ronce=None sp=None ss=None
+    replace="line\n"
+    split_rev=["line\n"]
+  pat "本": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["line\n"] splitn2=["line\n"] splitn0=[] splitn1=["line\n"]
+    once=None ronce=None sp=None ss=None
+    replace="line\n"
+    split_rev=["line\n"]
+  pat "zz": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["line\n"] splitn2=["line\n"] splitn0=[] splitn1=["line\n"]
+    once=None ronce=None sp=None ss=None
+    replace="line\n"
+    split_rev=["line\n"]
+  pat "\n": contains=true sw=false ew=true find=Some(4) rfind=Some(4) count=1
+    mi=4:"\n" 
+    split=["line", ""] splitn2=["line", ""] splitn0=[] splitn1=["line\n"]
+    once=Some("line", "") ronce=Some("line", "") sp=None ss=Some("line")
+    replace="line<>"
+    split_rev=["", "line"]
+== "aXbXXc" len=6 empty=false chars=6
+rev="cXXbXa" upper="AXBXXC" lower="axbxxc"
+trim="aXbXXc" trim_start="aXbXXc" trim_end="aXbXXc"
+ws=["aXbXXc"] lines=["aXbXXc"]
+char_indices=0:97 1:88 2:98 3:88 4:88 5:99 
+char_at0=Some(97) char_at2=Some(98) char_at-1=None char_at99=None
+  pat "": contains=true sw=true ew=true find=Some(0) rfind=Some(6) count=7
+    mi=0:"" 1:"" 2:"" 3:"" 4:"" 5:"" 6:"" 
+    split=["", "a", "X", "b", "X", "X", "c", ""] splitn2=["", "aXbXXc"] splitn0=[] splitn1=["aXbXXc"]
+    once=Some("", "aXbXXc") ronce=Some("aXbXXc", "") sp=Some("aXbXXc") ss=Some("aXbXXc")
+    replace="<>a<>X<>b<>X<>X<>c<>"
+  pat ",": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["aXbXXc"] splitn2=["aXbXXc"] splitn0=[] splitn1=["aXbXXc"]
+    once=None ronce=None sp=None ss=None
+    replace="aXbXXc"
+    split_rev=["aXbXXc"]
+  pat "a": contains=true sw=true ew=false find=Some(0) rfind=Some(0) count=1
+    mi=0:"a" 
+    split=["", "XbXXc"] splitn2=["", "XbXXc"] splitn0=[] splitn1=["aXbXXc"]
+    once=Some("", "XbXXc") ronce=Some("", "XbXXc") sp=Some("XbXXc") ss=None
+    replace="<>XbXXc"
+    split_rev=["XbXXc", ""]
+  pat "aa": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["aXbXXc"] splitn2=["aXbXXc"] splitn0=[] splitn1=["aXbXXc"]
+    once=None ronce=None sp=None ss=None
+    replace="aXbXXc"
+    split_rev=["aXbXXc"]
+  pat "X": contains=true sw=false ew=false find=Some(1) rfind=Some(4) count=3
+    mi=1:"X" 3:"X" 4:"X" 
+    split=["a", "b", "", "c"] splitn2=["a", "bXXc"] splitn0=[] splitn1=["aXbXXc"]
+    once=Some("a", "bXXc") ronce=Some("aXbX", "c") sp=None ss=None
+    replace="a<>b<><>c"
+    split_rev=["c", "", "b", "a"]
+  pat "ö": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["aXbXXc"] splitn2=["aXbXXc"] splitn0=[] splitn1=["aXbXXc"]
+    once=None ronce=None sp=None ss=None
+    replace="aXbXXc"
+    split_rev=["aXbXXc"]
+  pat "本": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["aXbXXc"] splitn2=["aXbXXc"] splitn0=[] splitn1=["aXbXXc"]
+    once=None ronce=None sp=None ss=None
+    replace="aXbXXc"
+    split_rev=["aXbXXc"]
+  pat "zz": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["aXbXXc"] splitn2=["aXbXXc"] splitn0=[] splitn1=["aXbXXc"]
+    once=None ronce=None sp=None ss=None
+    replace="aXbXXc"
+    split_rev=["aXbXXc"]
+  pat "\n": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["aXbXXc"] splitn2=["aXbXXc"] splitn0=[] splitn1=["aXbXXc"]
+    once=None ronce=None sp=None ss=None
+    replace="aXbXXc"
+    split_rev=["aXbXXc"]
+== "ﬁß" len=5 empty=false chars=2
+rev="ßﬁ" upper="FISS" lower="ﬁß"
+trim="ﬁß" trim_start="ﬁß" trim_end="ﬁß"
+ws=["ﬁß"] lines=["ﬁß"]
+char_indices=0:64257 3:223 
+char_at0=Some(64257) char_at2=None char_at-1=None char_at99=None
+  pat "": contains=true sw=true ew=true find=Some(0) rfind=Some(5) count=3
+    mi=0:"" 3:"" 5:"" 
+    split=["", "ﬁ", "ß", ""] splitn2=["", "ﬁß"] splitn0=[] splitn1=["ﬁß"]
+    once=Some("", "ﬁß") ronce=Some("ﬁß", "") sp=Some("ﬁß") ss=Some("ﬁß")
+    replace="<>ﬁ<>ß<>"
+  pat ",": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["ﬁß"] splitn2=["ﬁß"] splitn0=[] splitn1=["ﬁß"]
+    once=None ronce=None sp=None ss=None
+    replace="ﬁß"
+    split_rev=["ﬁß"]
+  pat "a": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["ﬁß"] splitn2=["ﬁß"] splitn0=[] splitn1=["ﬁß"]
+    once=None ronce=None sp=None ss=None
+    replace="ﬁß"
+    split_rev=["ﬁß"]
+  pat "aa": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["ﬁß"] splitn2=["ﬁß"] splitn0=[] splitn1=["ﬁß"]
+    once=None ronce=None sp=None ss=None
+    replace="ﬁß"
+    split_rev=["ﬁß"]
+  pat "X": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["ﬁß"] splitn2=["ﬁß"] splitn0=[] splitn1=["ﬁß"]
+    once=None ronce=None sp=None ss=None
+    replace="ﬁß"
+    split_rev=["ﬁß"]
+  pat "ö": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["ﬁß"] splitn2=["ﬁß"] splitn0=[] splitn1=["ﬁß"]
+    once=None ronce=None sp=None ss=None
+    replace="ﬁß"
+    split_rev=["ﬁß"]
+  pat "本": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["ﬁß"] splitn2=["ﬁß"] splitn0=[] splitn1=["ﬁß"]
+    once=None ronce=None sp=None ss=None
+    replace="ﬁß"
+    split_rev=["ﬁß"]
+  pat "zz": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["ﬁß"] splitn2=["ﬁß"] splitn0=[] splitn1=["ﬁß"]
+    once=None ronce=None sp=None ss=None
+    replace="ﬁß"
+    split_rev=["ﬁß"]
+  pat "\n": contains=false sw=false ew=false find=None rfind=None count=0
+    mi=
+    split=["ﬁß"] splitn2=["ﬁß"] splitn0=[] splitn1=["ﬁß"]
+    once=None ronce=None sp=None ss=None
+    replace="ﬁß"
+    split_rev=["ﬁß"]

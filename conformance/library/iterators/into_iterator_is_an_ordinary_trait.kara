@@ -1,0 +1,24 @@
+struct Countdown { from: i64 }
+struct CountdownIter { n: i64 }
+impl Iterator for CountdownIter {
+    type Item = i64;
+    fn next(mut ref self) -> Option[i64] {
+        if self.n <= 0 { return None; }
+        self.n -= 1;
+        Some(self.n + 1)
+    }
+}
+impl IntoIterator for Countdown {
+    type Item = i64;
+    fn into_iter(own self) -> impl Iterator[Item = i64] { CountdownIter { n: self.from } }
+}
+fn total[I: IntoIterator[Item = i64]](items: own I) -> i64 {
+    let mut s = 0;
+    for x in items.into_iter() { s += x; }
+    s
+}
+fn main() {
+    println(total(Countdown { from: 4 }));
+    let v: Vec[i64] = Countdown { from: 3 }.into_iter().collect();
+    println(v);
+}

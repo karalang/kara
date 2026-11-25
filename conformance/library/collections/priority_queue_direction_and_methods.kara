@@ -1,0 +1,21 @@
+fn main() {
+    let mut pq: PriorityQueue[i64] = PriorityQueue.new();
+    pq.push(5);
+    pq.push(1);
+    pq.push(4);
+    println(pq.peek() ?? -1);
+    println(pq.len());
+    println(pq.pop() ?? -1);
+    println(pq.len());
+    let mut mx: PriorityQueue[i64] = PriorityQueue.max_first();
+    mx.push(5);
+    mx.push(9);
+    mx.push(1);
+    println(mx.pop() ?? -1);
+    println(PriorityQueue.from([9, 7, 8, 1, 3]).into_sorted_vec());
+    println(PriorityQueue.max_first_from([9, 7, 8, 1, 3]).into_sorted_vec());
+    println(pq.is_empty());
+    pq.clear();
+    println(pq.is_empty());
+    println(pq.pop().is_none());
+}

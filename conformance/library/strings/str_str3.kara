@@ -1,0 +1,15 @@
+// normalize: the four forms over composed, decomposed and compatibility text.
+fn h(s: Str) -> String {
+    let mut o = "".to_string();
+    for c in s.chars() { o.push_str(f"{c as u32} "); }
+    o
+}
+fn main() {
+    let texts = ["\u{e9}", "e\u{301}", "\u{fb01}", "\u{1e9b}\u{323}", "\u{212b}", "\u{ac00}", "\u{1100}\u{1161}", "a\u{323}\u{307}", "", "x\u{2075}"];
+    for t in texts {
+        println(f"{h(t)}| C {h(t.normalize(NormalizationForm.Nfc))}| D {h(t.normalize(NormalizationForm.Nfd))}| KC {h(t.normalize(NormalizationForm.Nfkc))}| KD {h(t.normalize(NormalizationForm.Nfkd))}");
+    }
+    let a = "\u{e9}";
+    let b = "e\u{301}";
+    println(f"eq raw={a == b} eq nfc={a.normalize(NormalizationForm.Nfc) == b.normalize(NormalizationForm.Nfc)}");
+}

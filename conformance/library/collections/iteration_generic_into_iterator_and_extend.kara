@@ -1,0 +1,17 @@
+fn total[C: IntoIterator[Item = i64]](c: own C) -> i64 { let mut t = 0; for x in c.into_iter() { t += x; } t }
+fn fill[C: Extend[i64]](c: mut ref C) { c.extend([1, 2, 3]); }
+fn main() {
+    println(total([1, 2].to_vec()));
+    println(total(SortedSet.from([4, 5])));
+    println(total(0..4));
+    println(total([1, 2].to_vec().into_iter().map(|x| x * 2)));
+    let mut v: Vec[i64] = Vec.new();
+    fill(mut v);
+    let mut s: Set[i64] = Set.new();
+    fill(mut s);
+    let mut d: VecDeque[i64] = VecDeque.new();
+    fill(mut d);
+    let mut ss: SortedSet[i64] = SortedSet.new();
+    fill(mut ss);
+    println(v.len() + s.len() + d.len() + ss.len());
+}

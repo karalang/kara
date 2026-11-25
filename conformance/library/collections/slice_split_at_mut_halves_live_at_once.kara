@@ -1,0 +1,10 @@
+fn main() {
+    let mut v: Vec[i64] = [1, 2, 3, 4].to_vec();
+    let (a, b) = v.split_at_mut(2);
+    a[0] = 10;
+    b[1] = 40;
+    a.swap(0, 1);
+    println(v);
+    let (c, d) = v.split_at_mut(4);
+    println(c.len() + d.len());
+}

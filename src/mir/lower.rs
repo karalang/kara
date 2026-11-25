@@ -13013,7 +13013,20 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let Some(d) = self.lcx.defs.lookup(0, helper) else {
                     return self.unsupported(span, "comparing this type");
                 };
-                let inst_args = self.tys().tcx().list(args).to_vec();
+                let mut inst_args = self.tys().tcx().list(args).to_vec();
+                // `map_eq` and `set_eq` are over any hasher: a table that
+                // names none takes the default one (B-2026-11-25-29).
+                let base = match kind {
+                    IntrinsicKind::Map => Some(2),
+                    IntrinsicKind::Set => Some(1),
+                    _ => None,
+                };
+                if base == Some(inst_args.len()) {
+                    let Some(h) = self.lcx.defs.lookup(0, "SipHash13BuildHasher") else {
+                        return self.unsupported(span, "comparing this type");
+                    };
+                    inst_args.push(self.tys().tcx().adt(h, &[]));
+                }
                 let lo = self.ref_to(l, t);
                 let ro = self.ref_to(r, t);
                 let name = self.lcx.instance(d, inst_args.clone());

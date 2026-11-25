@@ -1,0 +1,14 @@
+fn main() {
+    let x: i64 = 1;
+    let n: u32 = 65;
+    println(x.wrapping_shl(n));
+    println(x.wrapping_shl(n % 64));
+    println(x.overflowing_shl(64));
+    println(x.checked_shl(64).is_none());
+    println(2.checked_pow(62).is_some());
+    println(2.checked_pow(63).is_none());
+    println(5.checked_div(0).is_none());
+    println(5.checked_rem(0).is_none());
+    println(i8.MAX.saturating_add(1));
+    println(i8.MIN.saturating_neg());
+}

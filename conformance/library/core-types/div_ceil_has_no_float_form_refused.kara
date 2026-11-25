@@ -1,0 +1,3 @@
+fn main() {
+    println(7.5.div_ceil(2.0));
+}

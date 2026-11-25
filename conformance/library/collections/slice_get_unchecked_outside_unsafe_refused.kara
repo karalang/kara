@@ -1,0 +1,4 @@
+fn main() {
+    let xs: Vec[i64] = [10, 20, 30].to_vec();
+    println(*xs.get_unchecked(1));
+}

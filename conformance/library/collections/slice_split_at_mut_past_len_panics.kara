@@ -1,0 +1,6 @@
+fn main() {
+    let mut v: Vec[i64] = [1, 2].to_vec();
+    let m = v.len() + 1;
+    let (a, _b) = v.split_at_mut(m);
+    a[0] = 1;
+}

@@ -1,0 +1,6 @@
+fn main() {
+    let v: Vec[i64] = [1, 2, 3];
+    let it = v.into_iter();
+    for x in it { println(x); }
+    println(it.count());
+}

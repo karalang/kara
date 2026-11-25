@@ -1,0 +1,18 @@
+struct K { k: i64 }
+impl PartialEq for K { fn eq(ref self, other: ref K) -> bool { println("eq"); self.k == other.k } }
+impl Eq for K {}
+impl PartialOrd for K { fn partial_cmp(ref self, other: ref K) -> Option[Ordering] { Some(self.cmp(other)) } }
+impl Ord for K { fn cmp(ref self, other: ref K) -> Ordering { println("cmp"); self.k.cmp(other.k) } }
+impl Hash for K { fn hash[H: Hasher](self, hasher: mut ref H) { println("hash"); hasher.write_i64(self.k); } }
+
+fn sort_k(v: mut ref Vec[K]) { v.sort(); }
+fn sort_i(v: mut ref Vec[i64]) { v.sort(); }
+fn has_k(v: Vec[K], k: K) -> bool { v.contains(k) }
+fn len_k(m: Map[K, i64]) -> i64 { m.len() }
+fn get_v(m: Map[i64, K]) -> bool { m.contains_key(1) }
+fn len_s(s: SortedSet[K]) -> i64 { s.len() }
+fn main() {
+    let mut v: Vec[K] = [K { k: 2 }, K { k: 1 }];
+    sort_k(mut v);
+    println(v[0].k);
+}

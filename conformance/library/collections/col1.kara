@@ -1,0 +1,136 @@
+// Slice and Vec methods: values, edge cases.
+fn vs(v: Slice[i64]) -> String {
+    let mut o = "[".to_string();
+    let mut first = true;
+    for x in v.iter() { if not first { o.push_str(","); } first = false; o.push_str(f"{*x}"); }
+    o.push_str("]");
+    o
+}
+fn vss(v: Vec[Slice[i64]]) -> String {
+    let mut o = "[".to_string();
+    let mut first = true;
+    for s in v.iter() { if not first { o.push_str(","); } first = false; o.push_str(vs(*s)); }
+    o.push_str("]");
+    o
+}
+fn orf(x: Option[ref i64]) -> String { match x { Some(n) => f"Some({*n})", None => "None".to_string() } }
+fn oi(x: Option[i64]) -> String { match x { Some(n) => f"Some({n})", None => "None".to_string() } }
+
+fn main() {
+    let v: Vec[i64] = [3, 1, 4, 1, 5, 9, 2, 6].to_vec();
+    let e: Vec[i64] = Vec.new();
+    println(f"len={v.len()} empty={v.is_empty()} e.empty={e.is_empty()}");
+    println(f"get0={orf(v.get(0))} get7={orf(v.get(7))} get8={orf(v.get(8))} get-1={orf(v.get(-1))}");
+    println(f"first={orf(v.first())} last={orf(v.last())} e.first={orf(e.first())} e.last={orf(e.last())}");
+    println(f"contains4={v.contains(4)} contains7={v.contains(7)}");
+    let p: Vec[i64] = [3, 1].to_vec();
+    let q: Vec[i64] = [2, 6].to_vec();
+    println(f"starts={v.starts_with(p.as_slice())} starts_e={v.starts_with(e.as_slice())} ends={v.ends_with(q.as_slice())} ends_p={v.ends_with(p.as_slice())} e.starts_e={e.starts_with(e.as_slice())} e.starts_p={e.starts_with(p.as_slice())}");
+    let s: Vec[i64] = [1, 2, 2, 2, 5, 8, 13].to_vec();
+    println(f"bs5={oi(s.binary_search(5))} bs7={oi(s.binary_search(7))} bs0={oi(s.binary_search(0))} bs99={oi(s.binary_search(99))} e.bs={oi(e.binary_search(1))}");
+    let bs2 = match s.binary_search(2) { Some(i) => s[i] == 2 and i >= 1 and i <= 3, None => false };
+    println(f"bs2 valid={bs2}");
+    println(f"pp<5={s.partition_point(|x| x < 5)} pp<0={s.partition_point(|x| x < 0)} pp<99={s.partition_point(|x| x < 99)} e.pp={e.partition_point(|x| x < 1)}");
+    println(f"sorted={s.is_sorted()} v.sorted={v.is_sorted()} e.sorted={e.is_sorted()}");
+    let (a, b) = v.split_at(3);
+    let (a0, b0) = v.split_at(0);
+    let (a8, b8) = v.split_at(8);
+    println(f"split_at3={vs(a)}|{vs(b)} split_at0={vs(a0)}|{vs(b0)} split_at8={vs(a8)}|{vs(b8)}");
+    println(f"windows3={vss(v.windows(3))}");
+    println(f"windows9={vss(v.windows(9))} e.windows1={vss(e.windows(1))}");
+    println(f"chunks3={vss(v.chunks(3))} chunks8={vss(v.chunks(8))} chunks99={vss(v.chunks(99))} e.chunks2={vss(e.chunks(2))}");
+    let z: Vec[i64] = [1, 0, 2, 3, 0].to_vec();
+    let z2: Vec[i64] = [0, 0].to_vec();
+    println(f"split={vss(z.split(|x| x == 0))} split00={vss(z2.split(|x| x == 0))} e.split={vss(e.split(|x| x == 0))} split_none={vss(v.split(|x| x == 100))}");
+    let cb: Vec[i64] = [1, 1, 2, 3, 3].to_vec();
+    println(f"chunk_by={vss(cb.chunk_by(|a, b| a == b))} e.chunk_by={vss(e.chunk_by(|a, b| a == b))} chunk_by_lt={vss(v.chunk_by(|a, b| a < b))}");
+    let tv = v.as_slice().to_vec();
+    println(f"to_vec={vs(tv.as_slice())}");
+    let arr4: Option[Array[i64, 4]] = v[0..4].try_into_array();
+    let arr3: Option[Array[i64, 3]] = v[0..4].try_into_array();
+    println(f"try_into_array4={match arr4 { Some(a) => vs(a.as_slice()), None => "None".to_string() }} try3={match arr3 { Some(a) => vs(a.as_slice()), None => "None".to_string() }}");
+    println(f"join={v.join(", ")} e.join=<{e.join(", ")}> one={p.join("--")}");
+    let vv: Vec[Vec[i64]] = [[1, 2].to_vec(), Vec.new(), [3].to_vec()].to_vec();
+    println(f"concat={vs(vv.concat().as_slice())}");
+    let ws = ["ab".to_string(), "".to_string(), "c".to_string()].to_vec();
+    println(f"concat strings={ws.concat()}");
+    println(f"index={v[2]} range={vs(v[2..5])} range_empty={vs(v[3..3])} range_full={vs(v[0..8])}");
+    // in place
+    let mut m = v.clone();
+    m.sort(); println(f"sort={vs(m.as_slice())}");
+    m.sort_by(|a, b| b.cmp(a)); println(f"sort_by desc={vs(m.as_slice())}");
+    let mut pairs: Vec[(i64, i64)] = [(2, 0), (1, 1), (2, 2), (1, 3), (0, 4)].to_vec();
+    pairs.sort_by_key(|p| p.0);
+    let mut ps = "".to_string();
+    for (k, i) in pairs.iter() { ps.push_str(f"{k}/{i} "); }
+    println(f"sort_by_key stable={ps}");
+    m.reverse(); println(f"reverse={vs(m.as_slice())}");
+    m.fill(7); println(f"fill={vs(m.as_slice())}");
+    let mut r: Vec[i64] = [0, 1, 2, 3, 4, 5].to_vec();
+    r.swap(0, 5); r.swap(2, 2); println(f"swap={vs(r.as_slice())}");
+    r.rotate_left(2); println(f"rotate_left2={vs(r.as_slice())}");
+    r.rotate_right(2); println(f"rotate_right2={vs(r.as_slice())}");
+    r.rotate_left(0); r.rotate_left(6); println(f"rotate_left0,6={vs(r.as_slice())}");
+    r[1..4].rotate_left(1); println(f"slice rotate_left1={vs(r.as_slice())}");
+    r[1..4].rotate_right(1); println(f"slice rotate_right1={vs(r.as_slice())}");
+    let src: Vec[i64] = [9, 8].to_vec();
+    r[2..4].clone_from_slice(src.as_slice()); println(f"clone_from_slice={vs(r.as_slice())}");
+    r[0..2] = src.as_slice(); println(f"range assign={vs(r.as_slice())}");
+    r[5] = 55; println(f"index assign={vs(r.as_slice())}");
+    {
+        let (lo, hi) = r.split_at_mut(3);
+        lo[0] = 100; hi[0] = 300;
+    }
+    println(f"split_at_mut={vs(r.as_slice())}");
+    // Vec
+    let wc: Vec[i64] = Vec.with_capacity(-5);
+    let fl = Vec.filled(3, 4);
+    let fln: Vec[i64] = Vec.filled(-1, 4);
+    let ff = Vec.from_fn(4, |i| i * i);
+    let ffn: Vec[i64] = Vec.from_fn(-2, |i| i);
+    println(f"with_capacity(-5)={vs(wc.as_slice())} filled={vs(fl.as_slice())} filled-1={vs(fln.as_slice())} from_fn={vs(ff.as_slice())} from_fn-2={vs(ffn.as_slice())}");
+    let mut w: Vec[i64] = Vec.new();
+    w.push(1); w.push(2); w.push(3);
+    println(f"pop={oi(w.pop())} after={vs(w.as_slice())} e.pop={oi(Vec.new().pop())}");
+    w.insert(0, 10); w.insert(3, 30); w.insert(1, 15);
+    println(f"insert={vs(w.as_slice())}");
+    let rm = w.remove(1);
+    println(f"remove1={rm} after={vs(w.as_slice())}");
+    println(f"remove_first>5={oi(w.remove_first(|x| x > 5))} after={vs(w.as_slice())} none={oi(w.remove_first(|x| x > 500))}");
+    let mut d: Vec[i64] = [1, 1, 2, 2, 2, 1, 3, 3].to_vec();
+    d.dedup(); println(f"dedup={vs(d.as_slice())}");
+    d.retain(|x| x != 2); println(f"retain={vs(d.as_slice())}");
+    let mut t: Vec[i64] = [1, 2, 3, 4, 5].to_vec();
+    t.truncate(9); println(f"truncate9={vs(t.as_slice())}");
+    t.truncate(3); println(f"truncate3={vs(t.as_slice())}");
+    t.truncate(-1); println(f"truncate-1={vs(t.as_slice())}");
+    let mut dr: Vec[i64] = [0, 1, 2, 3, 4, 5].to_vec();
+    let got: Vec[i64] = dr.drain(1..3).collect();
+    println(f"drain={vs(got.as_slice())} left={vs(dr.as_slice())}");
+    let _unread = dr.drain(0..2);
+    println(f"drain unread left={vs(dr.as_slice())}");
+    let got2: Vec[i64] = dr.drain(2..2).collect();
+    println(f"drain empty={vs(got2.as_slice())} left={vs(dr.as_slice())}");
+    let mut so: Vec[i64] = [1, 2, 3, 4].to_vec();
+    let tail = so.split_off(1);
+    let tail2 = so.split_off(1);
+    println(f"split_off={vs(so.as_slice())}|{vs(tail.as_slice())}|{vs(tail2.as_slice())}");
+    let mut c: Vec[i64] = [1, 2].to_vec();
+    c.clear(); println(f"clear={vs(c.as_slice())}");
+    let mut rs: Vec[i64] = [1, 2].to_vec();
+    rs.resize(4, 9); println(f"resize4={vs(rs.as_slice())}");
+    rs.resize(1, 9); println(f"resize1={vs(rs.as_slice())}");
+    rs.resize(-3, 9); println(f"resize-3={vs(rs.as_slice())}");
+    let mut ex: Vec[i64] = [1].to_vec();
+    ex.extend([2, 3].to_vec());
+    ex.extend(5..7);
+    ex.extend_from_slice(p.as_slice());
+    println(f"extend={vs(ex.as_slice())} p={vs(p.as_slice())}");
+    let mut cap: Vec[i64] = Vec.new();
+    cap.reserve(10);
+    let c1 = cap.capacity() >= 10;
+    cap.reserve(-4); cap.reserve_exact(3);
+    println(f"capacity>=10={c1} cap>=len+3={cap.capacity() >= 3} len={cap.len()}");
+    let a: Array[i64, 4] = [4, 3, 2, 1];
+    println(f"array len={a.len()} sorted={a.is_sorted()} first={orf(a.as_slice().first())} contains3={a.contains(3)} slice={vs(a.as_slice())}");
+}

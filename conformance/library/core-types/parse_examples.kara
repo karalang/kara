@@ -1,0 +1,32 @@
+fn kind[T](r: Result[T, ParseError]) -> Str {
+    match r {
+        Ok(_) => "ok",
+        Err(ParseError.Empty) => "Empty",
+        Err(ParseError.InvalidDigit) => "InvalidDigit",
+        Err(ParseError.Overflow) => "Overflow",
+        Err(ParseError.Underflow) => "Underflow",
+        Err(_) => "other",
+    }
+}
+fn guess(line: Str) {
+    match i64.parse(line.trim()) {
+        Ok(n) => println(f"You guessed {n}"),
+        Err(e) => println(f"not a number: {e}"),
+    }
+}
+fn main() {
+    guess(" 42\n");
+    guess("x");
+    println(i64.parse(" 5\n").ok() ?? 0);
+    println(i64.parse("+5") ?? 0);
+    println(kind(i64.parse("-")));
+    println(kind(i64.parse("1-2")));
+    println(kind(u8.parse("-3")));
+    println(kind(u8.parse("256")));
+    println(kind(i64.parse("")));
+    println(u8.parse("-0"));
+    println(i64.parse("-0"));
+    println(f64.parse("NaN").is_ok());
+    println(f64.parse("-inf") ?? 0.0);
+    println(f64.parse("+Infinity") ?? 0.0);
+}

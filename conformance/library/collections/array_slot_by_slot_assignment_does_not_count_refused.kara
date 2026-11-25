@@ -1,0 +1,6 @@
+fn main() {
+    let mut arr: Array[i64, 2];
+    arr[0] = 1;
+    arr[1] = 2;
+    println(arr[0]);
+}

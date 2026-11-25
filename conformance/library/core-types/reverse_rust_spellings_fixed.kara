@@ -1,0 +1,5 @@
+use std::cmp::Reverse;
+fn main() {
+    let r: Reverse<i64> = Reverse(3);
+    println(r.0);
+}

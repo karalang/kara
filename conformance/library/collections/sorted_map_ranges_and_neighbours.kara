@@ -1,0 +1,22 @@
+fn k(e: Option[(ref i64, ref i64)]) -> i64 { match e { Some((k, _)) => *k, None => -1 } }
+fn main() {
+    let m: SortedMap[i64, i64] = SortedMap.from([(10, 1), (20, 2), (30, 3)]);
+    let r: Vec[i64] = m.range(10, 30).map(|(k, _)| *k).collect();
+    println(r);
+    println(m.range(20, 20).count());
+    println(m.range(30, 10).count());
+    let ri: Vec[i64] = m.range_inclusive(10, 30).map(|(k, _)| *k).collect();
+    println(ri);
+    println(m.range_inclusive(20, 20).count());
+    println(m.range_inclusive(30, 10).count());
+    println(k(m.floor(25)));
+    println(k(m.floor(20)));
+    println(k(m.floor(5)));
+    println(k(m.ceiling(25)));
+    println(k(m.ceiling(35)));
+    println(k(m.lower(20)));
+    println(k(m.higher(20)));
+    println(k(m.higher(30)));
+    println(k(m.first()));
+    println(k(m.last()));
+}

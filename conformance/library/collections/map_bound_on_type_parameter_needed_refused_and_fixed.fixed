@@ -1,0 +1,2 @@
+struct Matcher[T: Hash + Eq] { b2j: Map[T, Vec[i64]] }
+fn main() {}

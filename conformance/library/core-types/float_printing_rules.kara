@@ -1,0 +1,12 @@
+fn main() {
+    println(1.0);
+    println(0.1);
+    println([1.0, 2.5]);
+    println(1e16);
+    println(0.00001);
+    println(0.0001);
+    println(-75455689800034.625);
+    let z = 0.0;
+    println(f"{z / z} {1.0 / z} {-1.0 / z}");
+    println(f"{1e16.to_string()} {2.5}");
+}

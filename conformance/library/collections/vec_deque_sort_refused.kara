@@ -1,0 +1,4 @@
+fn main() {
+    let mut d: VecDeque[i64] = VecDeque.new();
+    d.sort();
+}

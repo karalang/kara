@@ -1,0 +1,7 @@
+fn main() {
+    let v: Vec[i64] = [1, 2, 3, 4, 5];
+    println(v.chunks(2).len());
+    println(v.windows(3).len());
+    let w: Vec[i64] = (1..5).collect();
+    println(w.chunks(3).len());
+}

@@ -1,0 +1,17 @@
+fn main() {
+    let mut v: Vec[i64] = [1, 2, 3, 4, 5].to_vec();
+    v.rotate_left(2);
+    println(v);
+    v.rotate_right(2);
+    println(v);
+    v.rotate_left(0);
+    v.rotate_left(5);
+    println(v);
+    v[1..4].rotate_left(1);
+    println(v);
+    v[1..4].rotate_right(1);
+    println(v);
+    let mut a: Array[i64, 3] = [1, 2, 3];
+    a.rotate_right(1);
+    println(a);
+}

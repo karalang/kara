@@ -1,0 +1,7 @@
+fn first(v: ref Vec[i64]) -> i64 {
+    v.first().cloned().unwrap()
+}
+fn main() {
+    let v: Vec[i64] = Vec.new();
+    println(first(v));
+}

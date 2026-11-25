@@ -1,0 +1,4 @@
+fn takes(s: Str) -> i64 { s.len() }
+fn main() {
+    println(takes(c"abc"));
+}

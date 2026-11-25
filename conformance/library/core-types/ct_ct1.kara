@@ -1,0 +1,143 @@
+// Option, Result, Ordering, Reverse: every method in core-types.md.
+import std.cmp.Reverse;
+
+fn os(o: Option[i64]) -> String {
+    match o { Some(x) => f"Some({x})", None => "None".to_string() }
+}
+fn rs(r: Result[i64, String]) -> String {
+    match r { Ok(x) => f"Ok({x})", Err(e) => f"Err({e})" }
+}
+fn ords(o: Ordering) -> String {
+    match o { Ordering.Less => "Less".to_string(), Ordering.Equal => "Equal".to_string(), Ordering.Greater => "Greater".to_string() }
+}
+struct Player { name: String, score: i64 }
+fn main() {
+    let s: Option[i64] = Some(4);
+    let n: Option[i64] = None;
+    println(f"is: {s.is_some()} {s.is_none()} {n.is_some()} {n.is_none()}");
+    println(f"is_some_and: {s.is_some_and(|x| x > 3)} {s.is_some_and(|x| x > 4)} {n.is_some_and(|x| true)}");
+    println(f"is_none_or: {s.is_none_or(|x| x > 3)} {s.is_none_or(|x| x > 4)} {n.is_none_or(|x| false)}");
+    println(f"unwrap: {s.unwrap()} expect: {s.expect("no")}");
+    println(f"unwrap_or: {s.unwrap_or(9)} {n.unwrap_or(9)}");
+    let mut calls = 0;
+    let a = s.unwrap_or_else(|| { calls += 1; 7 });
+    let b = n.unwrap_or_else(|| { calls += 1; 7 });
+    println(f"unwrap_or_else: {a} {b} calls={calls}");
+    println(f"unwrap_or_default: {s.unwrap_or_default()} {n.unwrap_or_default()}");
+    let so: Option[String] = None;
+    println(f"unwrap_or_default String: [{so.unwrap_or_default()}]");
+    println(f"map: {os(s.map(|x| x * 10))} {os(n.map(|x| x * 10))}");
+    println(f"map_or: {s.map_or(0, |x| x + 1)} {n.map_or(0, |x| x + 1)}");
+    println(f"map_or_else: {s.map_or_else(|| -1, |x| x + 1)} {n.map_or_else(|| -1, |x| x + 1)}");
+    println(f"and_then: {os(s.and_then(|x| if x > 3 { Some(x * 2) } else { None }))} {os(s.and_then(|x| if x > 5 { Some(x) } else { None }))} {os(n.and_then(|x| Some(x)))}");
+    println(f"and: {os(s.and(Some(8)))} {os(s.and(n))} {os(n.and(Some(8)))}");
+    println(f"or: {os(s.or(Some(8)))} {os(n.or(Some(8)))} {os(n.or(None))}");
+    println(f"or_else: {os(s.or_else(|| Some(8)))} {os(n.or_else(|| Some(8)))}");
+    println(f"filter: {os(s.filter(|x| x % 2 == 0))} {os(s.filter(|x| x % 2 == 1))} {os(n.filter(|x| true))}");
+    let r1: Result[i64, String] = s.ok_or("none".to_string());
+    let r2: Result[i64, String] = n.ok_or("none".to_string());
+    println(f"ok_or: {rs(r1)} {rs(r2)}");
+    let r3: Result[i64, String] = n.ok_or_else(|| "lazy".to_string());
+    println(f"ok_or_else: {rs(r3)}");
+    let z = s.zip(Some("a"));
+    let ns: Option[Str] = None;
+    let z2 = s.zip(ns);
+    match z { Some((a, b)) => println(f"zip: {a} {b} {z2.is_none()}"), None => println("zip: none") }
+    let mut t: Option[i64] = Some(3);
+    let took = t.take();
+    println(f"take: {os(took)} {os(t)}");
+    let mut u: Option[i64] = Some(3);
+    let old = u.replace(5);
+    let mut u2: Option[i64] = None;
+    let old2 = u2.replace(6);
+    println(f"replace: {os(old)} {os(u)} {os(old2)} {os(u2)}");
+    let mut g: Option[i64] = None;
+    *g.get_or_insert(1) += 10;
+    *g.get_or_insert(2) += 100;
+    println(f"get_or_insert: {os(g)}");
+    let mut h: Option[i64] = None;
+    let mut hc = 0;
+    *h.get_or_insert_with(|| { hc += 1; 1 }) += 1;
+    *h.get_or_insert_with(|| { hc += 1; 1 }) += 1;
+    println(f"get_or_insert_with: {os(h)} calls={hc}");
+    let w: Option[String] = Some("hi".to_string());
+    let wr: Option[ref String] = w.as_ref();
+    println(f"as_ref: {wr.unwrap()} still {w.is_some()}");
+    let mut m: Option[i64] = Some(1);
+    if let Some(x) = m.as_mut() { *x += 1; }
+    println(f"as_mut: {os(m)}");
+    let hs: Option[String] = Some("tok".to_string());
+    println(f"as_deref: {hs.as_deref() == Some("tok")} {hs.as_deref() == Some("x")}");
+    let hv: Option[Vec[i64]] = Some([1, 2].to_vec());
+    println(f"as_deref vec: {hv.as_deref().unwrap().len()}");
+    let mp: Map[i64, String] = [(1, "one".to_string())].to_vec().into_iter().collect();
+    println(f"cloned: {mp.get(1).cloned() ?? "d".to_string()} {mp.get(2).cloned() ?? "d".to_string()}");
+    let nn: Option[Option[i64]] = Some(Some(3));
+    let nn2: Option[Option[i64]] = Some(None);
+    println(f"flatten: {os(nn.flatten())} {os(nn2.flatten())}");
+    println(f"iter: {s.iter().count()} {n.iter().count()}");
+    let v: Vec[i64] = s.into_iter().collect();
+    let v2: Vec[i64] = n.into_iter().collect();
+    println(f"into_iter: {v.len()} {v2.len()}");
+    let mut ov: Vec[Option[i64]] = [Some(3), None, Some(1), None].to_vec();
+    ov.sort();
+    let mut o = "".to_string();
+    for x in ov.iter() { o.push_str(os(*x)); o.push_str(" "); }
+    println(f"sort: {o}");
+    println(f"cmp: {n < Some(-100)} {Some(1) < Some(2)} {Some(2) > n}");
+    // Result
+    let ok: Result[i64, String] = Ok(2);
+    let er: Result[i64, String] = Err("bad".to_string());
+    println(f"r is: {ok.is_ok()} {ok.is_err()} {er.is_ok()} {er.is_err()}");
+    println(f"r ok/err: {os(ok.clone().ok())} {os(er.clone().ok())} {ok.clone().err().is_none()} {er.clone().err().unwrap()}");
+    println(f"r map: {rs(ok.clone().map(|x| x + 1))} {rs(er.clone().map(|x| x + 1))}");
+    let me: Result[i64, i64] = er.clone().map_err(|e| e.len());
+    println(f"r map_err: {me.unwrap_err()}");
+    println(f"r map_or: {ok.clone().map_or(0, |x| x * 3)} {er.clone().map_or(0, |x| x * 3)}");
+    println(f"r map_or_else: {ok.clone().map_or_else(|e| e.len(), |x| x * 3)} {er.clone().map_or_else(|e| e.len(), |x| x * 3)}");
+    println(f"r and_then: {rs(ok.clone().and_then(|x| if x > 1 { Ok(x * 5) } else { Err("small".to_string()) }))} {rs(er.clone().and_then(|x| Ok(x)))}");
+    let oe: Result[i64, i64] = er.clone().or_else(|e| Err(e.len() * 2));
+    let oe2: Result[i64, i64] = er.clone().or_else(|e| Ok(e.len()));
+    println(f"r or_else: {oe.unwrap_err()} {oe2.unwrap()}");
+    println(f"r unwrap: {ok.clone().unwrap()} {ok.clone().expect("x")} {er.clone().unwrap_err()} {er.clone().expect_err("y")}");
+    println(f"r unwrap_or: {ok.clone().unwrap_or(0)} {er.clone().unwrap_or(0)} {er.clone().unwrap_or_else(|e| e.len() * 10)} {er.clone().unwrap_or_default()}");
+    let mut rv: Vec[Result[i64, i64]] = [Err(1), Ok(5), Err(0), Ok(2)].to_vec();
+    rv.sort();
+    let mut ro = "".to_string();
+    for x in rv.iter() { match x { Ok(v) => ro.push_str(f"Ok({v}) "), Err(e) => ro.push_str(f"Err({e}) ") } }
+    println(f"r sort: {ro}");
+    // Ordering
+    let l = 1.cmp(2);
+    let e = 2.cmp(2);
+    let gr = 3.cmp(2);
+    println(f"ord: {ords(l)} {ords(e)} {ords(gr)} rev {ords(l.reverse())} {ords(e.reverse())} {ords(gr.reverse())}");
+    println(f"preds: {l.is_lt()} {l.is_le()} {l.is_gt()} {l.is_ge()} {l.is_eq()} {e.is_le()} {e.is_ge()} {e.is_eq()} {gr.is_gt()}");
+    println(f"then: {ords(e.then(l))} {ords(gr.then(l))} {ords(l.then(gr))}");
+    let t1 = e.then_with(|| Ordering.Greater);
+    let t2 = l.then_with(|| panic("then_with called on Less"));
+    println(f"then_with: {ords(t1)} {ords(t2)}");
+    let mut ps: Vec[Player] = [
+        Player { name: "cleo", score: 7 },
+        Player { name: "ana", score: 9 },
+        Player { name: "bo", score: 7 },
+    ];
+    ps.sort_by(|a, b| a.score.cmp(b.score).reverse().then(a.name.cmp(b.name)));
+    let mut po = "".to_string();
+    for p in ps.iter() { po.push_str(f"{p.name} {p.score}, "); }
+    println(f"players: {po}");
+    // Reverse
+    let mut rk: Vec[(i64, String)] = [(1, "b"), (3, "a"), (1, "a")].to_vec();
+    rk.sort_by_key(|p| (Reverse { value: p.0 }, p.1.clone()));
+    let mut rko = "".to_string();
+    for p in rk.iter() { rko.push_str(f"{p.0}{p.1} "); }
+    println(f"reverse key: {rko}");
+    let r5 = Reverse { value: 5 };
+    let r6 = Reverse { value: 6 };
+    println(f"reverse ord: {r5 > r6} {r5 == Reverse { value: 5 }} {r5.value} {r5}");
+    let mut pq: PriorityQueue[(Reverse[i64], String)] = PriorityQueue.new();
+    pq.push((Reverse { value: 3 }, "c".to_string()));
+    pq.push((Reverse { value: 1 }, "a".to_string()));
+    pq.push((Reverse { value: 2 }, "b".to_string()));
+    let (Reverse { value: sc }, nm) = pq.pop().unwrap();
+    println(f"pq min: {sc} {nm}");
+}

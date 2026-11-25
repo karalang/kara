@@ -1,0 +1,4 @@
+fn main() {
+    let mut q: PriorityQueue[i64] = PriorityQueue.new();
+    q.decrease_key(1, 0);
+}

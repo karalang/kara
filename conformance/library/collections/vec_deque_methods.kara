@@ -1,0 +1,34 @@
+fn main() {
+    let mut d: VecDeque[i64] = VecDeque.with_capacity(-2);
+    d.push_back(2);
+    d.push_back(3);
+    d.push_front(1);
+    println(d);
+    println(d.front() ?? -1);
+    println(d.back() ?? -1);
+    println(d.get(0) ?? -1);
+    println(d.get(3) ?? -1);
+    println(d.pop_front() ?? -1);
+    println(d.pop_back() ?? -1);
+    println(d.len());
+    println(d.is_empty());
+    println(d.contains(2));
+    d.insert(0, 0);
+    d.insert(2, 9);
+    println(d);
+    println(d.remove(1));
+    d.swap(0, 1);
+    println(d);
+    d.extend([4, 5, 6]);
+    d.retain(|x| x != 5);
+    println(d);
+    d.truncate(2);
+    println(d);
+    d.truncate(-1);
+    println(d.len());
+    d.push_back(1);
+    d.clear();
+    println(d.len());
+    let w: VecDeque[i64] = VecDeque.try_with_capacity(4).unwrap();
+    println(w.len());
+}

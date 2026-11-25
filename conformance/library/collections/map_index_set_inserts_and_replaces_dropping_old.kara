@@ -1,0 +1,10 @@
+struct D { n: i64 }
+impl Drop for D { fn drop(mut ref self) { println(f"drop {self.n}"); } }
+fn main() {
+    let mut m: Map[i64, D] = Map.new();
+    m[1] = D { n: 1 };
+    println("inserted");
+    m[1] = D { n: 2 };
+    println("replaced");
+    println(m[1].n);
+}

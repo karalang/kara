@@ -1,0 +1,7 @@
+fn main() {
+    let line = "a,b,c,d";
+    let mut it = line.split(",");
+    println(it.next() ?? "none");
+    let firsts: Vec[Str] = line.split(",").take(2).collect();
+    println(firsts.len());
+}

@@ -1,0 +1,3 @@
+total has writes(Stdout)
+copies has writes(Stderr)
+copies lacks writes(Stdout)

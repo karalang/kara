@@ -1,0 +1,14 @@
+fn total(s: Slice[i64]) -> i64 { let mut t = 0; for x in s { t += x; } t }
+fn main() {
+    let a: Array[i64, 4] = [4, 3, 2, 1];
+    println(a.len());
+    println(a.first() ?? -1);
+    println(a.last() ?? -1);
+    println(a.contains(3));
+    println(a.is_sorted());
+    println(a[2]);
+    println(total(a));
+    println(total(a.as_slice()));
+    let w: Array[String, 2] = ["x".to_string(), "y".to_string()];
+    println(w.join("-"));
+}

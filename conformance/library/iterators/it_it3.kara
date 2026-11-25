@@ -1,0 +1,101 @@
+// User iterators get the provided methods; Array/Slice/VecDeque views; doc examples.
+#[derive(Clone)]
+struct Countdown { n: i64 }
+impl Iterator for Countdown {
+    type Item = i64;
+    fn next(mut ref self) -> Option[i64] {
+        if self.n <= 0 { return None; }
+        self.n -= 1;
+        Some(self.n + 1)
+    }
+}
+struct Both { lo: i64, hi: i64 }
+impl Iterator for Both {
+    type Item = i64;
+    fn next(mut ref self) -> Option[i64] {
+        if self.lo >= self.hi { return None; }
+        self.lo += 1;
+        Some(self.lo - 1)
+    }
+}
+impl DoubleEndedIterator for Both {
+    fn next_back(mut ref self) -> Option[i64] {
+        if self.lo >= self.hi { return None; }
+        self.hi -= 1;
+        Some(self.hi)
+    }
+}
+fn vs(v: Vec[i64]) -> String {
+    let mut o = "[".to_string();
+    let mut first = true;
+    for x in v { if not first { o.push_str(","); } first = false; o.push_str(f"{x}"); }
+    o.push_str("]");
+    o
+}
+fn main() {
+    let a: Vec[i64] = Countdown { n: 4 }.map(|x| x * x).collect();
+    println(f"user map={vs(a)}");
+    let c: Vec[i64] = Countdown { n: 2 }.cycle().take(5).collect();
+    println(f"user cycle={vs(c)}");
+    let c0: Vec[i64] = Countdown { n: 0 }.cycle().take(5).collect();
+    println(f"user empty cycle={vs(c0)}");
+    let mut pk = Countdown { n: 3 }.peekable();
+    let p = match pk.peek() { Some(x) => *x, None => -1 };
+    println(f"user peek={p} sum={pk.sum()}");
+    let r: Vec[i64] = Both { lo: 0, hi: 5 }.rev().collect();
+    let r2: Vec[i64] = Both { lo: 0, hi: 5 }.map(|x| x + 100).rev().collect();
+    println(f"user rev={vs(r)} map.rev={vs(r2)}");
+    let mut b = Both { lo: 0, hi: 5 };
+    let mut fb = "".to_string();
+    for x in b.by_ref() { fb.push_str(f"{x}"); if x == 1 { break; } }
+    let rest: Vec[i64] = b.rev().collect();
+    println(f"user by_ref={fb} rest.rev={vs(rest)}");
+    // Array / Slice / VecDeque
+    let arr = [5, 6, 7, 8];
+    let ar: Vec[i64] = arr.iter().cloned().rev().collect();
+    let mut ai = arr.iter();
+    let _ = ai.next();
+    println(f"array rev={vs(ar)} array len after next={ai.len()} array rposition={match arr.iter().rposition(|x| *x > 5) { Some(i) => i, None => -1 }}");
+    let vv: Vec[i64] = [1, 2, 3, 4, 5].to_vec();
+    let sl = vv.as_slice();
+    let sr: Vec[i64] = sl.iter().cloned().skip(1).rev().collect();
+    println(f"slice skip.rev={vs(sr)} slice len={sl.iter().len()}");
+    let mut dq: VecDeque[i64] = VecDeque.new();
+    dq.push_back(2); dq.push_front(1); dq.push_back(3);
+    let dr: Vec[i64] = dq.iter().cloned().rev().collect();
+    let dc: Vec[i64] = dq.iter().cloned().cycle().take(5).collect();
+    println(f"deque rev={vs(dr)} deque cycle={vs(dc)}");
+    // chars / char_indices cycle (Clone)
+    let cc: String = "ab".chars().cycle().take(5).collect();
+    println(f"chars cycle={cc}");
+    // doc example: by_ref over split_whitespace
+    let line = "-a -b -- x y";
+    let mut words = line.split_whitespace();
+    let mut flags: Vec[Str] = Vec.new();
+    for w in words.by_ref() {
+        if w == "--" { break; }
+        flags.push(w);
+    }
+    let rest2: Vec[Str] = words.collect();
+    println(f"doc by_ref flags={flags.len()} rest={rest2.len()} {rest2[0]}{rest2[1]}");
+    // Option iterates as zero or one item
+    let o: Option[i64] = Some(4);
+    let n: Option[i64] = None;
+    let oc: Vec[i64] = o.iter().cloned().chain(n.iter().cloned()).collect();
+    let oi2: Vec[i64] = o.into_iter().collect();
+    println(f"option iter={vs(oc)} into_iter={vs(oi2)}");
+    // successors example from doc
+    let dg: Vec[i64] = successors(Some(9071), |x| if *x >= 10 { Some(*x / 10) } else { None }).collect();
+    println(f"successors doc={vs(dg)}");
+    // cloned of Copy over a cycle: v.iter().cloned().cycle()
+    let cyc: Vec[i64] = vv.iter().cloned().cycle().skip(3).take(4).collect();
+    println(f"cloned.cycle={vs(cyc)}");
+    let en: Vec[(i64, i64)] = vv.iter().cloned().enumerate().cycle().take(7).collect();
+    println(f"enumerate.cycle last={en[6].0}/{en[6].1}");
+    let zc: Vec[(i64, i64)] = vv.iter().cloned().zip(arr.iter().cloned()).cycle().take(6).collect();
+    println(f"zip.cycle last={zc[5].0}/{zc[5].1}");
+    let sbc: Vec[i64] = (0..5).step_by(2).cycle().take(5).collect();
+    let rvc: Vec[i64] = (0..3).rev().cycle().take(5).collect();
+    let chc: Vec[i64] = (0..2).chain(7..8).cycle().take(5).collect();
+    println(f"step_by.cycle={vs(sbc)} rev.cycle={vs(rvc)} chain.cycle={vs(chc)}");
+}

@@ -1,0 +1,5 @@
+fn main() {
+    let b = 1;
+    println("start");
+    println(8.ilog(b));
+}

@@ -1,0 +1,13 @@
+fn main() {
+    println(1000.ilog10());
+    println(999.ilog10());
+    println(1.ilog2());
+    println(1024.ilog2());
+    println(80.ilog(3));
+    let b: u8 = 200;
+    let r: i64 = b.ilog(3u8);
+    println(r);
+    println(0.checked_ilog2().is_none());
+    println(5.checked_ilog(1).is_none());
+    println(8.checked_ilog10() ?? -1);
+}

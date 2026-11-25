@@ -1,0 +1,6 @@
+fn main() {
+    let mut d: VecDeque[i64] = VecDeque.new();
+    d.push_back(1);
+    let i = d.len();
+    println(d.remove(i));
+}

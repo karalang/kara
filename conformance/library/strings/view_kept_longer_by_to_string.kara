@@ -1,0 +1,8 @@
+fn main() {
+    let kept: String;
+    {
+        let s = "  abc  ".to_string();
+        kept = s.trim().to_string();
+    }
+    println(f"[{kept}]");
+}

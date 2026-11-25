@@ -1,0 +1,9 @@
+fn main() {
+    let mut i = 0;
+    while i < 10000 {
+        let c = f"row {i}".to_cstring().unwrap();
+        if c.len() == 0 { println("empty"); }
+        i += 1;
+    }
+    println("done");
+}

@@ -1,0 +1,5 @@
+fn main() {
+    let v: Vec[i64] = [1, 2, 3].to_vec();
+    println("start");
+    let x: Vec[i64] = (9223372036854775805..=9223372036854775807).step_by(2).collect(); println(f"{x.len()} {x[0]} {x[1]}");
+}

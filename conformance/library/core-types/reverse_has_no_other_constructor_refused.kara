@@ -1,0 +1,5 @@
+import std.cmp.Reverse;
+fn main() {
+    let r = Reverse.new(3);
+    println(r.value);
+}

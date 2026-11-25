@@ -1,0 +1,10 @@
+fn main() {
+    println(f"{2.7.floor()} {2.2.ceil()} {2.5.round()} {-2.7.trunc()} {2.25.fract()}");
+    println(f"{(-3.0).abs()} {(-3.0).signum()} {3.0.copysign(-1.0)} {1.0.min(2.0)} {1.0.max(2.0)} {5.0.clamp(0.0, 1.0)} {4.0.recip()}");
+    println(f"{2.0.pow(10.0)} {2.0.powi(3)} {9.0.sqrt()} {27.0.cbrt()} {3.0.hypot(4.0)}");
+    println(f"{0.0.exp()} {3.0.exp2()} {0.0.exp_m1()} {1.0.ln()} {0.0.ln_1p()} {8.0.log2()} {100.0.log10()}");
+    println(f"{0.0.sin()} {0.0.cos()} {0.0.tan()} {0.0.asin()} {1.0.acos()} {0.0.atan()} {0.0.atan2(1.0)}");
+    println(f"{0.0.sinh()} {0.0.cosh()} {0.0.tanh()} {0.0.asinh()} {1.0.acosh()} {0.0.atanh()} {180.0.to_radians().to_degrees()}");
+    let f: f32 = 1.5;
+    println(f"{f.sqrt()} {f.floor()} {f.to_bits()} {f.to_bits32()}");
+}

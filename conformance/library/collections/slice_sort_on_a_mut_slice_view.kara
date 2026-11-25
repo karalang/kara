@@ -1,0 +1,7 @@
+fn main() {
+    let mut v: Vec[i64] = [9, 3, 2, 1, 0].to_vec();
+    v[1..4].sort();
+    println(v);
+    v[0..2].reverse();
+    println(v);
+}

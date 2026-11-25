@@ -1,0 +1,9 @@
+fn main() {
+    let mut s = "ab".to_string();
+    s.reserve(100);
+    s.reserve(0);
+    s.reserve(-5);
+    println(s);
+    let w = String.with_capacity(-3);
+    println(w.len());
+}

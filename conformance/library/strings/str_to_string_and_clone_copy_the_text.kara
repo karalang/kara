@@ -1,0 +1,9 @@
+fn main() {
+    let s = "hello world".to_string();
+    let v: Str = s[0..5];
+    let a: String = v.to_string();
+    let b: String = v.clone();
+    println(f"{a} {b} {a == b}");
+    let c = s.clone();
+    println(c);
+}

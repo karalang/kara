@@ -1,0 +1,11 @@
+fn main() {
+    let backends: Vec[Str] = ["a", "b", "c"];
+    let picks: Vec[Str] = backends.iter().cycle().take(7).map(|s| *s).collect();
+    println(picks);
+    let none: Vec[i64] = Vec.new();
+    println(none.iter().cycle().count());
+    let mut n = 0;
+    for c in "xy".chars().cycle() { n += 1; if n == 5 { println(c); break; } }
+    let z: Vec[(i64, char)] = (0..10).zip("ab".chars().cycle()).collect();
+    println(z.len());
+}

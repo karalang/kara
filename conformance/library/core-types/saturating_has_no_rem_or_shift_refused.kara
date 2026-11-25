@@ -1,0 +1,4 @@
+fn main() {
+    let x: i64 = 7;
+    println(x.saturating_rem(2));
+}

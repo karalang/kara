@@ -1,0 +1,1 @@
+no method 'cycle' on type 'IterMap': `cycle` starts each round from a copy of the iterator, and this one holds a closure (`map`, `filter`, ..), which is not `Clone`. Cycle the source and adapt after it (`v.iter().cycle().map(..)`), or collect the items into a `Vec` and cycle over its `iter()` (library/iterators.md § `cycle`)

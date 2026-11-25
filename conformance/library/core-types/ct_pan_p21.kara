@@ -1,0 +1,7 @@
+fn main() {
+    let z: i64 = 0;
+    let n: Option[i64] = None;
+    let e: Result[i64, String] = Err("boom".to_string());
+    let o: Result[i64, String] = Ok(3);
+    println(f"{(-128i8 + (z as i8)).wrapping_div(-1)} {(-128i8 + (z as i8)).saturating_div(-1)}");
+}

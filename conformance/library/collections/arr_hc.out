@@ -1,0 +1,16 @@
+collect:
+  finish 5970237262087
+  finish 5997749876198
+insert:
+  finish 6107800332642
+get:
+  finish 5997749876198
+  finish 6107800332642
+10 50 len=3
+new+insert:
+  finish 5997749876198
+set collect:
+  finish 5970237262087
+  finish 5997749876198
+  finish 5997749876198
+true

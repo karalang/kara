@@ -1,0 +1,12 @@
+fn main() {
+    let x: u8 = 0b1011;
+    let k: i64 = 3;
+    println(x.count_ones() == k);
+    let mut total: i64 = 0;
+    total += x.count_ones();
+    total += x.leading_zeros();
+    println(total);
+    println(i32.BITS);
+    println(i32.BITS - 1);
+    println(u128.BITS);
+}

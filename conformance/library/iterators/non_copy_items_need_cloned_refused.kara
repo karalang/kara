@@ -1,0 +1,5 @@
+fn main() {
+    let names: Vec[String] = ["a".to_string()];
+    let copy: Vec[String] = names.iter().collect();
+    println(copy);
+}

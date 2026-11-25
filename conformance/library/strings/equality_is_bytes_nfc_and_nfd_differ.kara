@@ -1,0 +1,10 @@
+fn main() {
+    let a = "\u{e9}";
+    let b = "e\u{301}";
+    println(a == b);
+    println(a.len());
+    println(b.len());
+    let same = a.normalize(NormalizationForm.Nfc) == b.normalize(NormalizationForm.Nfc);
+    println(same);
+    println(a.normalize(NormalizationForm.Nfd) == b.to_string());
+}

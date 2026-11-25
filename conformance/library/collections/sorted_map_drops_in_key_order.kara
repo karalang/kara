@@ -1,0 +1,9 @@
+struct D { n: i64 }
+impl Drop for D { fn drop(mut ref self) { println(f"drop {self.n}"); } }
+fn main() {
+    let mut m: SortedMap[i64, D] = SortedMap.new();
+    m.insert(3, D { n: 3 });
+    m.insert(1, D { n: 1 });
+    m.insert(2, D { n: 2 });
+    println("end");
+}

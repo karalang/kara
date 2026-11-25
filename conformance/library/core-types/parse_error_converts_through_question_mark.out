@@ -1,0 +1,4 @@
+42
+true
+bad: invalid digit found in string
+cannot parse a number from an empty string

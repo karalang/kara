@@ -1,0 +1,15 @@
+fn main() {
+    let v: Vec[i64] = [1, 2, 3];
+    let mut order: Vec[i64] = Vec.new();
+    let r: Vec[i64] = v.iter().map(|x| { order.push(*x); *x * 10 }).rev().collect();
+    println(r);
+    println(order);
+    let s: Vec[i64] = v.iter().skip(1).rev().map(|x| *x).collect();
+    println(s);
+    let t: Vec[i64] = (0..7).step_by(2).rev().collect();
+    println(t);
+    let words: Vec[Str] = "a b  c".split_whitespace().rev().collect();
+    println(words);
+    let e: Vec[(i64, i64)] = v.iter().enumerate().rev().map(|(i, x)| (i, *x)).collect();
+    println(e);
+}

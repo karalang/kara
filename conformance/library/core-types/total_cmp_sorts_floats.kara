@@ -1,0 +1,10 @@
+fn main() {
+    let mut w: Vec[f64] = [2.5, -1.0, 0.25];
+    w.sort_by(f64.total_cmp);
+    println(w);
+    let z = 0.0;
+    let mut n: Vec[f64] = [z / z, 1.0, -(z / z), -1.0 / z];
+    n.sort_by(|a, b| a.total_cmp(b));
+    println(n);
+    println((z / z).total_cmp(-(z / z)) == Ordering.Equal);
+}

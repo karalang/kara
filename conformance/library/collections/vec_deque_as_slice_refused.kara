@@ -1,0 +1,4 @@
+fn main() {
+    let d: VecDeque[i64] = VecDeque.new();
+    println(d.as_slice().len());
+}

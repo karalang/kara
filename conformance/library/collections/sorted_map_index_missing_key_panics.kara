@@ -1,0 +1,4 @@
+fn main() {
+    let m: SortedMap[i64, i64] = SortedMap.from([(1, 2)]);
+    println(m[3]);
+}

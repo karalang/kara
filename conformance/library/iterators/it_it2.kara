@@ -1,0 +1,130 @@
+// Terminal methods, collect into Option/Result, DoubleEnded/ExactSize, rposition.
+fn vs(v: Vec[i64]) -> String {
+    let mut o = "[".to_string();
+    let mut first = true;
+    for x in v { if not first { o.push_str(","); } first = false; o.push_str(f"{x}"); }
+    o.push_str("]");
+    o
+}
+fn oi(x: Option[i64]) -> String { match x { Some(n) => f"Some({n})", None => "None".to_string() } }
+fn op(x: Option[(i64, i64)]) -> String { match x { Some((a, b)) => f"Some({a}/{b})", None => "None".to_string() } }
+
+fn main() {
+    let v: Vec[i64] = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3].to_vec();
+    let e: Vec[i64] = Vec.new();
+    println(f"fold={v.iter().fold(0, |a, x| a * 2 + *x)} fold empty={e.iter().fold(7, |a, x| a + *x)}");
+    println(f"reduce={oi(v.iter().cloned().reduce(|a, b| a - b))} reduce empty={oi(e.iter().cloned().reduce(|a, b| a + b))}");
+    println(f"count={v.iter().count()} sum={v.iter().sum()} product={v.iter().product()} sum empty={e.iter().sum()} product empty={e.iter().product()}");
+    println(f"min={oi(v.iter().cloned().min())} max={oi(v.iter().cloned().max())} min empty={oi(e.iter().cloned().min())}");
+    println(f"maxref={v.iter().max() ?? 0}");
+    // ties: pairs (key, id); compare by key only
+    let ps: Vec[(i64, i64)] = [(2, 0), (1, 1), (3, 2), (1, 3), (3, 4), (2, 5)].to_vec();
+    println(f"min_by={op(ps.iter().cloned().min_by(|a, b| a.0.cmp(b.0)))} max_by={op(ps.iter().cloned().max_by(|a, b| a.0.cmp(b.0)))}");
+    println(f"min_by_key={op(ps.iter().cloned().min_by_key(|p| p.0))} max_by_key={op(ps.iter().cloned().max_by_key(|p| p.0))}");
+    println(f"min_by_key empty={op(e.iter().map(|x| (*x, *x)).min_by_key(|p| p.0))}");
+    let mut pulled = 0;
+    let an = v.iter().inspect(|_| { pulled += 1; }).any(|x| *x == 4);
+    println(f"any={an} pulled={pulled}");
+    pulled = 0;
+    let al = v.iter().inspect(|_| { pulled += 1; }).all(|x| *x < 5);
+    println(f"all={al} pulled={pulled} any empty={e.iter().any(|x| *x > 0)} all empty={e.iter().all(|x| *x > 0)}");
+    pulled = 0;
+    let fd = v.iter().cloned().inspect(|_| { pulled += 1; }).find(|x| *x > 4);
+    println(f"find={oi(fd)} pulled={pulled} find none={oi(v.iter().cloned().find(|x| *x > 40))}");
+    println(f"find_map={oi(v.iter().find_map(|x| if *x > 4 { Some(*x * 10) } else { None }))}");
+    pulled = 0;
+    let tf: Option[i64] = v.iter().cloned().inspect(|_| { pulled += 1; }).try_fold(0, |acc, x| if x == 9 { None } else { Some(acc + x) });
+    println(f"try_fold none={oi(tf)} pulled={pulled}");
+    let tf2: Option[i64] = v.iter().cloned().try_fold(0, |acc, x| acc.checked_add(x));
+    let big: Vec[i64] = [9223372036854775800, 5, 5].to_vec();
+    let tf3: Option[i64] = big.iter().cloned().try_fold(0, |acc, x| acc.checked_add(x));
+    println(f"try_fold sum={oi(tf2)} overflow={oi(tf3)}");
+    let tr: Result[i64, String] = v.iter().cloned().try_fold(0, |acc, x| if x > 8 { Err(f"big {x}") } else { Ok(acc + x) });
+    match tr { Ok(n) => println(f"try_fold result ok {n}"), Err(m) => println(f"try_fold result err {m}") }
+    println(f"position={oi(v.iter().position(|x| *x == 1))} position none={oi(v.iter().position(|x| *x == 100))}");
+    println(f"last={oi(v.iter().cloned().last())} last empty={oi(e.iter().cloned().last())}");
+    println(f"nth0={oi(v.iter().cloned().nth(0))} nth9={oi(v.iter().cloned().nth(9))} nth10={oi(v.iter().cloned().nth(10))} nth-1={oi(v.iter().cloned().nth(-1))}");
+    let mut fe = "".to_string();
+    v.iter().take(3).for_each(|x| fe.push_str(f"{x};"));
+    println(f"for_each={fe}");
+    let (ev, od) = v.iter().cloned().partition(|x| *x % 2 == 0);
+    println(f"partition={vs(ev)} {vs(od)}");
+    // collect targets
+    let st: String = "héllo".chars().rev().collect();
+    println(f"collect String={st}");
+    let ss: SortedSet[i64] = v.iter().cloned().collect();
+    let sv: Vec[i64] = ss.iter().cloned().collect();
+    println(f"collect SortedSet={vs(sv)}");
+    let sm: SortedMap[i64, i64] = v.iter().map(|x| (*x, *x * *x)).collect();
+    let mut smo = "".to_string();
+    for (k, x) in sm.iter() { smo.push_str(f"{k}:{x} "); }
+    println(f"collect SortedMap={smo}");
+    let st2: Set[i64] = v.iter().cloned().collect();
+    println(f"collect Set len={st2.len()}");
+    // Option / Result collect, early stop
+    pulled = 0;
+    let digits: Option[Vec[u32]] = "12x45".chars().inspect(|_| { pulled += 1; }).map(|c| c.to_digit(10)).collect();
+    println(f"collect Option none={digits.is_none()} pulled={pulled}");
+    let dg: Option[Vec[u32]] = "1245".chars().map(|c| c.to_digit(10)).collect();
+    match dg { Some(d) => println(f"collect Option some len={d.len()} last={d[3]}"), None => println("collect Option some=None") }
+    let words = ["1", "22", "x3", "4", "y"].to_vec();
+    pulled = 0;
+    let nums: Result[Vec[i64], ParseError] = words.iter().inspect(|_| { pulled += 1; }).map(|w| i64.parse(w)).collect();
+    println(f"collect Result err={nums.is_err()} pulled={pulled}");
+    let ok = ["1", "-22"].to_vec();
+    let nums2: Result[Vec[i64], ParseError] = ok.iter().map(|w| i64.parse(w)).collect();
+    match nums2 { Ok(n) => println(f"collect Result ok={vs(n)}"), Err(_) => println("collect Result ok=Err") }
+    let opts: Option[Vec[i64]] = v.iter().map(|x| Some(*x)).collect();
+    println(f"collect Some(*x)={opts.is_some()}");
+    // DoubleEnded
+    let w: Vec[i64] = [10, 20, 30, 40, 50].to_vec();
+    let a1: Vec[i64] = w.iter().map(|x| *x + 1).rev().collect();
+    let a2: Vec[i64] = w.iter().cloned().filter(|x| *x != 30).rev().collect();
+    let a3: Vec[i64] = w.iter().cloned().skip(1).rev().collect();
+    let a4: Vec[i64] = w.iter().cloned().take(3).rev().collect();
+    let a5: Vec[i64] = w.iter().cloned().rev().rev().collect();
+    let a6: Vec[i64] = w.iter().cloned().skip(9).rev().collect();
+    let a7: Vec[i64] = w.iter().cloned().take(99).rev().collect();
+    println(f"map.rev={vs(a1)} filter.rev={vs(a2)} skip1.rev={vs(a3)} take3.rev={vs(a4)} rev.rev={vs(a5)} skip9.rev={vs(a6)} take99.rev={vs(a7)}");
+    let mut er = "".to_string();
+    for (i, x) in w.iter().enumerate().rev() { er.push_str(f"{i}:{x} "); }
+    println(f"enumerate.rev={er}");
+    let mut zr = "".to_string();
+    let short: Vec[i64] = [1, 2, 3].to_vec();
+    for (a, b) in w.iter().zip(short.iter()).rev() { zr.push_str(f"{a}-{b} "); }
+    println(f"zip.rev={zr}");
+    let mut sr = "".to_string();
+    for p in "aaaXbbXXc".split("X").rev() { sr.push_str(f"<{p}>"); }
+    let mut sr2 = "".to_string();
+    for p in "aaaaa".split("aa").rev() { sr2.push_str(f"<{p}>"); }
+    let mut sr3 = "".to_string();
+    for p in "  a b  c ".split_whitespace().rev() { sr3.push_str(f"<{p}>"); }
+    println(f"split.rev={sr} split aa rev={sr2} ws.rev={sr3}");
+    let cr: String = "héllo本".chars().rev().collect();
+    let mut cir = "".to_string();
+    for (i, c) in "héllo".char_indices().rev() { cir.push_str(f"{i}:{c} "); }
+    println(f"chars.rev={cr} char_indices.rev={cir}");
+    let rr: Vec[i64] = (0..5).rev().collect();
+    let rri: Vec[i64] = (0..=5).rev().collect();
+    let rne: Vec[i64] = (5..0).rev().collect();
+    println(f"range.rev={vs(rr)} incl.rev={vs(rri)} empty.rev={vs(rne)}");
+    // mixed front/back on one iterator
+    let mut it = w.iter().cloned();
+    let f1 = oi(it.next());
+    let b1 = oi(it.next_back());
+    let f2 = oi(it.next());
+    let mid: Vec[i64] = it.collect();
+    println(f"front/back={f1},{b1},{f2} mid={vs(mid)}");
+    // ExactSize
+    let mut xi = w.iter();
+    let l0 = xi.len();
+    let _ = xi.next();
+    println(f"len={l0} after next={xi.len()} map.len={w.iter().map(|x| *x).len()} skip2.len={w.iter().skip(2).len()} take9.len={w.iter().take(9).len()} zip.len={w.iter().zip(short.iter()).len()} empty={e.iter().is_empty()} into_iter.len={w.clone().into_iter().len()} enumerate.rev.len={w.iter().enumerate().rev().len()}");
+    // rposition
+    println(f"rposition={oi(v.iter().rposition(|x| *x == 5))} rposition none={oi(v.iter().rposition(|x| *x == 50))}");
+    let mut rp = v.iter();
+    let _ = rp.next(); let _ = rp.next();
+    println(f"rposition after 2 nexts={oi(rp.rposition(|x| *x == 1))}");
+    let falls = [1, 3, 2, 5, 4, 6].to_vec();
+    println(f"windows rposition={oi(falls.windows(2).iter().rposition(|wd| wd[0] > wd[1]))}");
+}

@@ -1,0 +1,5 @@
+fn main() {
+    let v: Vec[i64] = [1, 2, 3].to_vec();
+    println("start");
+    let b: Vec[i64] = [4611686018427387904, 2].to_vec(); println(f"{b.iter().product()}");
+}

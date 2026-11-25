@@ -1,0 +1,18 @@
+import std.hash.{Hasher, BuildHasher};
+struct Rec { n: u64 }
+impl Hasher for Rec {
+    fn write(mut ref self, bytes: ref Slice[u8]) {
+        for b in bytes.iter() { self.n = self.n.wrapping_mul(31).wrapping_add(*b as u64); }
+    }
+    fn finish(ref self) -> u64 { self.n }
+}
+struct RecBuild {}
+impl BuildHasher for RecBuild {
+    type Hasher = Rec;
+    fn build(ref self) -> Rec { Rec { n: 7 } }
+}
+fn main() {
+    let m: Map[i64, i64, RecBuild] = (0..2).map(|i| (i, i * 10)).collect();
+    let c: Map[i64, i64] = (0..3).map(|i| (i, i)).collect();
+    println(f"m {m.get(1) ?? -1} c {c.get(2) ?? -1}");
+}

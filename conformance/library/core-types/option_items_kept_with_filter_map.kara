@@ -1,0 +1,6 @@
+fn main() {
+    let v: Vec[Option[i64]] = [Some(1), None, Some(3)];
+    let w: Vec[i64] = v.clone().into_iter().filter_map(|o| o).collect();
+    let x: Vec[i64] = v.into_iter().flat_map(|o| o.into_iter()).collect();
+    println(f"{w} {x}");
+}

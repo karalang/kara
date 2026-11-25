@@ -1,0 +1,35 @@
+insert a=None again=Some(1)
+extend={a:2 b:5 c:4 } len=3 empty=false
+get b=Some(5) get z=None get by view=Some(5) default=0
+get_mut={a:2 b:5 c:14 }
+remove c=Some(14) again=None contains a=true contains c=false
+values sum=7 values_mut={a:4 b:10 }
+retain={b:11 }
+entry={b:100 n:10 q:7 } or_insert_with calls on occupied=0
+index=2 index-set={b:101 n:10 q:7 w:2 }
+into_keys=4 first=b into_values=4 max=101
+clear={} empty=true
+from len=2 x=3
+set from={1 2 3 } insert4=true insert4 again=false remove1=true remove1 again=false contains2=true
+extend={2 3 4 7 8 } union={2 3 4 7 8 9 } inter={2 8 } diff={3 4 7 } odiff={9 }
+disjoint=false e.disjoint=true subset=false e.subset=true superset=true self.superset=true
+retain={2 4 8 } len=3
+clear={} empty=true
+set by view=true
+sm from={1:a 3:c 5:E } insert2=None insert2again=b
+extend={1:a 2:B 3:c 5:E 7:g 9:i } get3=c get4=true contains7=true
+keys=123579 values=aBcEgi
+range[2,7)=2B 3c 5E  incl=2B 3c 5E 7g  inverted=0 empty=0 incl55=1
+floor4=Some(3:c) floor5=Some(5:E) floor0=None ceil4=Some(5:E) ceil10=None
+lower5=Some(3:c) lower1=None higher5=Some(7:g) higher9=None
+first=Some(1:a) last=Some(9:i)
+pop_first=1a pop_last=9i after={2:B 3:c 5:E 7:g } remove3=c
+values_mut+retain+index={2:B!? 4:D 7:g!? } index2=B!? len=3
+into_keys=3:2 into_values=3:B!?
+clear={} empty=true e.first=None e.pop=true
+sset from={1 3 5 9 } insert4=true again=false remove9=true again=false contains3=true
+min=Some(1) max=Some(5)
+extend={0 1 3 4 5 10 } range[1,5)=134 incl=1345 inverted=0 incl_inv=0
+pop_first=Some(0) pop_last=Some(10) after={1 3 4 5 }
+retain={1 3 5 } union={1 3 5 6 } inter={3 5 } diff={1 } disjoint=false subset=false superset=true len=3
+e.min=None e.pop=None e.empty=true

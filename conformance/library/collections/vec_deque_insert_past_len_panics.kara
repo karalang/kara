@@ -1,0 +1,5 @@
+fn main() {
+    let mut d: VecDeque[i64] = VecDeque.new();
+    let i = d.len() + 1;
+    d.insert(i, 1);
+}

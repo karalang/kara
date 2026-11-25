@@ -1,0 +1,10 @@
+fn main() {
+    let a: Vec[i64] = [1, 2, 2, 3].to_vec();
+    let b: Vec[i64] = [2, 1].to_vec();
+    let e: Vec[i64] = Vec.new();
+    let one: Vec[i64] = [5].to_vec();
+    println(a.is_sorted());
+    println(b.is_sorted());
+    println(e.is_sorted());
+    println(one.is_sorted());
+}

@@ -1,0 +1,5 @@
+fn big() -> impl Iterator[Item = ref i64] {
+    let v: Vec[i64] = [1, 2, 3];
+    v.iter().filter(|x| *x > 1)
+}
+fn main() { println(big().count()); }

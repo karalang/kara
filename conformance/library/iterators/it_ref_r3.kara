@@ -1,0 +1,4 @@
+fn main() {
+    let v: Vec[i64] = [1, 2, 3].to_vec();
+    let o: Vec[Option[i64]] = [Some(1), None].to_vec(); let x: Vec[i64] = o.into_iter().flatten().collect(); println(f"{x.len()}");
+}

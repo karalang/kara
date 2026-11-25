@@ -1,0 +1,18 @@
+struct Loud { n: i64 }
+impl Iterator for Loud {
+    type Item = i64;
+    fn next(mut ref self) -> Option[i64] {
+        if self.n == 0 { return None; }
+        println(f"next {self.n}");
+        self.n -= 1;
+        Some(self.n)
+    }
+}
+fn drive() -> i64 { Loud { n: 2 }.map(|x| x + 1).sum() }
+fn quiet_chain() -> i64 { [1, 2, 3].to_vec().into_iter().map(|x| x * 2).sum() }
+fn loud_closure() -> i64 { [1, 2].to_vec().into_iter().map(|x| { eprintln(x); x }).sum() }
+fn main() {
+    println(drive());
+    println(quiet_chain());
+    println(loud_closure());
+}

@@ -1,0 +1,14 @@
+struct D { n: i64 }
+impl Drop for D { fn drop(mut ref self) { println(f"drop {self.n}"); } }
+fn main() {
+    let a = Some(D { n: 1 });
+    let b = a.and(Some(2));
+    println(b ?? 0);
+    let mut o = Some(10);
+    if let Some(x) = o.as_mut() { *x += 1; }
+    println(o ?? 0);
+    let mut g: Option[i64] = Some(3);
+    let r = g.get_or_insert(99);
+    *r += 1;
+    println(g ?? 0);
+}

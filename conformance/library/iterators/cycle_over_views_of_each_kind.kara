@@ -1,0 +1,14 @@
+fn main() {
+    let arr: Array[i64, 2] = [1, 2];
+    let a: i64 = arr.iter().cycle().take(5).map(|x| *x).sum();
+    let mut d: VecDeque[i64] = VecDeque.new();
+    d.push_back(3);
+    d.push_back(4);
+    let b: i64 = d.iter().cycle().take(3).map(|x| *x).sum();
+    let c = "ab".char_indices().cycle().take(3).count();
+    let e: i64 = (0..3).step_by(2).cycle().take(4).sum();
+    let v: Vec[i64] = [5, 6];
+    let f: i64 = v.iter().rev().cycle().take(3).map(|x| *x).sum();
+    let g: i64 = v.iter().cloned().cycle().take(3).sum();
+    println(f"{a} {b} {c} {e} {f} {g}");
+}

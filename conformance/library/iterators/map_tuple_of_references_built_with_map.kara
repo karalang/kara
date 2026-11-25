@@ -1,0 +1,7 @@
+fn main() {
+    let mut m: SortedMap[i64, i64] = SortedMap.new();
+    m.insert(1, 10);
+    m.insert(2, 20);
+    let pairs: Vec[(i64, i64)] = m.iter().map(|(k, v)| (*k, *v)).collect();
+    println(pairs);
+}

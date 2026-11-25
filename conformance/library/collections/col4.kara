@@ -1,0 +1,68 @@
+// Hashing: what the built-in types feed a user hasher, StableHash.siphash24, a user BuildHasher table.
+import std.hash.{Hasher, BuildHasher};
+
+struct Rec { bytes: Vec[u8] }
+impl Hasher for Rec {
+    fn write(mut ref self, bytes: Slice[u8]) { self.bytes.extend_from_slice(bytes); }
+    fn finish(self) -> u64 {
+        let mut h: u64 = 0;
+        for b in self.bytes.iter() { h = h.wrapping_mul(31).wrapping_add(*b as u64); }
+        h
+    }
+}
+struct RecBuild {}
+impl BuildHasher for RecBuild {
+    type Hasher = Rec;
+    fn build(self) -> Rec { Rec { bytes: Vec.new() } }
+}
+#[derive(Hash, PartialEq, Eq)]
+struct P { a: u8, b: bool }
+#[derive(Hash, PartialEq, Eq)]
+enum E { X, Y(u16), Z { c: char } }
+
+fn show[T: Hash](x: T) -> String {
+    let mut r = Rec { bytes: Vec.new() };
+    x.hash(mut r);
+    let mut o = "".to_string();
+    for b in r.bytes.iter() { o.push_str(f"{*b} "); }
+    o
+}
+fn main() {
+    println(f"i64 1: {show(1)}");
+    println(f"u8 7: {show(7u8)}");
+    println(f"i32 -1: {show(-1i32)}");
+    println(f"bool: {show(true)} {show(false)}");
+    println(f"char A: {show('A')}");
+    println(f"str ab: {show("ab")}");
+    println(f"String: {show("é".to_string())}");
+    println(f"tuple: {show(("ab", "c"))} vs {show(("a", "bc"))}");
+    let v: Vec[u8] = [1u8, 2u8].to_vec();
+    println(f"vec: {show(v)}");
+    let a: Array[u16, 2] = [1u16, 2u16];
+    println(f"array: {show(a)}");
+    println(f"struct: {show(P { a: 3u8, b: true })}");
+    println(f"enum: {show(E.X)} | {show(E.Y(5u16))} | {show(E.Z { c: 'b' })}");
+    let o: Option[u8] = Some(9u8);
+    let n: Option[u8] = None;
+    let ok: Result[u8, bool] = Ok(1u8);
+    let er: Result[u8, bool] = Err(true);
+    println(f"option: {show(o)} | {show(n)} result: {show(ok)} | {show(er)}");
+    println(f"F64 0.0: {show(F64.from(0.0))} -0.0: {show(F64.from(-0.0))}");
+    // StableHash
+    println(f"siphash24 empty k0: {StableHash.siphash24("".bytes(), 0, 0)}");
+    println(f"siphash24 abc k0: {StableHash.siphash24("abc".bytes(), 0, 0)}");
+    let key: Vec[u8] = (0..15).map(|i| i as u8).collect();
+    println(f"siphash24 0..15 keyed: {StableHash.siphash24(key.as_slice(), 0x0706050403020100, 0x0F0E0D0C0B0A0908)}");
+    // a table with a user hasher
+    let mut m: Map[String, i64, RecBuild] = Map.new();
+    m.insert("a".to_string(), 1);
+    m.insert("b".to_string(), 2);
+    m.insert("a".to_string(), 3);
+    println(f"user-hasher map len={m.len()} a={m["a"]} b={m.get("b") ?? 0} c={m.contains_key("c")}");
+    let mut s: Set[P, RecBuild] = Set.new();
+    let _ = s.insert(P { a: 1u8, b: true });
+    let _ = s.insert(P { a: 1u8, b: true });
+    println(f"user-hasher set len={s.len()}");
+    let fx: Map[i64, i64, FxBuildHasher] = Map.from([(1, 2), (3, 4)].to_vec());
+    println(f"fx map={fx[3]}");
+}

@@ -1,0 +1,13 @@
+struct Nat { n: i64 }
+impl Iterator for Nat {
+    type Item = i64;
+    fn next(mut ref self) -> Option[i64] { self.n += 1; Some(self.n) }
+}
+fn main() {
+    let v: Vec[i64] = Nat { n: 0 }.map(|x| x * x).filter(|x| x % 2 == 1).take(3).collect();
+    println(v);
+    println(Nat { n: 0 }.take(4).sum());
+    println(Nat { n: 0 }.position(|x| x == 5) ?? -1);
+    let (e, o) = Nat { n: 0 }.take(6).partition(|x| x % 2 == 0);
+    println(f"{e} {o}");
+}

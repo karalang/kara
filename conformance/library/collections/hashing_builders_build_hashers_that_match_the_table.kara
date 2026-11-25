@@ -1,0 +1,12 @@
+fn digest[B: BuildHasher](b: B, x: i64) -> u64 { let mut h = b.build(); h.write_i64(x); h.finish() }
+fn main() {
+    let a = digest(FxBuildHasher {}, 7);
+    let b = digest(FxBuildHasher {}, 7);
+    println(a == b);
+    let mut m: Map[i64, i64, FxBuildHasher] = Map.new();
+    m[7] = 1;
+    println(m[7]);
+    let mut s: Set[String, SipHash13BuildHasher] = Set.new();
+    s.insert("k".to_string());
+    println(s.contains("k"));
+}

@@ -1,0 +1,4 @@
+fn main() {
+    let arr: Array[i64, 2];
+    println(arr[0]);
+}

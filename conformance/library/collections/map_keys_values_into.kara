@@ -1,0 +1,19 @@
+fn main() {
+    let mut m: Map[i64, i64] = Map.from([(1, 10), (2, 20)]);
+    let mut ks: Vec[i64] = m.keys().cloned().collect();
+    ks.sort();
+    println(ks);
+    let mut t = 0;
+    for v in m.values() { t += *v; }
+    println(t);
+    for v in m.values_mut() { *v += 1; }
+    let mut vs: Vec[i64] = m.values().cloned().collect();
+    vs.sort();
+    println(vs);
+    let mut ik: Vec[i64] = m.clone().into_keys().collect();
+    ik.sort();
+    println(ik);
+    let mut iv: Vec[i64] = m.into_values().collect();
+    iv.sort();
+    println(iv);
+}

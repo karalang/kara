@@ -1,0 +1,14 @@
+struct Seeded { seed: u64 }
+struct H { t: u64 }
+impl Hasher for H {
+    fn write(mut ref self, bytes: Slice[u8]) { for b in bytes { self.t += b as u64; } }
+    fn finish(self) -> u64 { self.t }
+}
+impl BuildHasher for Seeded {
+    type Hasher = H;
+    fn build(self) -> H { H { t: self.seed } }
+}
+fn main() {
+    let m: Map[i64, i64, Seeded] = Map.new();
+    println(m.len());
+}

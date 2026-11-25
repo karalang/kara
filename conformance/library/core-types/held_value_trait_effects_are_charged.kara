@@ -1,0 +1,13 @@
+struct K { k: i64 }
+impl PartialEq for K { fn eq(ref self, other: ref K) -> bool { println("eq"); self.k == other.k } }
+impl Clone for K { fn clone(self) -> K { eprintln("clone"); K { k: self.k } } }
+fn same(a: ref Option[K], b: ref Option[K]) -> bool { a == b }
+fn copy_of(a: ref Option[K]) -> Option[K] { a.clone() }
+fn present(a: ref Option[K]) -> bool { a.is_some() }
+fn main() {
+    let a = Some(K { k: 1 });
+    let b = Some(K { k: 1 });
+    println(same(a, b));
+    println(copy_of(a).is_some());
+    println(present(a));
+}

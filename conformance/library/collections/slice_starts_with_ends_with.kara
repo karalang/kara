@@ -1,0 +1,11 @@
+fn main() {
+    let v: Vec[i64] = [1, 2, 3].to_vec();
+    let e: Vec[i64] = Vec.new();
+    println(v.starts_with([1, 2]));
+    println(v.starts_with([2]));
+    println(v.starts_with(e.as_slice()));
+    println(e.starts_with(e.as_slice()));
+    println(e.starts_with([1]));
+    println(v.ends_with([2, 3]));
+    println(v.ends_with([1, 2, 3, 4]));
+}

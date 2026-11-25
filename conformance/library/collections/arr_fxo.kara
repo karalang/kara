@@ -1,0 +1,10 @@
+fn main() {
+    let src: Vec[(i64, i64)] = (0..12).map(|i| (i * 7919, i)).collect();
+    let x: Map[i64, i64, FxBuildHasher] = Map.from(src);
+    let mut ks = "";
+    for (k, _) in x.iter() { ks = ks + f"{k} "; }
+    let y: Set[i64, FxBuildHasher] = (0..12).map(|i| i * 7919).collect();
+    let mut ys = "";
+    for k in y.iter() { ys = ys + f"{k} "; }
+    println(ks); println(ys);
+}

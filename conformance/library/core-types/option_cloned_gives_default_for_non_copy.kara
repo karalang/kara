@@ -1,0 +1,12 @@
+fn main() {
+    let mut m: Map[String, String] = Map.new();
+    m["k"] = "v".to_string();
+    let a = m.get("k").cloned() ?? "d".to_string();
+    let b = m.get("x").cloned() ?? "d".to_string();
+    println(f"{a} {b}");
+    let root: Option[String] = Some("r".to_string());
+    let v: Vec[String] = root.into_iter().collect();
+    println(v.len());
+    let none: Option[i64] = None;
+    println(none.iter().count());
+}

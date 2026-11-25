@@ -1,0 +1,11 @@
+const NAME: Str = "kara";
+fn greeting() -> Str { "hi" }
+struct Holder { s: Str }
+fn main() {
+    let h = Holder { s: "held" };
+    println(f"{NAME} {greeting()} {h.s}");
+    let mut v: Vec[Str] = Vec.new();
+    v.push(NAME);
+    v.push(greeting());
+    println(v.len());
+}

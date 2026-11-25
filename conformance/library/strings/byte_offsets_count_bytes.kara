@@ -1,0 +1,8 @@
+fn main() {
+    let s = "日本語";
+    println(s.len());
+    println(s.chars().count());
+    let i = s.find("本") ?? -1;
+    println(i);
+    println(s[i..s.len()]);
+}

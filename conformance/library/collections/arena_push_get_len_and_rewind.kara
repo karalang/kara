@@ -1,0 +1,10 @@
+fn main() {
+    let mut a: Arena[String] = Arena.new();
+    let r1 = a.push("one".to_string());
+    let cp = a.high_water_mark();
+    let _r2 = a.push("two".to_string());
+    println(a.len());
+    println(a.get(r1));
+    a.rewind_to(cp);
+    println(a.len());
+}

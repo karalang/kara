@@ -1,0 +1,9 @@
+fn main() {
+    let mut s = String.new();
+    s.push('a');
+    s.push('é');
+    s.push('本');
+    s.push('😀');
+    println(s);
+    println(s.len());
+}

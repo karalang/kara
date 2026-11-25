@@ -1,0 +1,17 @@
+fn main() {
+    let v: Vec[i64] = [3, 9, 4];
+    let s = v.iter().sum();
+    let t: i64 = s;
+    println(t);
+    let w: Vec[i64] = v.iter().collect();
+    println(w);
+    let p = v.iter().product();
+    println(p);
+    println(v.iter().reduce(|a, b| a + b) ?? 0);
+    let mx: Option[ref i64] = v.iter().max();
+    println(mx.is_some());
+    println(v.iter().max() ?? 0);
+    let names: Vec[String] = ["a".to_string(), "b".to_string()];
+    let copy: Vec[String] = names.iter().cloned().collect();
+    println(copy);
+}

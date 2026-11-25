@@ -1,0 +1,8 @@
+fn main() {
+    println("ab".repeat(3));
+    println(f"[{"ab".repeat(0)}]");
+    println(f"[{"ab".repeat(-2)}]");
+    println(f"[{"".repeat(5)}]");
+    let s = "xy".to_string();
+    println(s.repeat(2));
+}

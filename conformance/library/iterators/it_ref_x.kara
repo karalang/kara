@@ -1,0 +1,3 @@
+fn main() {
+    let m: Vec[i64] = Vec.new(); let x = m.into_iter().clone();
+}

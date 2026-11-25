@@ -1,0 +1,7 @@
+fn main() {
+    let mut v: Vec[i64] = [5, 3, 9, 1, 7, 2, 8].to_vec();
+    v.sort_by(|a, b| if (a + b) % 3 == 0 { Ordering.Less } else { Ordering.Greater });
+    let mut w = v.clone();
+    w.sort();
+    println(w);
+}

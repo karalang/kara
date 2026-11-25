@@ -1,0 +1,19 @@
+struct Player { name: String, score: i64 }
+fn expensive(s: Str) -> i64 { println(f"expensive {s}"); s.len() }
+fn main() {
+    let mut ps: Vec[Player] = [
+        Player { name: "cleo", score: 7 },
+        Player { name: "ana", score: 9 },
+        Player { name: "bo", score: 7 },
+    ];
+    ps.sort_by(|a, b| b.score.cmp(a.score).then(a.name.cmp(b.name)));
+    let names: Vec[String] = ps.iter().map(|p| p.name.clone()).collect();
+    println(names);
+    let o = 1.cmp(2);
+    println(f"{o.is_lt()} {o.is_le()} {o.is_gt()} {o.is_ge()} {o.is_eq()}");
+    println(o.reverse() == Ordering.Greater);
+    let a = "ab";
+    let b = "cde";
+    let r = a.len().cmp(b.len()).then_with(|| expensive(a).cmp(expensive(b)));
+    println(r == Ordering.Less);
+}

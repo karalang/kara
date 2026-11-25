@@ -1,0 +1,8 @@
+extend: 10 true
+retain: 10 false 1
+clone: 10
+set extend: true true
+union: true true 3 inter: true 1 diff: true 1 subset: true eq: true
+set retain: true false
+entry: 90
+index set: 50 50

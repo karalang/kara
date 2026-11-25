@@ -1,0 +1,5 @@
+fn main() {
+    let s = "héllo".to_string();
+    println("start");
+    let t: Str = s.as_str(); println(t[1..2]);
+}

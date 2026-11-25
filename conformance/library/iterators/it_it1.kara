@@ -1,0 +1,121 @@
+// Iterator sources and adaptors: values, order and laziness (traced pulls).
+fn vs(v: Vec[i64]) -> String {
+    let mut o = "[".to_string();
+    let mut first = true;
+    for x in v { if not first { o.push_str(","); } first = false; o.push_str(f"{x}"); }
+    o.push_str("]");
+    o
+}
+fn oi(x: Option[i64]) -> String { match x { Some(n) => f"Some({n})", None => "None".to_string() } }
+
+fn main() {
+    let v: Vec[i64] = [1, 2, 3, 4, 5, 6, 7].to_vec();
+    let e: Vec[i64] = Vec.new();
+    // sources
+    let r: Vec[i64] = repeat(9).take(3).collect();
+    println(f"repeat.take3={vs(r)}");
+    let r0: Vec[i64] = repeat(9).take(-2).collect();
+    println(f"repeat.take-2={vs(r0)}");
+    let o: Vec[i64] = once(5).chain(v.iter().cloned()).take(3).collect();
+    println(f"once.chain={vs(o)}");
+    let s: Vec[i64] = successors(Some(12345), |x| if *x >= 10 { Some(*x / 10) } else { None }).collect();
+    println(f"successors={vs(s)}");
+    let sn: Vec[i64] = successors(None, |x: ref i64| Some(*x + 1)).collect();
+    println(f"successors none={vs(sn)}");
+    // adaptors
+    let m: Vec[i64] = v.iter().map(|x| *x * 10).collect();
+    println(f"map={vs(m)}");
+    let f: Vec[i64] = v.iter().cloned().filter(|x| *x % 2 == 0).collect();
+    println(f"filter={vs(f)}");
+    let fm: Vec[i64] = v.iter().filter_map(|x| if *x % 3 == 0 { Some(*x * 100) } else { None }).collect();
+    println(f"filter_map={vs(fm)}");
+    let flm: Vec[i64] = v.iter().take(3).flat_map(|x| 0..*x).collect();
+    println(f"flat_map={vs(flm)}");
+    let nested: Vec[Vec[i64]] = [[1, 2].to_vec(), Vec.new(), [3].to_vec()].to_vec();
+    let fl: Vec[i64] = nested.into_iter().map(|w| w.into_iter()).flatten().collect();
+    println(f"flatten={vs(fl)}");
+    let mut en = "".to_string();
+    for (i, x) in v.iter().skip(4).enumerate() { en.push_str(f"{i}:{x} "); }
+    println(f"enumerate={en}");
+    let mut zp = "".to_string();
+    for (a, b) in v.iter().zip(10..13) { zp.push_str(f"{a}-{b} "); }
+    println(f"zip={zp}");
+    let ch: Vec[i64] = (0..2).chain(5..7).chain(e.iter().cloned()).collect();
+    println(f"chain={vs(ch)}");
+    let sk: Vec[i64] = v.iter().cloned().skip(5).collect();
+    let skn: Vec[i64] = v.iter().cloned().skip(-3).collect();
+    let sk99: Vec[i64] = v.iter().cloned().skip(99).collect();
+    println(f"skip5={vs(sk)} skip-3={vs(skn)} skip99={vs(sk99)}");
+    let tw: Vec[i64] = v.iter().cloned().take_while(|x| *x < 4).collect();
+    let sw: Vec[i64] = v.iter().cloned().skip_while(|x| *x < 4).collect();
+    let sw2: Vec[i64] = [5, 1, 6, 2].to_vec().into_iter().skip_while(|x| *x > 4).collect();
+    println(f"take_while={vs(tw)} skip_while={vs(sw)} skip_while2={vs(sw2)}");
+    let sb: Vec[i64] = v.iter().cloned().step_by(3).collect();
+    let sb1: Vec[i64] = (0..7).step_by(2).rev().collect();
+    let sb2: Vec[i64] = (0..8).step_by(3).rev().collect();
+    let sb3: Vec[i64] = v.iter().cloned().step_by(100).collect();
+    println(f"step_by3={vs(sb)} (0..7).step_by2.rev={vs(sb1)} (0..8).step_by3.rev={vs(sb2)} step_by100={vs(sb3)}");
+    let cy: Vec[i64] = v.iter().cloned().take(3).cycle().take(8).collect();
+    let cye: Vec[i64] = e.iter().cloned().cycle().take(5).collect();
+    let cyr: Vec[i64] = (1..4).cycle().take(7).collect();
+    println(f"cycle={vs(cy)} cycle empty={vs(cye)} range cycle={vs(cyr)}");
+    let rv: Vec[i64] = v.iter().cloned().rev().collect();
+    println(f"rev={vs(rv)}");
+    let mut pk = v.iter().cloned().peekable();
+    let p1 = match pk.peek() { Some(x) => f"{*x}", None => "None".to_string() };
+    let p2 = match pk.peek() { Some(x) => f"{*x}", None => "None".to_string() };
+    let n1 = oi(pk.next());
+    let ni1 = oi(pk.next_if(|x| x == 2));
+    let ni2 = oi(pk.next_if(|x| x == 9));
+    let n2 = oi(pk.next());
+    println(f"peek={p1},{p2} next={n1} next_if2={ni1} next_if9={ni2} next={n2}");
+    let mut pe = e.iter().cloned().peekable();
+    let pp = match pe.peek() { Some(x) => f"{*x}", None => "None".to_string() };
+    println(f"peek empty={pp}");
+    let sc: Vec[i64] = v.iter().cloned().scan(0, |acc, x| if acc + x > 12 { None } else { Some((acc + x, acc + x)) }).collect();
+    println(f"scan={vs(sc)}");
+    let names = ["a".to_string(), "bb".to_string()].to_vec();
+    let cl: Vec[String] = names.iter().cloned().collect();
+    println(f"cloned={cl.len()} {cl[1]}");
+    // by_ref
+    let mut it = v.iter().cloned();
+    let mut head: Vec[i64] = Vec.new();
+    for x in it.by_ref() { head.push(x); if x == 3 { break; } }
+    let rest: Vec[i64] = it.collect();
+    println(f"by_ref head={vs(head)} rest={vs(rest)}");
+    let mut it2 = v.iter().cloned();
+    let t2: Vec[i64] = it2.by_ref().take(2).collect();
+    let r2: Vec[i64] = it2.collect();
+    println(f"by_ref.take2={vs(t2)} rest={vs(r2)}");
+    // laziness traces
+    println("-- lazy map/filter/take");
+    let lz: Vec[i64] = v.iter().cloned()
+        .inspect(|x| println(f"  pull {x}"))
+        .map(|x| { println(f"  map {x}"); x * 2 })
+        .filter(|x| { println(f"  filter {x}"); x % 4 == 0 })
+        .take(2)
+        .collect();
+    println(f"result={vs(lz)}");
+    println("-- take_while pulls the failing item");
+    let lt: Vec[i64] = v.iter().cloned().inspect(|x| println(f"  pull {x}")).take_while(|x| *x < 3).collect();
+    println(f"result={vs(lt)}");
+    println("-- zip pull order");
+    let lzp: Vec[(i64, i64)] = v.iter().cloned().take(2).inspect(|x| println(f"  left {x}")).zip((10..20).inspect(|x| println(f"  right {x}"))).collect();
+    println(f"result={lzp.len()}");
+    println("-- skip/step_by/nth pulls");
+    let ls: Vec[i64] = v.iter().cloned().inspect(|x| println(f"  pull {x}")).step_by(3).take(2).collect();
+    println(f"result={vs(ls)}");
+    println("-- adaptor built, never pulled");
+    let _unused = v.iter().cloned().map(|x| { println("  NEVER"); x });
+    println("-- chain pulls");
+    let lc: Vec[i64] = (0..2).inspect(|x| println(f"  a {x}")).chain((5..7).inspect(|x| println(f"  b {x}"))).take(3).collect();
+    println(f"result={vs(lc)}");
+    println("-- peekable peek pulls once");
+    let mut lp = v.iter().cloned().inspect(|x| println(f"  pull {x}")).peekable();
+    let _ = lp.peek();
+    let _ = lp.peek();
+    println(f"  next={oi(lp.next())}");
+    println("-- flat_map pulls");
+    let lf: Vec[i64] = (1..4).inspect(|x| println(f"  outer {x}")).flat_map(|x| (0..x).inspect(|y| println(f"    inner {y}"))).take(3).collect();
+    println(f"result={vs(lf)}");
+}

@@ -1,0 +1,7 @@
+fn main() {
+    let mut m: Map[i64, i64] = Map.from([(1, 10), (2, 20), (3, 30)]);
+    m.retain(|k, v| { *v += 1; k != 2 });
+    let mut e: Vec[(i64, i64)] = m.into_iter().collect();
+    e.sort();
+    println(e);
+}

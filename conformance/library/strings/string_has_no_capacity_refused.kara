@@ -1,0 +1,4 @@
+fn main() {
+    let s = String.with_capacity(8);
+    println(s.capacity());
+}

@@ -1,0 +1,11 @@
+fn take(a: Array[u8, 4]) -> u32 { u32.from_le_bytes(a) }
+fn main() {
+    let v: Vec[u8] = [1, 0, 0, 0, 9];
+    let c = v[0..2].to_vec();
+    println(c);
+    println(take(v[..4].try_into_array().unwrap()));
+    let a: Array[u8, 4] = v[1..5].try_into_array().unwrap();
+    println(a);
+    let bad: Option[Array[u8, 4]] = v[0..3].try_into_array();
+    println(bad.is_none());
+}

@@ -1,0 +1,16 @@
+fn main() {
+    let v: Vec[i64] = [3, 1, 4].to_vec();
+    let e: Vec[i64] = Vec.new();
+    println(v.len());
+    println(v.is_empty());
+    println(e.is_empty());
+    println(v.get(2) ?? -1);
+    println(v.get(3) ?? -1);
+    println(v.get(-1) ?? -1);
+    println(v.first() ?? -1);
+    println(v.last() ?? -1);
+    println(e.first() ?? -1);
+    println(e.last() ?? -1);
+    println(v.contains(4));
+    println(v.contains(9));
+}

@@ -1,0 +1,4 @@
+fn main() {
+    let b: Vec[u8] = Vec.new();
+    println(StableHash.xxh3(b, 0));
+}

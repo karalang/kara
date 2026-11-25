@@ -1,0 +1,9 @@
+fn takes_view(s: Str) -> i64 { s.len() }
+fn main() {
+    let mut owned = "ab";
+    owned.push_str("c");
+    println(owned);
+    println(takes_view("hello"));
+    let v: Str = "view";
+    println(v.len());
+}

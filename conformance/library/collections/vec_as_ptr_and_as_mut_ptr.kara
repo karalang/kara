@@ -1,0 +1,14 @@
+fn main() {
+    let mut v: Vec[i64] = [11, 22].to_vec();
+    let p = v.as_ptr();
+    unsafe { println(*p); }
+    let q = v.as_mut_ptr();
+    unsafe { *q = 33; }
+    println(v[0]);
+    let a: Array[i64, 2] = [5, 6];
+    let r = a.as_ptr();
+    unsafe { println(*r); }
+    let e: Vec[i64] = Vec.new();
+    let _z = e.as_ptr();
+    println("ok");
+}

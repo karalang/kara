@@ -1,0 +1,9 @@
+fn main() {
+    let mut d: VecDeque[i64] = VecDeque.new();
+    d.push_back(3);
+    d.push_front(5);
+    d.push_back(1);
+    let mut v = Vec.from_iter(d.into_iter());
+    v.sort();
+    println(v);
+}

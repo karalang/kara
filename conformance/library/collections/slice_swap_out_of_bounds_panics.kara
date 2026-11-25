@@ -1,0 +1,5 @@
+fn main() {
+    let mut v: Vec[i64] = [1, 2].to_vec();
+    let j = v.len();
+    v.swap(0, j);
+}

@@ -1,0 +1,23 @@
+fn main() {
+    let mut m: SortedMap[i64, String] = SortedMap.from([(3, "c".to_string()), (1, "a".to_string()), (3, "C".to_string())]);
+    println(m);
+    println(m.insert(2, "b".to_string()).is_none());
+    m.extend([(5, "e".to_string()), (5, "E".to_string())]);
+    println(m.get(5).cloned() ?? "-".to_string());
+    match m.get_mut(1) { Some(v) => { v.push_str("!"); } None => {} }
+    println(m[1]);
+    println(m.contains_key(4));
+    println(m.remove(2) ?? "-".to_string());
+    *m.entry(4).or_insert("d".to_string()) = "D".to_string();
+    println(m.len());
+    println(m.is_empty());
+    let ks: Vec[i64] = m.keys().cloned().collect();
+    println(ks);
+    let vs: Vec[String] = m.values().cloned().collect();
+    println(vs);
+    m[9] = "z".to_string();
+    m.retain(|k, v| { v.push_str("."); k % 2 == 1 });
+    println(m);
+    m.clear();
+    println(m.len());
+}

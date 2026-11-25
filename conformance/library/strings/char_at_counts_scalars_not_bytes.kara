@@ -1,0 +1,9 @@
+fn main() {
+    let s = "héllo";
+    println(s.char_at(1) ?? '?');
+    println(s.char_at(4) ?? '?');
+    println(s.char_at(5).is_none());
+    println(s.char_at(-1).is_none());
+    let cs: Vec[char] = s.chars().collect();
+    println(cs[1]);
+}

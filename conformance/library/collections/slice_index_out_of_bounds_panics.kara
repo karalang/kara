@@ -1,0 +1,5 @@
+fn main() {
+    let v: Vec[i64] = [1, 2].to_vec();
+    let i = v.len();
+    println(v[i]);
+}

@@ -1,0 +1,12 @@
+fn load_all(paths: Slice[String]) -> Vec[Result[String, IoError]] {
+    paths.iter()
+        .filter(|p| p.ends_with(".txt"))
+        .map(|p| fs.read_to_string(p))
+        .collect()
+}
+fn main() {
+    let paths: Vec[String] = ["/nonexistent-kara-conf/a.txt".to_string(), "b.md".to_string()];
+    let r = load_all(paths);
+    println(r.len());
+    println(r[0].is_err());
+}

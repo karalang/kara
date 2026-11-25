@@ -1,0 +1,8 @@
+fn main() {
+    let xs: Vec[i64] = [10, 20, 30].to_vec();
+    let mut t = 0;
+    for i in 0..xs.len() {
+        unsafe { t += *xs.get_unchecked(i); }
+    }
+    println(t);
+}

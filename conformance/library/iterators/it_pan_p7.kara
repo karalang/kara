@@ -1,0 +1,5 @@
+fn main() {
+    let v: Vec[i64] = [1, 2, 3].to_vec();
+    println("start");
+    let b: Vec[u8] = [200u8, 100u8].to_vec(); let s: u8 = b.iter().sum(); println(f"{s}");
+}

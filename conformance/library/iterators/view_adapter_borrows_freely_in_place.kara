@@ -1,0 +1,9 @@
+struct P { x: i64 }
+fn main() {
+    let xs: Vec[P] = [P { x: 1 }, P { x: 5 }, P { x: 9 }];
+    let limit = 4;
+    let n = xs.iter().filter(|r| r.x > limit).count();
+    println(n);
+    let big: Vec[i64] = xs.iter().filter(|r| r.x > limit).map(|r| r.x).collect();
+    println(big);
+}

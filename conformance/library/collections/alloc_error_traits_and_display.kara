@@ -1,0 +1,8 @@
+fn show(e: AllocError) -> String { f"{e}" }
+fn main() {
+    let a = AllocError.OutOfMemory { requested_bytes: 4096 };
+    let b = a;
+    println(a == b);
+    println(show(AllocError.CapacityOverflow));
+    println(show(a).contains("4096"));
+}

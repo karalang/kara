@@ -1,0 +1,10 @@
+struct P { a: i64, note: String }
+impl PartialEq for P { fn eq(ref self, other: ref P) -> bool { self.a == other.a } }
+impl Eq for P {}
+impl Hash for P { fn hash[H: Hasher](self, hasher: mut ref H) { self.a.hash(mut hasher); } }
+fn main() {
+    let mut s: Set[P] = Set.new();
+    s.insert(P { a: 1, note: "x".to_string() });
+    s.insert(P { a: 1, note: "y".to_string() });
+    println(s.len());
+}

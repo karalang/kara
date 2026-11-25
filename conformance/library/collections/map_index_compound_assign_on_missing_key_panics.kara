@@ -1,0 +1,4 @@
+fn main() {
+    let mut m: Map[i64, i64] = Map.new();
+    m[1] += 1;
+}

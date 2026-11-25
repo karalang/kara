@@ -1,0 +1,8 @@
+fn loud(v: mut ref Vec[i64]) { v.retain(|x| { println(x); x > 1 }); }
+fn quiet(v: mut ref Vec[i64]) { v.retain(|x| x > 1); }
+fn main() {
+    let mut a: Vec[i64] = [1, 2].to_vec();
+    loud(mut a);
+    quiet(mut a);
+    println(a);
+}

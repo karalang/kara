@@ -1,0 +1,32 @@
+fn main() {
+    let mut s: SortedSet[i64] = SortedSet.from([5, 1, 3, 3]);
+    println(s);
+    println(s.insert(2));
+    println(s.insert(2));
+    s.extend([9, 0]);
+    println(s.remove(9));
+    println(s.remove(9));
+    println(s.contains(3));
+    println(s.min() ?? -1);
+    println(s.max() ?? -1);
+    println(s.pop_first() ?? -1);
+    println(s.pop_last() ?? -1);
+    println(s);
+    s.retain(|x| x != 2);
+    println(s);
+    let r1: Vec[i64] = s.range(1, 5).cloned().collect();
+    println(r1);
+    println(s.range(5, 1).count());
+    let r2: Vec[i64] = s.range_inclusive(1, 5).cloned().collect();
+    println(r2);
+    println(s.range_inclusive(3, 3).count());
+    println(s.len());
+    println(s.is_empty());
+    let t: SortedSet[i64] = SortedSet.from([3, 4]);
+    println(s.union(t));
+    println(s.intersection(t));
+    println(s.difference(t));
+    println(s.is_disjoint(t));
+    println(SortedSet.from([3]).is_subset(s));
+    println(s.is_superset(t));
+}

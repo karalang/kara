@@ -1,0 +1,10 @@
+fn main() {
+    let a = "foo".to_string();
+    let b = "bar".to_string();
+    let c = a + b;
+    println(c);
+    println(a);
+    println(b);
+    let d = a + b + c;
+    println(d);
+}

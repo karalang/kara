@@ -1,0 +1,1 @@
+no method 'rev' on type 'IterStepBy': `rev` needs a `DoubleEndedIterator`, one that can also be walked from the back; `IterStepBy` is not one (docs/library/iterators.md lists which iterators are) -- collect it first and reverse the `Vec`: `let v: Vec[i64] = it.collect(); v.into_iter().rev()`

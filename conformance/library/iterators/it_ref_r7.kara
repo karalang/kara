@@ -1,0 +1,4 @@
+fn main() {
+    let v: Vec[i64] = [1, 2, 3].to_vec();
+    let x = v.iter().chain(v.iter()).rev().count(); println(f"{x}");
+}

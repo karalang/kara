@@ -1,0 +1,5 @@
+fn drain_all(q: own PriorityQueue[i64]) -> Vec[i64] { q.into_sorted_vec() }
+fn main() {
+    println(drain_all(PriorityQueue.from([2, 1, 3])));
+    println(drain_all(PriorityQueue.max_first_from([2, 1, 3])));
+}

@@ -1,0 +1,6 @@
+sort_k has writes(Stdout)
+sort_i lacks writes(Stdout)
+has_k has writes(Stdout)
+len_k has writes(Stdout)
+get_v lacks writes(Stdout)
+len_s has writes(Stdout)

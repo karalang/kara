@@ -1,0 +1,4 @@
+drive has writes(Stdout)
+quiet_chain lacks writes(Stdout), writes(Stderr)
+loud_closure has writes(Stderr)
+loud_closure lacks writes(Stdout)

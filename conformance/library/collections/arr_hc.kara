@@ -1,0 +1,25 @@
+import std.hash.{Hasher, BuildHasher};
+struct Rec { n: u64 }
+impl Hasher for Rec {
+    fn write(mut ref self, bytes: Slice[u8]) { for b in bytes.iter() { self.n = self.n.wrapping_mul(31).wrapping_add(*b as u64); } }
+    fn finish(self) -> u64 { println(f"  finish {self.n}"); self.n }
+}
+struct RecBuild {}
+impl BuildHasher for RecBuild {
+    type Hasher = Rec;
+    fn build(self) -> Rec { Rec { n: 7 } }
+}
+fn main() {
+    println("collect:");
+    let mut m: Map[i64, i64, RecBuild] = (0..2).map(|i| (i, i * 10)).collect();
+    println("insert:");
+    m.insert(5, 50);
+    println("get:");
+    println(f"{m.get(1) ?? -1} {m.get(5) ?? -1} len={m.len()}");
+    println("new+insert:");
+    let mut n: Map[i64, i64, RecBuild] = Map.new();
+    n.insert(1, 1);
+    println("set collect:");
+    let s: Set[i64, RecBuild] = (0..2).collect();
+    println(f"{s.contains(1)}");
+}

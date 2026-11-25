@@ -1,0 +1,11 @@
+fn main() {
+    let v: Vec[i64] = (1..4).collect();
+    let d: VecDeque[i64] = (1..4).collect();
+    let s: Set[i64] = [1, 1, 2].to_vec().into_iter().collect();
+    let ss: SortedSet[i64] = [3, 1, 2].to_vec().into_iter().collect();
+    let m: Map[i64, i64] = (0..3).map(|i| (i, i * i)).collect();
+    let sm: SortedMap[i64, i64] = (0..3).map(|i| (i, i + 1)).collect();
+    let st: String = "abc".chars().rev().collect();
+    let chars: Vec[char] = "hé".chars().collect();
+    println(f"{v} {d.len()} {s.len()} {ss} {m.len()} {sm} {st} {chars}");
+}

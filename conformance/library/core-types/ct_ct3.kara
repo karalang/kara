@@ -1,0 +1,55 @@
+// Floats: methods, float to integer, total_cmp, parse, printing.
+fn pe(r: Result[i64, ParseError]) -> String {
+    match r {
+        Ok(v) => f"Ok({v})",
+        Err(ParseError.Empty) => "Empty".to_string(),
+        Err(ParseError.InvalidDigit) => "InvalidDigit".to_string(),
+        Err(ParseError.Overflow) => "Overflow".to_string(),
+        Err(ParseError.Underflow) => "Underflow".to_string(),
+        Err(ParseError.Invalid) => "Invalid".to_string(),
+    }
+}
+fn pu(r: Result[u8, ParseError]) -> String {
+    match r { Ok(v) => f"Ok({v})", Err(e) => f"Err({e})" }
+}
+fn pf(r: Result[f64, ParseError]) -> String {
+    match r { Ok(v) => f"Ok({v})", Err(e) => f"Err({e})" }
+}
+fn ords(o: Ordering) -> String {
+    match o { Ordering.Less => "Less".to_string(), Ordering.Equal => "Equal".to_string(), Ordering.Greater => "Greater".to_string() }
+}
+fn oi(o: Option[i32]) -> String { match o { Some(x) => f"{x}", None => "None".to_string() } }
+fn ou(o: Option[u8]) -> String { match o { Some(x) => f"{x}", None => "None".to_string() } }
+fn main() {
+    let x: f64 = -2.5;
+    println(f"round: {x.floor()} {x.ceil()} {x.round()} {x.trunc()} {x.fract()} {2.5.round()} {0.5.round()} {(-0.5).round()}");
+    println(f"sign: {x.abs()} {x.signum()} {0.0.signum()} {(-0.0).signum()} {3.0.copysign(-0.0)} {x.min(1.0)} {x.max(1.0)} {7.0.clamp(1.0, 3.0)} {4.0.recip()}");
+    let nan = 0.0 / 0.0;
+    println(f"nan: {nan.min(1.0)} {nan.max(1.0)} {1.0.min(nan)} {nan.signum()} {nan.abs()}");
+    println(f"pow: {2.0.pow(10.0)} {2.0.powi(-2i32)} {16.0.sqrt()} {27.0.cbrt()} {3.0.hypot(4.0)} {(-1.0).sqrt()}");
+    println(f"exp: {0.0.exp()} {3.0.exp2()} {0.0.exp_m1()} {1.0.ln()} {0.0.ln_1p()} {8.0.log2()} {1000.0.log10()} {0.0.ln()}");
+    println(f"trig: {0.0.sin()} {0.0.cos()} {0.0.tan()} {1.0.asin()} {1.0.acos()} {1.0.atan()} {1.0.atan2(1.0)} {0.0.sinh()} {0.0.cosh()} {0.0.tanh()} {0.0.asinh()} {1.0.acosh()} {0.0.atanh()} {180.0.to_radians()} {1.0.to_degrees()}");
+    println(f"bits: {1.0.to_bits()} {(-0.0).to_bits()} {1.5.to_bits32()} {4607182418800017408u64.bits_as_f64()} {1069547520u32.bits_as_f32()}");
+    let y: f32 = 1.5;
+    println(f"f32: {y.to_bits()} {y.to_bits32()} {y.sqrt()} {y.pow(2.0)} {y.round()} {(0.1f32 + 0.2f32)}");
+    // float to integer
+    println(f"as: {(300.7 as u8)} {(-5.0 as u8)} {(nan as i32)} {(1e20 as i64)} {(-1e20 as i64)} {(-3.9 as i32)} {(3.9 as i32)} {(1.0 / 0.0) as i16}");
+    println(f"checked_from: {oi(i32.checked_from(3.9))} {oi(i32.checked_from(-3.9))} {oi(i32.checked_from(nan))} {oi(i32.checked_from(3e9))} {ou(u8.checked_from(-0.5))} {ou(u8.checked_from(-1.0))} {ou(u8.checked_from(255.9))} {ou(u8.checked_from(256.0))} {oi(i32.checked_from(1.5f32))}");
+    // total_cmp
+    let inf = 1.0 / 0.0;
+    println(f"total_cmp: {ords(1.0.total_cmp(2.0))} {ords((-0.0).total_cmp(0.0))} {ords(nan.total_cmp(inf))} {ords((-nan).total_cmp(-inf))} {ords(nan.total_cmp(-nan))} {ords(nan.total_cmp(nan))}");
+    let mut w: Vec[f64] = [2.5, -1.0, nan, 0.25, -inf, -0.0, 0.0];
+    w.sort_by(f64.total_cmp);
+    println(f"sorted: {w}");
+    // parse
+    println(f"parse i64: {pe(i64.parse(" 5\n"))} {pe(i64.parse("+5"))} {pe(i64.parse("-"))} {pe(i64.parse("1-2"))} {pe(i64.parse(""))} {pe(i64.parse("   "))} {pe(i64.parse("9223372036854775808"))} {pe(i64.parse("-9223372036854775809"))} {pe(i64.parse("-9223372036854775808"))} {pe(i64.parse("1_000"))} {pe(i64.parse("0x10"))} {pe(i64.parse("1.0"))} {pe(i64.parse("++1"))}");
+    println(f"parse u8: {pu(u8.parse("-0"))} {pu(u8.parse("-1"))} {pu(u8.parse("256"))} {pu(u8.parse("255"))} {pu(u8.parse("-"))}");
+    println(f"parse f64: {pf(f64.parse("1.5"))} {pf(f64.parse(" -2e3 "))} {pf(f64.parse("NaN"))} {pf(f64.parse("-inf"))} {pf(f64.parse("+Infinity"))} {pf(f64.parse("-nan"))} {pf(f64.parse("inF"))} {pf(f64.parse(""))} {pf(f64.parse("1.2.3"))} {pf(f64.parse(".5"))} {pf(f64.parse("5."))} {pf(f64.parse("1e400"))} {pf(f64.parse("abc"))}");
+    let o: Option[i64] = i64.parse("12").ok();
+    println(f"ok: {o ?? -1}");
+    // printing
+    println(f"print: {1.0} {0.1} {1e16} {0.00001} {0.0001} {1e15} {123456789012345680.0} {-75455689800034.625} {nan} {inf} {-inf} {-0.0} {0.1 + 0.2} {1.0 / 3.0} {5e-324} {1.7976931348623157e308}");
+    let fl: Vec[f64] = [1.0, 2.5];
+    println(fl);
+    println(f"to_string: {2.0.to_string()} {1e-7.to_string()} {100.0f32} {0.1f32} {16777216.0f32} {1e16f32}");
+}

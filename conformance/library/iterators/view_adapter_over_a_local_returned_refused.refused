@@ -1,0 +1,1 @@
+the result borrows `v`, which this function owns, so it would outlive it

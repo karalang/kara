@@ -1,0 +1,11 @@
+fn main() {
+    let primes = Set.from([2, 3, 5, 7]);
+    let ages = Map.from([("ann", 31), ("bo", 27)]);
+    let pq = PriorityQueue.from([9, 7, 8]);
+    let seen = SortedSet.from([3, 1, 2]);
+    println(primes.len());
+    println(primes.contains(5));
+    println(ages["bo"]);
+    println(pq.peek() ?? 0);
+    println(seen);
+}

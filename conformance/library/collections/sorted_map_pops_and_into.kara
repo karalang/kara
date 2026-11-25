@@ -1,0 +1,12 @@
+fn main() {
+    let mut m: SortedMap[i64, String] = SortedMap.from([(2, "b".to_string()), (1, "a".to_string()), (3, "c".to_string())]);
+    match m.pop_first() { Some((k, v)) => { println(f"{k}{v}"); } None => {} }
+    match m.pop_last() { Some((k, v)) => { println(f"{k}{v}"); } None => {} }
+    for v in m.values_mut() { v.push_str("!"); }
+    let ks: Vec[i64] = m.clone().into_keys().collect();
+    println(ks);
+    let vs: Vec[String] = m.into_values().collect();
+    println(vs);
+    let mut e: SortedMap[i64, i64] = SortedMap.new();
+    println(e.pop_first().is_none());
+}

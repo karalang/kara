@@ -1,0 +1,130 @@
+// Map, Set, SortedMap, SortedSet: values and edge cases, printed order-independently.
+fn ms(m: ref Map[String, i64]) -> String {
+    let mut ks: Vec[String] = m.keys().cloned().collect();
+    ks.sort();
+    let mut o = "{".to_string();
+    for k in ks.iter() { o.push_str(f"{k}:{m[k.as_str()]} "); }
+    o.push_str("}");
+    o
+}
+fn ss(s: ref Set[i64]) -> String {
+    let mut v: Vec[i64] = s.iter().cloned().collect();
+    v.sort();
+    let mut o = "{".to_string();
+    for x in v.iter() { o.push_str(f"{*x} "); }
+    o.push_str("}");
+    o
+}
+fn sms(m: ref SortedMap[i64, String]) -> String {
+    let mut o = "{".to_string();
+    for (k, v) in m.iter() { o.push_str(f"{k}:{v} "); }
+    o.push_str("}");
+    o
+}
+fn sss(s: ref SortedSet[i64]) -> String {
+    let mut o = "{".to_string();
+    for x in s.iter() { o.push_str(f"{*x} "); }
+    o.push_str("}");
+    o
+}
+fn oi(x: Option[i64]) -> String { match x { Some(n) => f"Some({n})", None => "None".to_string() } }
+fn orf(x: Option[ref i64]) -> String { match x { Some(n) => f"Some({*n})", None => "None".to_string() } }
+fn okv(x: Option[(ref i64, ref String)]) -> String { match x { Some((k, v)) => f"Some({k}:{v})", None => "None".to_string() } }
+
+fn main() {
+    // Map
+    let mut m: Map[String, i64] = Map.new();
+    println(f"insert a={oi(m.insert("a".to_string(), 1))} again={oi(m.insert("a".to_string(), 2))}");
+    m.extend([("b".to_string(), 3), ("c".to_string(), 4), ("b".to_string(), 5)].to_vec());
+    println(f"extend={ms(m)} len={m.len()} empty={m.is_empty()}");
+    let k: Str = "zb".as_str();
+    println(f"get b={orf(m.get("b"))} get z={orf(m.get("z"))} get by view={orf(m.get(k[1..2]))} default={m.get("q") ?? 0}");
+    match m.get_mut("c") { Some(r) => { *r += 10; }, None => {} }
+    println(f"get_mut={ms(m)}");
+    println(f"remove c={oi(m.remove("c"))} again={oi(m.remove("c"))} contains a={m.contains_key("a")} contains c={m.contains_key("c")}");
+    let mut vsum = 0;
+    for v in m.values() { vsum += *v; }
+    for v in m.values_mut() { *v *= 2; }
+    println(f"values sum={vsum} values_mut={ms(m)}");
+    m.retain(|k, v| { *v += 1; k != "a" });
+    println(f"retain={ms(m)}");
+    *m.entry("n".to_string()).or_insert(0) += 5;
+    *m.entry("n".to_string()).or_insert(0) += 5;
+    m.entry("b".to_string()).and_modify(|v| { *v = 100; }).or_insert(7);
+    m.entry("q".to_string()).and_modify(|v| { *v = 100; }).or_insert(7);
+    let mut calls = 0;
+    let _ = m.entry("q".to_string()).or_insert_with(|| { calls += 1; 9 });
+    println(f"entry={ms(m)} or_insert_with calls on occupied={calls}");
+    m["w"] = 1; m["w"] = 2; m["b"] += 1;
+    println(f"index={m["w"]} index-set={ms(m)}");
+    m.reserve(-1); m.reserve(100);
+    let mut ik: Vec[String] = m.clone().into_keys().collect(); ik.sort();
+    let mut iv: Vec[i64] = m.clone().into_values().collect(); iv.sort();
+    println(f"into_keys={ik.len()} first={ik[0]} into_values={iv.len()} max={iv[iv.len() - 1]}");
+    m.clear(); println(f"clear={ms(m)} empty={m.is_empty()}");
+    let mf = Map.from([("x", 1), ("y", 2), ("x", 3)].to_vec());
+    println(f"from len={mf.len()} x={mf["x"]}");
+    // Set
+    let mut s: Set[i64] = Set.from([3, 1, 3, 2].to_vec());
+    println(f"set from={ss(s)} insert4={s.insert(4)} insert4 again={s.insert(4)} remove1={s.remove(1)} remove1 again={s.remove(1)} contains2={s.contains(2)}");
+    s.extend([7, 8, 2].to_vec());
+    let o: Set[i64] = Set.from([2, 8, 9].to_vec());
+    let e: Set[i64] = Set.new();
+    println(f"extend={ss(s)} union={ss(s.union(o))} inter={ss(s.intersection(o))} diff={ss(s.difference(o))} odiff={ss(o.difference(s))}");
+    println(f"disjoint={s.is_disjoint(o)} e.disjoint={e.is_disjoint(e)} subset={o.is_subset(s)} e.subset={e.is_subset(o)} superset={s.is_superset(e)} self.superset={s.is_superset(s)}");
+    s.retain(|x| x % 2 == 0); println(f"retain={ss(s)} len={s.len()}");
+    s.clear(); println(f"clear={ss(s)} empty={s.is_empty()}");
+    let names: Set[String] = Set.from(["ann".to_string(), "bo".to_string()].to_vec());
+    let cand: Str = "xbo".as_str();
+    println(f"set by view={names.contains(cand[1..3])}");
+    // SortedMap
+    let mut sm: SortedMap[i64, String] = SortedMap.from([(5, "e".to_string()), (1, "a".to_string()), (3, "c".to_string()), (5, "E".to_string())].to_vec());
+    println(f"sm from={sms(sm)} insert2={match sm.insert(2, "b".to_string()) { Some(v) => v, None => "None".to_string() }} insert2again={match sm.insert(2, "B".to_string()) { Some(v) => v, None => "None".to_string() }}");
+    sm.extend([(9, "i".to_string()), (7, "g".to_string())].to_vec());
+    println(f"extend={sms(sm)} get3={match sm.get(3) { Some(v) => v.clone(), None => "None".to_string() }} get4={sm.get(4).is_none()} contains7={sm.contains_key(7)}");
+    let mut kk = "".to_string();
+    for k in sm.keys() { kk.push_str(f"{*k}"); }
+    let mut vv = "".to_string();
+    for v in sm.values() { vv.push_str(v); }
+    println(f"keys={kk} values={vv}");
+    let mut rg = "".to_string();
+    for (k, v) in sm.range(2, 7) { rg.push_str(f"{k}{v} "); }
+    let mut rgi = "".to_string();
+    for (k, v) in sm.range_inclusive(2, 7) { rgi.push_str(f"{k}{v} "); }
+    let re = sm.range(7, 2).count();
+    let re2 = sm.range(5, 5).count();
+    let rie = sm.range_inclusive(5, 5).count();
+    println(f"range[2,7)={rg} incl={rgi} inverted={re} empty={re2} incl55={rie}");
+    println(f"floor4={okv(sm.floor(4))} floor5={okv(sm.floor(5))} floor0={okv(sm.floor(0))} ceil4={okv(sm.ceiling(4))} ceil10={okv(sm.ceiling(10))}");
+    println(f"lower5={okv(sm.lower(5))} lower1={okv(sm.lower(1))} higher5={okv(sm.higher(5))} higher9={okv(sm.higher(9))}");
+    println(f"first={okv(sm.first())} last={okv(sm.last())}");
+    let pf = match sm.pop_first() { Some((k, v)) => f"{k}{v}", None => "None".to_string() };
+    let pl = match sm.pop_last() { Some((k, v)) => f"{k}{v}", None => "None".to_string() };
+    println(f"pop_first={pf} pop_last={pl} after={sms(sm)} remove3={match sm.remove(3) { Some(v) => v, None => "None".to_string() }}");
+    for v in sm.values_mut() { v.push('!'); }
+    sm.retain(|k, v| { v.push('?'); k != 5 });
+    sm[4] = "d".to_string(); sm[4] = "D".to_string();
+    println(f"values_mut+retain+index={sms(sm)} index2={sm[2]} len={sm.len()}");
+    let ikk: Vec[i64] = sm.clone().into_keys().collect();
+    let ivv: Vec[String] = sm.clone().into_values().collect();
+    println(f"into_keys={ikk.len()}:{ikk[0]} into_values={ivv.len()}:{ivv[0]}");
+    sm.clear();
+    let mut em: SortedMap[i64, String] = SortedMap.new();
+    println(f"clear={sms(sm)} empty={sm.is_empty()} e.first={okv(em.first())} e.pop={em.pop_first().is_none()}");
+    // SortedSet
+    let mut st: SortedSet[i64] = SortedSet.from([5, 1, 9, 5, 3].to_vec());
+    println(f"sset from={sss(st)} insert4={st.insert(4)} again={st.insert(4)} remove9={st.remove(9)} again={st.remove(9)} contains3={st.contains(3)}");
+    println(f"min={orf(st.min())} max={orf(st.max())}");
+    st.extend([10, 0].to_vec());
+    let mut r1 = "".to_string();
+    for x in st.range(1, 5) { r1.push_str(f"{*x}"); }
+    let mut r2 = "".to_string();
+    for x in st.range_inclusive(1, 5) { r2.push_str(f"{*x}"); }
+    println(f"extend={sss(st)} range[1,5)={r1} incl={r2} inverted={st.range(5, 1).count()} incl_inv={st.range_inclusive(5, 4).count()}");
+    println(f"pop_first={oi(st.pop_first())} pop_last={oi(st.pop_last())} after={sss(st)}");
+    st.retain(|x| x != 4);
+    let so: SortedSet[i64] = SortedSet.from([3, 5, 6].to_vec());
+    println(f"retain={sss(st)} union={sss(st.union(so))} inter={sss(st.intersection(so))} diff={sss(st.difference(so))} disjoint={st.is_disjoint(so)} subset={so.is_subset(st)} superset={st.is_superset(SortedSet.from([1, 3].to_vec()))} len={st.len()}");
+    let mut est: SortedSet[i64] = SortedSet.new();
+    println(f"e.min={orf(est.min())} e.pop={oi(est.pop_last())} e.empty={est.is_empty()}");
+}

@@ -1,0 +1,12 @@
+fn main() {
+    let v: Vec[i64] = [1, 2, 3, 4];
+    let mut it = v.iter();
+    println(it.len());
+    it.next();
+    println(it.len());
+    println(v.iter().skip(1).take(2).len());
+    println(v.iter().map(|x| *x).len());
+    let e: Vec[i64] = Vec.new();
+    println(e.iter().is_empty());
+    println(v.clone().into_iter().len());
+}

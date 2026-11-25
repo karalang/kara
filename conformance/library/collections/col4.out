@@ -1,0 +1,20 @@
+i64 1: 1 0 0 0 0 0 0 0 
+u8 7: 7 
+i32 -1: 255 255 255 255 
+bool: 1  0 
+char A: 65 0 0 0 
+str ab: 97 98 255 
+String: 195 169 255 
+tuple: 97 98 255 99 255  vs 97 255 98 99 255 
+vec: 2 0 0 0 0 0 0 0 1 2 
+array: 2 0 0 0 0 0 0 0 1 0 2 0 
+struct: 3 1 
+enum: 0 0 0 0  | 1 0 0 0 5 0  | 2 0 0 0 98 0 0 0 
+option: 0 0 0 0 9  | 1 0 0 0  result: 0 0 0 0 1  | 1 0 0 0 1 
+F64 0.0: 0 0 0 0 0 0 0 0  -0.0: 0 0 0 0 0 0 0 128 
+siphash24 empty k0: 2202906307356721367
+siphash24 abc k0: 4596069200710135518
+siphash24 0..15 keyed: 11613035633349379557
+user-hasher map len=2 a=3 b=2 c=false
+user-hasher set len=1
+fx map=4

@@ -1,0 +1,56 @@
+// Integer families, bit counts, byte order, Euclidean division, isqrt, char digits, ASCII case.
+fn oi(o: Option[i8]) -> String { match o { Some(x) => f"{x}", None => "None".to_string() } }
+fn ou(o: Option[u8]) -> String { match o { Some(x) => f"{x}", None => "None".to_string() } }
+fn ol(o: Option[i64]) -> String { match o { Some(x) => f"{x}", None => "None".to_string() } }
+fn main() {
+    let a: i8 = 100;
+    let b: i8 = 100;
+    let m: i8 = -128;
+    println(f"i8 checked: {oi(a.checked_add(b))} {oi(a.checked_sub(-b))} {oi(a.checked_mul(2))} {oi(m.checked_div(-1))} {oi(a.checked_div(0))} {oi(m.checked_rem(-1))} {oi(a.checked_rem(0))} {oi(m.checked_neg())} {oi(a.checked_shl(7u32))} {oi(a.checked_shl(8u32))} {oi(a.checked_shr(8u32))} {oi(a.checked_pow(2u32))} {oi(2i8.checked_pow(6u32))}");
+    println(f"i8 wrapping: {a.wrapping_add(b)} {(-a).wrapping_sub(b)} {a.wrapping_mul(3)} {m.wrapping_div(-1)} {m.wrapping_rem(-1)} {m.wrapping_neg()} {1i8.wrapping_shl(9u32)} {m.wrapping_shr(9u32)} {3i8.wrapping_pow(5u32)}");
+    println(f"i8 saturating: {a.saturating_add(b)} {(-a).saturating_sub(b)} {a.saturating_mul(-2)} {m.saturating_div(-1)} {m.saturating_neg()} {(-3i8).saturating_pow(5u32)} {3i8.saturating_pow(5u32)}");
+    let (v1, f1) = a.overflowing_add(b);
+    let (v2, f2) = m.overflowing_div(-1);
+    let (v3, f3) = m.overflowing_neg();
+    let (v4, f4) = 1i8.overflowing_shl(9u32);
+    let (v5, f5) = 1i8.overflowing_shl(7u32);
+    let (v6, f6) = m.overflowing_rem(-1);
+    let (v7, f7) = 3i8.overflowing_pow(5u32);
+    let (v8, f8) = 2i8.overflowing_mul(3);
+    println(f"i8 overflowing: {v1} {f1} {v2} {f2} {v3} {f3} {v4} {f4} {v5} {f5} {v6} {f6} {v7} {f7} {v8} {f8}");
+    let u: u8 = 200;
+    println(f"u8: {ou(u.checked_add(100))} {u.wrapping_add(100)} {u.saturating_add(100)} {ou(5u8.checked_sub(6))} {5u8.wrapping_sub(6)} {5u8.saturating_sub(6)} {u.saturating_mul(2)} {ou(u.checked_neg())} {0u8.wrapping_neg()} {1u8.wrapping_neg()} {u.wrapping_shr(10u32)} {ou(2u8.checked_pow(8u32))} {2u8.saturating_pow(8u32)}");
+    let (uv, uf) = 0u8.overflowing_neg();
+    let (uv2, uf2) = 1u8.overflowing_neg();
+    println(f"u8 overflowing_neg: {uv} {uf} {uv2} {uf2}");
+    let big: i64 = 9223372036854775807;
+    println(f"i64: {ol(big.checked_add(1))} {big.wrapping_add(1)} {big.saturating_add(1)} {ol(big.checked_mul(2))} {ol(10.checked_pow(18u32))} {ol(10.checked_pow(19u32))} {10.saturating_pow(19u32)} {(-10).saturating_pow(19u32)}");
+    // bit counts
+    let x: i32 = -1;
+    let y: u16 = 0x00F0;
+    println(f"bits: {x.count_ones()} {x.count_zeros()} {y.count_ones()} {y.leading_zeros()} {y.trailing_zeros()} {y.leading_ones()} {x.leading_ones()} {0u8.leading_zeros()} {0i64.trailing_zeros()} {7u8.trailing_ones()}");
+    let k: i64 = x.count_ones();
+    println(f"BITS: {i8.BITS} {u16.BITS} {i32.BITS} {u64.BITS} {i128.BITS} {usize.BITS} len={i32.BITS - 37i32.leading_zeros()} k={k}");
+    // byte order
+    let p: u16 = 1080;
+    let be = p.to_be_bytes();
+    let le = p.to_le_bytes();
+    println(f"bytes: {be[0]} {be[1]} {le[0]} {le[1]} {u16.from_be_bytes([be[0], be[1]])} {u16.from_le_bytes([be[0], be[1]])}");
+    let q: i32 = -2;
+    let qb = q.to_be_bytes();
+    println(f"i32 bytes: {qb[0]} {qb[1]} {qb[2]} {qb[3]} {i32.from_be_bytes(qb)} {i32.from_le_bytes(q.to_le_bytes())} {i32.from_ne_bytes(q.to_ne_bytes())}");
+    let wb = 0x0102030405060708u64.to_le_bytes();
+    println(f"u64 le: {wb[0]} {wb[7]} {wb.len()}");
+    // Euclid
+    println(f"euclid: {(-7).rem_euclid(3)} {(-7).div_euclid(3)} {7.rem_euclid(-3)} {7.div_euclid(-3)} {(-7).rem_euclid(-3)} {(-7).div_euclid(-3)} {7u8.div_euclid(2)} {7u8.rem_euclid(2)} {(-128i8).rem_euclid(-1)}");
+    println(f"float euclid: {(-7.5).rem_euclid(2.0)} {(-7.5).div_euclid(2.0)} {7.5.rem_euclid(-2.0)} {7.5.div_euclid(-2.0)}");
+    println(f"abs_diff: {3i8.abs_diff(-128)} {(-128i8).abs_diff(127)} {5u8.abs_diff(9)} {(-5).abs_diff(5)}");
+    // isqrt
+    println(f"isqrt: {10.isqrt()} {0.isqrt()} {1.isqrt()} {99.isqrt()} {100.isqrt()} {255u8.isqrt()} {9223372036854775807.isqrt()} {18446744073709551615u64.isqrt()}");
+    // char digits
+    println(f"digits: {'7'.to_digit(10u32) ?? 99u32} {'f'.to_digit(16u32) ?? 99u32} {'F'.to_digit(16u32) ?? 99u32} {'g'.to_digit(16u32) ?? 99u32} {'z'.to_digit(36u32) ?? 99u32} {'9'.to_digit(8u32) ?? 99u32} {'٣'.to_digit(10u32) ?? 99u32}");
+    println(f"is_digit: {'7'.is_digit(10u32)} {'a'.is_digit(10u32)} {'a'.is_digit(11u32)} {'1'.is_digit(2u32)} {'2'.is_digit(2u32)}");
+    println(f"from_digit: {char.from_digit(7u32, 10u32) ?? '?'} {char.from_digit(11u32, 16u32) ?? '?'} {char.from_digit(35u32, 36u32) ?? '?'} {char.from_digit(10u32, 10u32) ?? '?'} {char.from_digit(1u32, 2u32) ?? '?'}");
+    // ASCII case
+    println(f"ascii: {'a'.eq_ignore_ascii_case('A')} {'é'.eq_ignore_ascii_case('É')} {'1'.eq_ignore_ascii_case('1')} {97u8.eq_ignore_ascii_case(65u8)} {65u8.to_ascii_lowercase()} {97u8.to_ascii_uppercase()} {200u8.to_ascii_lowercase()} {'Q'.to_ascii_lowercase()} {'é'.to_ascii_uppercase()}");
+}

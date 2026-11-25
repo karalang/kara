@@ -1,0 +1,10 @@
+fn main() {
+    let ok: Result[i64, String] = Ok(2);
+    let bad: Result[i64, String] = Err("e".to_string());
+    println(ok.clone().ok() ?? 0);
+    println(bad.clone().err() ?? "none".to_string());
+    println(bad.clone().map_or_else(|e| e.len() * 100, |v| v));
+    println(bad.clone().or_else(|e| if e == "e" { Ok(7) } else { Err(0) }).unwrap_or(0));
+    println(bad.clone().unwrap_or_default());
+    println(ok.map_err(|e| e.len()).unwrap_or(0));
+}

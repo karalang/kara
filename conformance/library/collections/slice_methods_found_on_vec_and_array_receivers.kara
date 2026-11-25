@@ -1,0 +1,9 @@
+fn main() {
+    let v: Vec[i64] = [5, 6, 7].to_vec();
+    let a: Array[i64, 3] = [5, 6, 7];
+    let s: Slice[i64] = v.as_slice();
+    println(v.ends_with([6, 7]));
+    println(a.ends_with([6, 7]));
+    println(s.ends_with([6, 7]));
+    println(v[1..].len());
+}

@@ -1,0 +1,4 @@
+same has writes(Stdout)
+copy_of has writes(Stderr)
+copy_of lacks writes(Stdout)
+present lacks writes(Stdout), writes(Stderr)

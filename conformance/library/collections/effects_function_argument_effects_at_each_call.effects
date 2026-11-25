@@ -1,0 +1,2 @@
+loud has writes(Stdout)
+quiet lacks writes(Stdout)

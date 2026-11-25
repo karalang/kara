@@ -1,0 +1,10 @@
+fn main() {
+    let c: ref CStr = c"hi there";
+    println(c.len());
+    println(c.is_empty());
+    println(c"".is_empty());
+    println(c.bytes().len());
+    println(c.to_str() ?? "bad");
+    let p: *const u8 = c.as_ptr();
+    println(p.is_null());
+}

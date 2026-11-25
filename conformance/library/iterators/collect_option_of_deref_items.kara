@@ -1,0 +1,5 @@
+fn main() {
+    let v: Vec[i64] = [1, 2];
+    let o: Option[Vec[i64]] = v.iter().map(|x| Some(*x)).collect();
+    println(o);
+}

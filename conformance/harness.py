@@ -60,9 +60,12 @@ def run(src: str, backends=("interp", "build"), stdin: str = "", timeout: int = 
             return out
 
         def once(cmd):
+            # Each run in its own empty directory, so relative paths a program
+            # writes start from nothing and stay out of the caller's tree.
+            work = tempfile.mkdtemp(prefix="run-", dir=d)
             try:
                 r = subprocess.run(cmd, capture_output=True, text=True, input=stdin, timeout=timeout,
-                                   env=run_env)
+                                   env=run_env, cwd=work, errors="surrogateescape")
                 return (r.returncode, r.stdout, r.stderr)
             except subprocess.TimeoutExpired:
                 return (-999, "", f"timed out after {timeout}s")

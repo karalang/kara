@@ -1,0 +1,13 @@
+fn main() {
+    let mut q: PriorityQueue[i64] = PriorityQueue.new();
+    for x in [5, 3, 8, 1, 9, 2] { q.push(x); }
+    let a: Vec[i64] = q.iter().cloned().collect();
+    let mut s = a.clone();
+    s.sort();
+    println(s);
+    println(a[0]);
+    println(q);
+    let shown = f"{q}";
+    let b = q.into_vec();
+    println(f"{b}" == shown);
+}

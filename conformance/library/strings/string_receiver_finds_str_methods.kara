@@ -1,0 +1,8 @@
+fn main() {
+    let s = "  Hello, World  ".to_string();
+    println(s.trim());
+    println(s.contains("World"));
+    println(s.find("W") ?? -1);
+    let v: Str = s.as_str();
+    println(v.trim_start().len());
+}

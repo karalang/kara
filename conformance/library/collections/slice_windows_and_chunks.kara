@@ -1,0 +1,9 @@
+fn main() {
+    let v: Vec[i64] = [1, 2, 3, 4, 5].to_vec();
+    println(v.windows(3));
+    println(v.windows(6).len());
+    println(v.chunks(2));
+    println(v.chunks(5));
+    let e: Vec[i64] = Vec.new();
+    println(e.chunks(2).len());
+}

@@ -1,0 +1,9 @@
+fn noisy(x: i64) -> i64 { println(f"default {x}"); x }
+fn main() {
+    let o = Some(1);
+    println(o.unwrap_or(noisy(9)));
+    println(o ?? noisy(8));
+    println(o.unwrap_or_else(|| noisy(7)));
+    let n: Option[i64] = None;
+    println(n ?? noisy(6));
+}

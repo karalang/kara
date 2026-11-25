@@ -1,0 +1,4 @@
+fn main() {
+    let mut s: Set[i64] = Set.from([1]);
+    for x in s.iter_mut() { *x += 1; }
+}
