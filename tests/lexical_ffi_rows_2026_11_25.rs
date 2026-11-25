@@ -105,3 +105,23 @@ fn c_string_literal_ends_in_a_nul() {
 fn host_fn_on_native_calls_c() {
     runs("ffi", "host_fn_native_lowers_to_c");
 }
+
+/// B-2026-11-25-13: a derive on an opaque type is a trait impl, refused as
+/// one (design.md §15, 6812).
+#[test]
+fn opaque_type_derive_is_refused() {
+    let out = check("ffi", "opaque_derive_refused");
+    assert!(
+        out.contains("E_OPAQUE_TYPE_NO_INHERENT_OR_TRAIT_IMPLS"),
+        "{out}"
+    );
+}
+
+/// B-2026-11-25-13: a struct pattern over an opaque type is field access by
+/// another name, refused with the field code (design.md §15, 6811).
+#[test]
+fn opaque_type_struct_pattern_is_refused() {
+    let out = check("ffi", "opaque_pattern_match_refused");
+    assert!(out.contains("E_OPAQUE_TYPE_NO_FIELDS"), "{out}");
+    assert!(!out.contains("E0516"), "{out}");
+}

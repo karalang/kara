@@ -4455,6 +4455,23 @@ impl<'a> super::TypeChecker<'a> {
         // intrinsic family per `design.md § Field Offsets`; the
         // intrinsic surface does not exist in user code today.
         self.env.opaque_foreign_types.insert(o.name.clone());
+        // B-2026-11-25-13 — design.md §15 (6813): a derive is a trait impl,
+        // and an opaque type takes none.
+        for attr in o.attributes.iter().filter(|a| a.is_bare("derive")) {
+            let name = &o.name;
+            self.type_error(
+                format!(
+                    "error[E_OPAQUE_TYPE_NO_INHERENT_OR_TRAIT_IMPLS]: cannot write \
+                     `#[derive(..)]` on opaque foreign type '{name}': a derive is a \
+                     trait implementation, and an opaque type has no Kāra-visible methods \
+                     or trait implementations. Wrap '{name}' in a Kāra-side newtype (e.g. \
+                     `shared struct {name}Handle {{ p: ref {name} }}`) and derive or impl \
+                     on the wrapper instead"
+                ),
+                attr.span,
+                TypeErrorKind::TypeMismatch,
+            );
+        }
     }
 
     fn env_add_extern_function(&mut self, e: &ExternFunction) {

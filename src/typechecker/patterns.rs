@@ -1921,6 +1921,41 @@ impl<'a> super::TypeChecker<'a> {
                 let names_struct =
                     variant_fields.is_none() && self.env.structs.contains_key(&struct_name);
 
+                // B-2026-11-25-13 — design.md §15 (6811): matching an opaque
+                // foreign type's "fields" is field access by another name, so
+                // it is refused with the field-access code. The sub-patterns
+                // bind at the error type so the arm body does not cascade.
+                if variant_fields.is_none()
+                    && !names_struct
+                    && self.env.opaque_foreign_types.contains(&struct_name)
+                {
+                    self.type_error(
+                        format!(
+                            "error[E_OPAQUE_TYPE_NO_FIELDS]: opaque foreign type \
+                             '{struct_name}' has no fields visible to Kāra; the C side \
+                             owns the layout, so a struct pattern cannot destructure \
+                             it. Pass the reference to a foreign function declared in \
+                             the same `unsafe extern {{ }}` block instead"
+                        ),
+                        pattern.span,
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    for field in fields {
+                        match &field.pattern {
+                            Some(sub) => self.check_pattern_against(sub, &Type::Error, mode),
+                            None => {
+                                let synthetic = Pattern {
+                                    id: crate::ids::NodeId::DUMMY,
+                                    kind: PatternKind::Binding(field.name.clone()),
+                                    span: field.span,
+                                };
+                                self.check_pattern_against(&synthetic, &Type::Error, mode);
+                            }
+                        }
+                    }
+                    return;
+                }
+
                 // B-2026-09-01-38 — design.md § Part 8 `Drop` rejects a
                 // partial move out of a `Drop`-implementing struct, and a
                 // struct pattern is one spelling of that move.
