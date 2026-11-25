@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 756 |
+| diagnostics | 760 |
 | false-positive | 373 |
 | missing-feature | 254 |
 | perf | 203 |
@@ -66,8 +66,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | soundness | 131 |
 | miscompile | 107 |
 | run-vs-build | 69 |
-| crash | 65 |
-| codegen-gap | 46 |
+| crash | 66 |
+| codegen-gap | 47 |
 | use-after-free | 13 |
 | leak | 5 |
 | double-free | 2 |
@@ -76,10 +76,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 904 |
-| mir | 333 |
-| mir-llvm | 325 |
-| cli | 310 |
+| typecheck | 909 |
+| mir | 335 |
+| mir-llvm | 326 |
+| cli | 312 |
 | parser | 162 |
 | ownership | 136 |
 | runtime | 110 |
@@ -137,6 +137,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-25-15 | 2026-11-25 | other | low | `#[allow(undocumented_unsafe)]` on an `unsafe { }` block and `#![allow(undocumented_unsafe)]` on a module do not silence the warning; design.md 6284 promises both levels | — |
 | B-2026-11-25-16 | 2026-11-25 | cli | low | Three §15 refusals promise a fix that `karac fix` does not apply: `&x as *const T` (6360: replace with `ptr.const(..)`), `p as usize` (6428: the fix offers `ptr.addr(p)`), and `extern "C-unwind"` imports (6690: E0415 with `"C"` as the fix) | — |
 | B-2026-11-25-17 | 2026-11-25 | cli | low | `karac explain` of `.discriminant()` on an enum with no `#[repr]` does not say the value is local, not a semver contract (design.md 6563); it prints only the effects lines | — |
+| B-2026-11-25-19 | 2026-11-25 | typecheck+cli | low | `lossless_cast` misses a widening cast of a `ref` operand in a binary operation or compound assignment: `total += x as i64` and `total + x as i64`, with `x` the `ref i32` that `target.iter()` yields and `total: i64`, pass silently, while `total += n as i64` with `n: i32` and `let z: i64 = x as i64` are linted and `total += x` checks and runs | — |
+| B-2026-11-25-20 | 2026-11-25 | typecheck | low | `at = parent[at]`, with `let mut at = start;` an `i32` from `for start in 0..n` (`n: i32`) and `parent: Vec[i64]`, is refused with E0200 'Write an explicit `as i32`' at the `i64` value: the binding took its type from its first value, and the help names only the narrowing cast, not the binding's type (`let mut at: i64 = start;`), which keeps every value | — |
+| B-2026-11-25-21 | 2026-11-25 | typecheck | low | `lossless_cast` (W0310) on a byte literal operand, `b'z' as i64 - top` with `top: i64`, offers no fix: `lint_unneeded_cast`'s fix-eligible operand kinds list `Integer` but not `ByteLit`, though deleting ` as i64` keeps `b'z'` whole and the subtraction widens it as the warning says | — |
+| B-2026-11-25-22 | 2026-11-25 | typecheck+mir | medium | A cursor over a `shared struct` list started from a `for` item, `for start in nodes.iter() { let mut at = start; loop { let Some(n) = at.next else { break; }; at = n; } }`, passes `karac check` and stops every lane with 'invalid MIR: assigning shared Node to _21 of type ref shared Node': `at` is a `ref Node` and `n`, a counted handle in the MIR, is let through as a borrow | — |
+| B-2026-11-25-23 | 2026-11-25 | mir+mir-llvm | medium | `mx.max(f)` with `mx: i64` (a literal's default) and `f: ref i32` from an adapted iterator (`flips.iter().rev()`, `.skip(1)`, `.filter(..)`) passes `karac check` and stops both lanes: 'call of unknown function i64.max' (interp), 'native `i64.max` is not lowered yet' (llvm); over a plain `flips.iter()` it runs | — |
 
 ### Relocated
 
@@ -2281,6 +2286,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-24-45 | mir | medium | A function declaring a keyed resource (`fn save(i: u64) with writes(UserDb[i])`, over the deferred `effect resource UserDb[id: u64];`) is charged not… | f2af9c2119 |
 | B-2026-11-24-47 | parser | low | Kotlin and Swift first-day habits had no Kāra form or a misleading one: `val`, `fun f(): T = e`, `Int` / `Double` / `Bool`, `T?`, `?:`, `!!` / `!`, `… | 6be22cb42b |
 | B-2026-11-25-2 | typecheck+cli | low | 116 diagnostic codes carried neither a machine fix nor help on any emission (the fix-coverage table's kind none); type and effect errors had no help… | 32ed7d3767 |
+| B-2026-11-25-18 | typecheck+cli | low | A `scan` seeded with a negated literal (`arr.iter().rev().scan(-1, \|m, x\| ..)` over `i32` items into a `Vec[i32]`, a running maximum as LeetCode's Ru… | b45cd107b3 |
 
 </details>
 
