@@ -2906,9 +2906,14 @@ impl<'a> super::TypeChecker<'a> {
             p,
             Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char
         ))) && items.iter().all(|e| matches!(e.kind, ExprKind::Tuple(_)));
+        // `[3, 3, 1].to_vec()` into a `Vec[i32]`, as Rust writes a `Vec`
+        // (kata 1329's harness): the literals take the slot's number as they
+        // do in a bare list literal, rather than the default `i64` that
+        // mismatched the annotated binding (B-2026-11-24-43). A value of
+        // another type is still refused, at the value.
         if name != "Vec"
             || contains_type_var(elem)
-            || !(mentions_str_view(elem) || waits || copy_tuples)
+            || !(mentions_str_view(elem) || waits || copy_tuples || mentions_narrow_number(elem))
         {
             return None;
         }
@@ -22383,6 +22388,21 @@ fn is_literal_to_vec(e: &Expr) -> bool {
         if method == "to_vec"
             && args.is_empty()
             && matches!(&object.kind, ExprKind::ArrayLiteral(items) if !items.is_empty()))
+}
+
+/// Whether `ty` holds a number other than the literal defaults `i64` and
+/// `f64` anywhere: itself, a tuple element, or a type argument
+/// (B-2026-11-24-43).
+fn mentions_narrow_number(ty: &Type) -> bool {
+    match ty {
+        Type::Int(size) => *size != IntSize::I64,
+        Type::UInt(_) => true,
+        Type::Float(size) => *size != FloatSize::F64,
+        Type::Named { args, .. } => args.iter().any(mentions_narrow_number),
+        Type::Tuple(ts) => ts.iter().any(mentions_narrow_number),
+        Type::Array { element, .. } => mentions_narrow_number(element),
+        _ => false,
+    }
 }
 
 /// Whether `ty` holds a `Str` anywhere: itself, a tuple element, or a type
