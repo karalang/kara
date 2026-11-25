@@ -863,6 +863,30 @@ pub unsafe extern "C" fn karac_mir_map_lookup_hv(
     }
 }
 
+/// The order of two `i64` keys, `-1`, `0` or `1`: the glue compiled code
+/// passes for a sorted table keyed by `i64` (`src/backend/mir/table.rs`),
+/// which the table recognizes by its address and compares in place rather
+/// than calling it (B-2026-11-24-41).
+///
+/// # Safety
+/// `a` and `b` each point at an `i64`.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_cmp_i64(a: *const u8, b: *const u8) -> i32 {
+    // SAFETY: the caller's contract.
+    let (x, y) = unsafe {
+        (
+            a.cast::<i64>().read_unaligned(),
+            b.cast::<i64>().read_unaligned(),
+        )
+    };
+    (x > y) as i32 - (x < y) as i32
+}
+
+/// Whether `cmp` is [`karac_mir_cmp_i64`].
+fn is_cmp_i64(cmp: CmpFn) -> bool {
+    std::ptr::eq(cmp as *const (), karac_mir_cmp_i64 as *const ())
+}
+
 /// # Safety
 /// `m` is live; `key` a key of its type; `cmp` its order.
 unsafe fn search(m: &MirMap, key: *const u8, cmp: CmpFn) -> Result<usize, usize> {
@@ -870,12 +894,20 @@ unsafe fn search(m: &MirMap, key: *const u8, cmp: CmpFn) -> Result<usize, usize>
         // SAFETY: the caller's contract.
         return unsafe { t.find(key) }.0;
     }
+    let i64_keys = is_cmp_i64(cmp);
     let (mut lo, mut hi) = (0, m.len());
     while lo < hi {
         let mid = (lo + hi) / 2;
         // SAFETY: the caller's contract; a sorted array has no holes, so
         // its indices are its slots.
-        match unsafe { cmp(m.slot_ptr(mid), key) } {
+        let o = if i64_keys {
+            // SAFETY: as above; both are `i64` keys.
+            unsafe { karac_mir_cmp_i64(m.slot_ptr(mid), key) }
+        } else {
+            // SAFETY: as above.
+            unsafe { cmp(m.slot_ptr(mid), key) }
+        };
+        match o {
             0 => return Ok(mid),
             o if o < 0 => lo = mid + 1,
             _ => hi = mid,

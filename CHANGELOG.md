@@ -2380,6 +2380,16 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Performance
 
+- A compiled `SortedMap` or `SortedSet` past 16 KiB of entries inserts a
+  key about 1.7 times as fast. An insert of a key a lookup has just
+  missed (`m.insert(k, v)`, `*m.entry(k).or_insert(0) += 1`) takes the
+  place in the tree that the lookup found rather than search again,
+  `entry(k).or_insert` reads the new entry by the index the insert hands
+  back rather than look it up a third time, and `i64` keys are compared
+  in place with no call per comparison. 100 rounds of 10^5 random keys
+  take 1.5 s rather than 2.6 s with `insert` and 1.6 s rather than 3.6 s
+  with `entry(k).or_insert(0)`, against 1.0 s for Rust's `BTreeMap`; kata
+  1296's bench runs 1.2 times Rust rather than 2 (B-2026-11-24-41).
 - `v.into_iter()` no longer copies the vector into a second one on its
   first `next`: it walks a cursor over the vector it took, as Rust's
   `vec::IntoIter` does, reading each element out in place, so the first

@@ -22,6 +22,7 @@
 //! merge keeps the left node, so a node's leftmost leaf changes only where
 //! [`Tree::fix`] refreshes it.
 
+use std::cell::Cell;
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 
 use super::CmpFn;
@@ -41,6 +42,47 @@ const LEAF_BYTES: usize = 2048;
 const DENSE_BYTES: usize = 16384;
 /// The cursor while it names no leaf.
 const NO_CURSOR: u64 = u64::MAX;
+/// The levels of inner nodes a [`Miss`] records: a tree this tall holds
+/// at least `2 * (INNER_MIN - 1)^7` leaves, more than any memory has.
+const MISS_LEVELS: usize = 8;
+
+/// Where this thread's last search that missed would have put its key:
+/// the tree and its [`Tree::gen`] then, the leaf and the place in it, and
+/// the inner nodes above that leaf with the child taken at each. Compiled
+/// code inserts a key a search just missed (`m[k] = v`, `entry`, a count),
+/// and [`Tree::insert`] takes the place from here rather than descend the
+/// tree again (B-2026-11-24-41). Per thread, since readers share a table.
+struct Miss {
+    tree: Cell<*const Tree>,
+    gen: Cell<u64>,
+    leaf: Cell<*mut Leaf>,
+    pos: Cell<usize>,
+    path: [Cell<*mut Inner>; MISS_LEVELS],
+    kids: [Cell<u8>; MISS_LEVELS],
+    /// The inserts that took their place from here.
+    #[cfg(test)]
+    taken: Cell<usize>,
+}
+
+thread_local! {
+    static MISS: Miss = const {
+        Miss {
+            tree: Cell::new(std::ptr::null()),
+            gen: Cell::new(0),
+            leaf: Cell::new(std::ptr::null_mut()),
+            pos: Cell::new(0),
+            path: [const { Cell::new(std::ptr::null_mut()) }; MISS_LEVELS],
+            kids: [const { Cell::new(0) }; MISS_LEVELS],
+            #[cfg(test)]
+            taken: Cell::new(0),
+        }
+    };
+}
+
+/// The next tree's first [`Tree::gen`]: each tree counts its changes from
+/// its own base, `1 << 32` apart, so a tree built where a freed one was
+/// does not match a [`Miss`] of the freed one.
+static NEXT_GEN: AtomicU64 = AtomicU64::new(1 << 32);
 
 /// The entries a leaf of `es`-byte entries has room for.
 pub(super) fn lcap_for(es: usize) -> usize {
@@ -137,11 +179,11 @@ impl<T: Copy> Row<T> {
 impl Row<usize> {
     /// The counts of the children in `from..to`.
     fn sum(&self, from: usize, to: usize) -> usize {
-        let mut s = 0;
-        for k in from..to {
-            s += self[k];
+        if from > to || to > FAN {
+            overrun()
         }
-        s
+        // One check for the run, so the adds vectorize (B-2026-11-24-41).
+        self.0[from..to].iter().sum()
     }
 }
 
@@ -175,6 +217,9 @@ pub(super) struct Tree {
     lcap: usize,
     es: usize,
     cmp: CmpFn,
+    /// `cmp` is [`super::karac_mir_cmp_i64`]: keys are compared here,
+    /// with no call through `cmp` (B-2026-11-24-41).
+    i64_keys: bool,
     /// Every live leaf, by its `id`; a freed leaf's place is null and
     /// waits in `free_ids`.
     leaves: LeanVec<*mut Leaf>,
@@ -185,6 +230,9 @@ pub(super) struct Tree {
     /// a reader racing another reader of the same table sees a whole
     /// cursor or none. A change to the tree forgets it.
     cursor: AtomicU64,
+    /// Changes with every insert and removal, so a [`Miss`] that names
+    /// this tree and this `gen` names live nodes and a place still right.
+    gen: u64,
 }
 
 /// Allocates `size` bytes, as the table's other blocks are.
@@ -210,9 +258,11 @@ impl Tree {
                 lcap,
                 es,
                 cmp,
+                i64_keys: super::is_cmp_i64(cmp),
                 leaves: LeanVec::new(),
                 free_ids: LeanVec::new(),
                 cursor: AtomicU64::new(NO_CURSOR),
+                gen: NEXT_GEN.fetch_add(1 << 32, Relaxed),
             })
         };
         // SAFETY: as above.
@@ -338,19 +388,62 @@ impl Tree {
         }
     }
 
+    /// `cmp(a, b)`, read in place for `i64` keys.
+    ///
+    /// # Safety
+    /// `a` and `b` are keys of the table's type.
+    #[inline(always)]
+    unsafe fn order(&self, a: *const u8, b: *const u8) -> i32 {
+        if self.i64_keys {
+            // SAFETY: the caller's contract: each is an `i64` at offset 0.
+            let (x, y) = unsafe {
+                (
+                    a.cast::<i64>().read_unaligned(),
+                    b.cast::<i64>().read_unaligned(),
+                )
+            };
+            (x > y) as i32 - (x < y) as i32
+        } else {
+            // SAFETY: as above.
+            unsafe { (self.cmp)(a, b) }
+        }
+    }
+
     /// The child of `p` whose keys `key` falls among: the last whose
     /// leftmost leaf's first key is at most `key`, or the first.
     ///
     /// # Safety
     /// `p` is a live inner node; `key` a key of the table's type.
     unsafe fn kid_for(&self, p: *const Inner, key: *const u8) -> usize {
+        if self.i64_keys {
+            // SAFETY: the caller's contract; a leaf below an inner node is
+            // never empty, and its first key is an `i64` at offset 0.
+            unsafe {
+                let k = key.cast::<i64>().read_unaligned();
+                let p = &*p;
+                let firsts = p.firsts.0.as_ptr();
+                // Halving with no branch on the comparison: the last child
+                // whose first key is at most `k`, else the first.
+                let (mut base, mut n) = (0, p.len.min(FAN));
+                while n > 1 {
+                    let half = n / 2;
+                    // `base + n` never grows past the children, so this is one.
+                    let l = *firsts.add(base + half);
+                    if l.cast::<u8>().add(LEAF_AT).cast::<i64>().read() <= k {
+                        base += half;
+                    }
+                    n -= half;
+                }
+                return base;
+            }
+        }
         // SAFETY: the caller's contract; a leaf below an inner node is
         // never empty.
         unsafe {
             let (mut lo, mut hi) = (0, (&*p).len);
             while hi - lo > 1 {
                 let mid = (lo + hi) / 2;
-                if (self.cmp)(entry((&*p).firsts[mid], self.es, 0), key) <= 0 {
+                if self.order(entry((&*p).firsts[mid], self.es, 0), key) <= 0 {
                     lo = mid;
                 } else {
                     hi = mid;
@@ -366,12 +459,39 @@ impl Tree {
     /// # Safety
     /// `l` is a live leaf; `key` a key of the table's type.
     unsafe fn bisect(&self, l: *mut Leaf, key: *const u8) -> Result<usize, usize> {
+        if self.i64_keys {
+            // SAFETY: the caller's contract; each entry's key is an `i64`
+            // at offset 0, and every index read is below the leaf's length.
+            unsafe {
+                let (k, n, es) = (key.cast::<i64>().read_unaligned(), (*l).len, self.es);
+                if n == 0 {
+                    return Err(0);
+                }
+                let at = |i: usize| entry(l, es, i).cast::<i64>().read_unaligned();
+                // The last entry whose key is below `k`, else the first,
+                // halving with no branch on the comparison.
+                let (mut base, mut m) = (0, n);
+                while m > 1 {
+                    let half = m / 2;
+                    if at(base + half) < k {
+                        base += half;
+                    }
+                    m -= half;
+                }
+                let pos = base + usize::from(at(base) < k);
+                return if pos < n && at(pos) == k {
+                    Ok(pos)
+                } else {
+                    Err(pos)
+                };
+            }
+        }
         // SAFETY: the caller's contract.
         let (mut lo, mut hi) = (0, unsafe { (*l).len });
         while lo < hi {
             let mid = (lo + hi) / 2;
             // SAFETY: as above; `mid < len`.
-            match unsafe { (self.cmp)(entry(l, self.es, mid), key) } {
+            match unsafe { self.order(entry(l, self.es, mid), key) } {
                 0 => return Ok(mid),
                 o if o < 0 => lo = mid + 1,
                 _ => hi = mid,
@@ -389,11 +509,15 @@ impl Tree {
     pub(super) unsafe fn find(&self, key: *const u8) -> (Result<usize, usize>, *mut Leaf, usize) {
         let mut node = self.root;
         let mut rank = 0;
-        for _ in 0..self.height {
+        let mut path = [(std::ptr::null_mut(), 0); MISS_LEVELS];
+        for lv in 0..self.height {
             let p = node.cast::<Inner>();
             // SAFETY: a live inner node.
             unsafe {
                 let j = self.kid_for(p, key);
+                if let Some(at) = path.get_mut(lv) {
+                    *at = (p, j as u8);
+                }
                 rank += (&mut *p).counts.sum(0, j);
                 node = (&mut *p).kids[j];
             }
@@ -402,7 +526,10 @@ impl Tree {
         // SAFETY: a live leaf.
         match unsafe { self.bisect(l, key) } {
             Ok(k) => (Ok(rank + k), l, k),
-            Err(k) => (Err(rank + k), l, k),
+            Err(k) => {
+                self.missed(&path, l, k);
+                (Err(rank + k), l, k)
+            }
         }
     }
 
@@ -413,17 +540,112 @@ impl Tree {
     pub(super) unsafe fn lookup(&self, key: *const u8) -> *mut u8 {
         // As `find`, without counting the entries before the leaf.
         let mut node = self.root;
-        for _ in 0..self.height {
+        let mut path = [(std::ptr::null_mut(), 0); MISS_LEVELS];
+        for lv in 0..self.height {
             let p = node.cast::<Inner>();
             // SAFETY: the caller's contract; a live inner node.
-            unsafe { node = (&mut *p).kids[self.kid_for(p, key)] };
+            unsafe {
+                let j = self.kid_for(p, key);
+                if let Some(at) = path.get_mut(lv) {
+                    *at = (p, j as u8);
+                }
+                node = (&mut *p).kids[j];
+            }
         }
         let l = node.cast::<Leaf>();
         // SAFETY: as above; a live leaf.
         match unsafe { self.bisect(l, key) } {
             Ok(k) => entry(l, self.es, k),
-            Err(_) => std::ptr::null_mut(),
+            Err(k) => {
+                self.missed(&path, l, k);
+                std::ptr::null_mut()
+            }
         }
+    }
+
+    /// Records a search that missed, at `pos` in the leaf `l` under the
+    /// inner nodes `path`, as this thread's [`Miss`].
+    fn missed(&self, path: &[(*mut Inner, u8); MISS_LEVELS], l: *mut Leaf, pos: usize) {
+        if self.height > MISS_LEVELS {
+            return;
+        }
+        let _ = MISS.try_with(|m| {
+            m.tree.set(self);
+            m.gen.set(self.gen);
+            m.leaf.set(l);
+            m.pos.set(pos);
+            // Zipped rather than indexed: the table natives link no panic
+            // path (`tests/mir_panic_free_floor.rs`).
+            let into = m.path.iter().zip(m.kids.iter());
+            for ((pc, jc), &(p, j)) in into.zip(path.iter()).take(self.height) {
+                pc.set(p);
+                jc.set(j);
+            }
+        });
+    }
+
+    /// Inserts `e` where this thread's [`Miss`] says, when it names this
+    /// tree unchanged, a leaf with room, and a place between `e`'s
+    /// neighbours: `e`'s index, the leaf and its place there, else `None`
+    /// and nothing changed.
+    ///
+    /// # Safety
+    /// As [`Tree::insert`].
+    unsafe fn insert_missed(&mut self, e: *const u8) -> Option<(usize, *mut Leaf, usize)> {
+        let me: *const Tree = self;
+        MISS.try_with(|m| {
+            if m.tree.get() != me || m.gen.get() != self.gen {
+                return None;
+            }
+            m.tree.set(std::ptr::null());
+            let (l, pos, es) = (m.leaf.get(), m.pos.get(), self.es);
+            // SAFETY: the tree has not changed since the search that
+            // recorded the miss, so its leaf and nodes are live and `pos`
+            // is at most the leaf's length; `e` is the caller's.
+            unsafe {
+                let n = (*l).len;
+                if n >= self.lcap {
+                    return None;
+                }
+                let below = if pos > 0 {
+                    entry(l, es, pos - 1)
+                } else if !(*l).prev.is_null() {
+                    let p = (*l).prev;
+                    entry(p, es, (*p).len - 1)
+                } else {
+                    std::ptr::null_mut()
+                };
+                if !below.is_null() && self.order(below, e) >= 0 {
+                    return None;
+                }
+                let above = if pos < n {
+                    entry(l, es, pos)
+                } else if !(*l).next.is_null() {
+                    entry((*l).next, es, 0)
+                } else {
+                    std::ptr::null_mut()
+                };
+                if !above.is_null() && self.order(e, above) >= 0 {
+                    return None;
+                }
+                let mut rank = pos;
+                // A miss is recorded only under at most `MISS_LEVELS`.
+                let path = m.path.iter().zip(m.kids.iter()).take(self.height);
+                for (pc, jc) in path {
+                    let (p, j) = (pc.get(), jc.get() as usize);
+                    rank += (&*p).counts.sum(0, j);
+                    (&mut *p).counts[j] += 1;
+                }
+                std::ptr::copy(entry(l, es, pos), entry(l, es, pos + 1), (n - pos) * es);
+                std::ptr::copy_nonoverlapping(e, entry(l, es, pos), es);
+                (*l).len = n + 1;
+                #[cfg(test)]
+                m.taken.set(m.taken.get() + 1);
+                Some((rank, l, pos))
+            }
+        })
+        .ok()
+        .flatten()
     }
 
     /// The entry at index `i < len`: from the leaf the last index reached,
@@ -478,6 +700,15 @@ impl Tree {
     /// `e` is readable for an entry of the table's type.
     pub(super) unsafe fn insert(&mut self, e: *const u8) -> usize {
         self.forget();
+        // SAFETY: the caller's contract.
+        if let Some((rank, l, pos)) = unsafe { self.insert_missed(e) } {
+            self.len += 1;
+            self.gen += 1;
+            // The entry is most often read next, by its index.
+            self.remember(l, rank - pos);
+            return rank;
+        }
+        self.gen += 1;
         // SAFETY: the caller's contract.
         let (rank, split) = unsafe { self.ins(self.root, self.height, e) };
         if let Some((kid, count)) = split {
@@ -638,6 +869,7 @@ impl Tree {
     /// `out` is writable for an entry.
     pub(super) unsafe fn remove_at(&mut self, i: usize, out: *mut u8) {
         self.forget();
+        self.gen += 1;
         // SAFETY: the caller's contract.
         unsafe { self.rm(self.root, self.height, i, out) };
         self.len -= 1;
@@ -903,6 +1135,9 @@ mod tests {
     struct T {
         h: *mut MirMap,
         es: usize,
+        /// The key compare: the test's own, through a call, or the
+        /// backend's for `i64` keys, which the tree reads in place.
+        kc: CmpFn,
     }
 
     impl T {
@@ -910,12 +1145,14 @@ mod tests {
             let e = entry(k, self.es);
             // SAFETY: a live (or null) table of `es`-byte entries.
             unsafe {
-                karac_mir_map_insert(&mut self.h, self.es as u64, e.as_ptr(), None, Some(cmp))
+                karac_mir_map_insert(&mut self.h, self.es as u64, e.as_ptr(), None, Some(self.kc))
             }
         }
         fn find(&self, k: i64) -> i64 {
             // SAFETY: as above.
-            unsafe { karac_mir_map_find(self.h, (&k as *const i64).cast(), None, None, Some(cmp)) }
+            unsafe {
+                karac_mir_map_find(self.h, (&k as *const i64).cast(), None, None, Some(self.kc))
+            }
         }
         fn at(&self, i: usize) -> Vec<u8> {
             // SAFETY: as above, with more than `i` entries.
@@ -925,7 +1162,7 @@ mod tests {
         }
         fn pick(&self, k: i64, op: i64) -> i64 {
             // SAFETY: as above.
-            unsafe { karac_mir_map_pick(self.h, (&k as *const i64).cast(), cmp, true, op) }
+            unsafe { karac_mir_map_pick(self.h, (&k as *const i64).cast(), self.kc, true, op) }
         }
         fn in_tree(&self) -> bool {
             // SAFETY: as above.
@@ -940,10 +1177,12 @@ mod tests {
     /// unevenly (B-2026-11-10-39).
     #[test]
     fn a_sorted_table_in_a_tree_matches_a_model() {
-        for es in [8usize, 16, 40, 200] {
+        let both = |es| [(es, cmp as CmpFn), (es, karac_mir_cmp_i64 as CmpFn)];
+        for (es, kc) in [8usize, 16, 40, 200].into_iter().flat_map(both) {
             let mut t = T {
                 h: std::ptr::null_mut(),
                 es,
+                kc,
             };
             let mut model: Vec<i64> = Vec::new();
             let mut rng = 0x9E37_79B9u64 ^ es as u64;
@@ -1026,7 +1265,7 @@ mod tests {
                                     (&k as *const i64).cast(),
                                     None,
                                     None,
-                                    Some(cmp),
+                                    Some(t.kc),
                                 );
                                 assert!(!at.is_null());
                                 karac_mir_map_remove_entry(t.h, at, out.as_mut_ptr());
@@ -1100,6 +1339,7 @@ mod tests {
         let mut t = T {
             h: std::ptr::null_mut(),
             es: 16,
+            kc: karac_mir_cmp_i64,
         };
         for k in 0..200_000i64 {
             assert_eq!(t.insert(-k), 0);
@@ -1118,5 +1358,109 @@ mod tests {
         }
         // SAFETY: as above.
         unsafe { karac_mir_map_free(t.h) };
+    }
+
+    /// An insert of a key a lookup just missed takes the lookup's place
+    /// rather than descend again (B-2026-11-24-41), and lands where a model
+    /// puts it whatever came between: a lookup of another key, of the
+    /// other table, a removal, a split; under both the `i64` compare the
+    /// backend passes and a compare through a call.
+    #[test]
+    fn an_insert_takes_the_place_its_lookup_missed() {
+        let cmps: [CmpFn; 2] = [cmp, karac_mir_cmp_i64];
+        for (c, &kc) in cmps.iter().enumerate() {
+            for es in [8usize, 16, 40] {
+                let mut ts = [
+                    T {
+                        h: std::ptr::null_mut(),
+                        es,
+                        kc,
+                    },
+                    T {
+                        h: std::ptr::null_mut(),
+                        es,
+                        kc,
+                    },
+                ];
+                let mut models: [Vec<i64>; 2] = [Vec::new(), Vec::new()];
+                let mut rng = 0x2545_F491u64 ^ ((es as u64) << 8) ^ c as u64;
+                let mut next = || {
+                    rng ^= rng << 13;
+                    rng ^= rng >> 7;
+                    rng ^= rng << 17;
+                    rng
+                };
+                let lookup = |t: &T, k: i64| {
+                    // SAFETY: a live (or null) table of `es`-byte entries.
+                    unsafe {
+                        !karac_mir_map_lookup(t.h, (&k as *const i64).cast(), None, None, Some(kc))
+                            .is_null()
+                    }
+                };
+                let taken0 = super::MISS.with(|m| m.taken.get());
+                let mut inserts = 0;
+                for step in 0..40_000u32 {
+                    let r = next();
+                    let w = (r & 1) as usize;
+                    let key = ((r >> 8) % 20_000) as i64 * 3;
+                    let model = &mut models[w];
+                    let n = model.len();
+                    if n > 2000 && r % 16 == 0 {
+                        let i = (r >> 20) as usize % n;
+                        let mut out = vec![0u8; es];
+                        // SAFETY: a live table with more than `i` entries.
+                        unsafe { karac_mir_map_remove(ts[w].h, i as i64, out.as_mut_ptr()) };
+                        assert_eq!(out, entry(model.remove(i), es));
+                        continue;
+                    }
+                    // Mostly the key itself; else a neighbour, or the
+                    // other table, between the lookup and the insert.
+                    match (r >> 40) % 8 {
+                        0 => {
+                            lookup(&ts[w], key + 1);
+                        }
+                        1 => {
+                            lookup(&ts[1 - w], key);
+                        }
+                        2 => {
+                            lookup(&ts[w], key - 1);
+                        }
+                        _ => {
+                            lookup(&ts[w], key);
+                        }
+                    }
+                    let at = model.partition_point(|&x| x < key);
+                    if model.get(at) == Some(&key) {
+                        continue;
+                    }
+                    let e = entry(key, es);
+                    // SAFETY: as above.
+                    let i = unsafe {
+                        karac_mir_map_insert(&mut ts[w].h, es as u64, e.as_ptr(), None, Some(kc))
+                    };
+                    assert_eq!(i as usize, at, "cmp {c} es {es} step {step} key {key}");
+                    model.insert(at, key);
+                    inserts += 1;
+                    if step % 4096 == 0 {
+                        for (j, k) in model.iter().enumerate() {
+                            assert_eq!(ts[w].at(j), entry(*k, es));
+                        }
+                    }
+                }
+                for w in 0..2 {
+                    assert!(ts[w].in_tree());
+                    for (j, k) in models[w].iter().enumerate() {
+                        assert_eq!(ts[w].at(j), entry(*k, es), "cmp {c} es {es} at {j}");
+                    }
+                    // SAFETY: a live table.
+                    unsafe { karac_mir_map_free(ts[w].h) };
+                }
+                let taken = super::MISS.with(|m| m.taken.get()) - taken0;
+                assert!(
+                    taken * 2 > inserts,
+                    "cmp {c} es {es}: {taken} of {inserts} inserts took a missed place"
+                );
+            }
+        }
     }
 }

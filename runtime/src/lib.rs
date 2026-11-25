@@ -428,6 +428,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir_flags::karac_mir_flag_release_in,
         mir_flags::karac_mir_flag_release_frame,
         mir_flags::karac_mir_flag_conflict,
+        mir_map::karac_mir_cmp_i64,
         mir_map::karac_mir_map_find,
         mir_map::karac_mir_map_insert,
         mir_map::karac_mir_map_find_hv,

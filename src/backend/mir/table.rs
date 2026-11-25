@@ -128,6 +128,17 @@ impl<'ctx> Cx<'ctx, '_> {
         let null = self.ptr_ty().const_null();
         let ptr = |f: inkwell::values::FunctionValue<'ctx>| f.as_global_value().as_pointer_value();
         if t.sorted {
+            // An `i64` key's order is the runtime's own, which a table
+            // recognizes by its address and compares in place rather than
+            // calling (B-2026-11-24-41).
+            if matches!(self.tys.kind(t.key), TyKind::Int(IntTy::I64))
+                && self.own_order(t.key) == KeyOp::Cmp
+            {
+                let p = self.ptr_ty();
+                let ft = self.llcx.i32_type().fn_type(&[p.into(), p.into()], false);
+                let f = self.extern_fn("karac_mir_cmp_i64", ft);
+                return [null, null, ptr(f)];
+            }
             [null, null, ptr(self.key_fn(self.own_order(t.key), t.key))]
         } else {
             let hash = match t.hasher {
@@ -1140,13 +1151,21 @@ impl<'ctx> Cx<'ctx, '_> {
                     self.store_operand(vslot, val)?;
                 }
                 // The probe's hash serves the insert, which says where the
-                // entry went; only a sorted table is searched again.
-                let at = match self.insert_hashed(hp, tmp, t, hv)? {
-                    Some(at) => at,
-                    None => {
-                        let h2 = self.load_ptr(hp)?;
-                        self.lookup(h2, tmp, t)?.0
-                    }
+                // entry went; a sorted table's insert says its index, which
+                // the tree answers from the leaf the insert left its cursor
+                // on, with no second search (B-2026-11-24-41).
+                let at = if t.sorted {
+                    let size = self.i64(self.layout(t.entry)?.size.max(1));
+                    let [hf, _, cf] = self.glue_ptrs(t);
+                    let i = self.mrt_i64(
+                        "map_insert",
+                        &[hp.into(), size.into(), tmp.into(), hf.into(), cf.into()],
+                    )?;
+                    let h2 = self.load_ptr(hp)?;
+                    self.entry_at(h2, i)?
+                } else {
+                    self.insert_hashed(hp, tmp, t, hv)?
+                        .ok_or("a hashed insert without its entry")?
                 };
                 self.store(slot, at.into())?;
                 self.builder.build_unconditional_branch(done).map_err(e)?;
