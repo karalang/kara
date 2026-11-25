@@ -6802,7 +6802,7 @@ unsafe extern "C" {
 - By-value parameters or returns (`fn f(x: own CFile)`, `fn f() -> CFile`): the same diagnostic.
 - A by-value field (`struct S { f: CFile }`): the same diagnostic. A field behind a pointer (`struct S { f: *mut CFile }`) is fine.
 - Field access through a `*mut CFile`: `error[E_OPAQUE_TYPE_NO_FIELDS]`. The compiler cannot know whether a field exists.
-- Method calls: the same diagnostic. Methods cannot be defined on an opaque type.
+- A method call on an opaque type: `error[E_OPAQUE_TYPE_NO_METHODS]`; methods come through a wrapper type. Methods cannot be defined on an opaque type.
 - `CFile.size_of()`, `CFile.align_of()`: `error[E_OPAQUE_TYPE_NO_KNOWN_SIZE]`.
 - Construction: no syntax names `CFile` as a value, so no diagnostic is needed.
 - Pattern matching on an opaque place: as for field access.

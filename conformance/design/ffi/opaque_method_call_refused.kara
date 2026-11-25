@@ -17,6 +17,6 @@ unsafe extern "C" {
         with reads(FileSystem);
 }
 
-// design.md §15 (6808): method calls are the same diagnostic as field access (E_OPAQUE_TYPE_NO_FIELDS).
+// design.md §15 (6808): a method call on an opaque type is E_OPAQUE_TYPE_NO_METHODS (B-2026-11-25-14).
 fn flush(f: ref CFile) { f.flush(); }
 fn main() {}
