@@ -1,0 +1,7 @@
+// design.md §15 (6240, 6364): the cast that adds write capability
+// (`*const T as *mut T`) requires `unsafe { }`: E_PTR_CAST_REQUIRES_UNSAFE.
+fn main() {
+    let x: i64 = 5;
+    let p: *const i64 = ptr.const(x);
+    let q: *mut i64 = p as *mut i64;
+}

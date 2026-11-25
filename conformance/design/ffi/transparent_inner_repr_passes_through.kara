@@ -1,0 +1,11 @@
+// design.md §15 (6666): the inner type's repr carries through; a transparent
+// distinct type over Array[u8, 16] is laid out as uint8_t[16].
+#[repr(C)]
+struct Inner { a: u8, b: u32, c: u8 }
+#[repr(transparent)]
+struct Outer { inner: Inner }
+#[repr(transparent)]
+distinct type Bytes = Array[u8, 16];
+fn main() {
+    println(f"{Outer.size_of()} {Outer.align_of()} {Bytes.size_of()} {Bytes.align_of()}");
+}

@@ -1,0 +1,48 @@
+/// libc.
+///
+/// # Safety
+///
+/// The declarations match glibc.
+unsafe extern "C" {
+    #[kara_name("CFile")]
+    type FILE;                   // C's `FILE`, named `CFile` in Kāra (CN-8)
+
+    fn fopen(path: *const u8, mode: *const u8) -> *mut CFile
+        with reads(FileSystem) writes(FileSystem);
+
+    fn fclose(stream: *mut CFile) -> i32
+        with writes(FileSystem);
+
+    fn fread(buf: *mut u8, size: usize, count: usize, stream: *mut CFile) -> usize
+        with reads(FileSystem);
+}
+
+// design.md §15 Cleanup (6817-6835): a Kāra wrapper owns the pointer and
+// calls the C cleanup in its Drop; the language never destroys a *mut CFile.
+distinct type SafeFile = *mut CFile;
+
+impl Drop for SafeFile {
+    fn drop(mut ref self) {
+        if not ptr.is_null(self.raw()) {
+            let rc = fclose(self.raw());
+            println(f"closed {rc}");
+        }
+    }
+}
+
+fn open_file(path: ref CStr) -> Result[SafeFile, String] {
+    let raw = fopen(path.as_ptr(), c"r".as_ptr());
+    if ptr.is_null(raw) { return Err("fopen failed"); }
+    Ok(SafeFile(raw))
+}
+
+fn main() {
+    match open_file(c"/dev/null") {
+        Ok(_f) => println("opened"),
+        Err(e) => println(e),
+    }
+    match open_file(c"/nonexistent/kara-audit") {
+        Ok(_f) => println("opened"),
+        Err(e) => println(e),
+    }
+}

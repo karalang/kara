@@ -1,0 +1,2 @@
+E_PAYLOAD_DISCRIMINANT_REQUIRES_REPR
+explicit discriminants on payload variants require '#[repr(intN)]' or '#[repr(C)]'

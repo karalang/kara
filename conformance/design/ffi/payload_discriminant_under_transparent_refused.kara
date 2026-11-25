@@ -1,0 +1,4 @@
+// design.md §15 (6591): #[repr(transparent)] does not license payload discriminants.
+#[repr(transparent)]
+enum One { V(i64) = 1 }
+fn main() {}

@@ -1,0 +1,14 @@
+// design.md §15 Host functions (6862, 6869, 6887, 6913): on native a
+// `host fn` lowers to an extern "C" call with the same signature; no body,
+// module scope, attributes and visibility as any item.
+#[derive(Clone, Copy)]
+pub struct Handle { raw: i64 }   // an opaque-handle newtype
+
+host fn labs(x: i64) -> i64 with reads(Env);
+pub host fn llabs(h: Handle) -> i64 with reads(Env);
+#[allow(unused)]
+host fn abs(x: i32) -> i32 with reads(Env);
+
+fn main() {
+    println(f"{labs(-5)} {llabs(Handle { raw: -6 })} {abs(-7)}");
+}

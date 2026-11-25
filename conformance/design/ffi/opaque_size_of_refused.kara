@@ -1,0 +1,21 @@
+/// libc.
+///
+/// # Safety
+///
+/// The declarations match glibc.
+unsafe extern "C" {
+    #[kara_name("CFile")]
+    type FILE;                   // C's `FILE`, named `CFile` in Kāra (CN-8)
+
+    fn fopen(path: *const u8, mode: *const u8) -> *mut CFile
+        with reads(FileSystem) writes(FileSystem);
+
+    fn fclose(stream: *mut CFile) -> i32
+        with writes(FileSystem);
+
+    fn fread(buf: *mut u8, size: usize, count: usize, stream: *mut CFile) -> usize
+        with reads(FileSystem);
+}
+
+// design.md §15 (6809): CFile.size_of() is E_OPAQUE_TYPE_NO_KNOWN_SIZE.
+fn main() { println(f"{CFile.size_of()}"); }

@@ -1,0 +1,18 @@
+// design.md §15 (6310): calling another `unsafe fn` needs
+// `unsafe { other_unsafe_fn() }`, even inside an `unsafe fn` body.
+/// Returns one.
+///
+/// # Safety
+///
+/// None.
+unsafe fn one() -> i64 { 1 }
+/// Returns two.
+///
+/// # Safety
+///
+/// None.
+unsafe fn two() -> i64 { one() + one() }
+fn main() {
+    // Safety: two has no precondition.
+    println(f"{unsafe { two() }}");
+}

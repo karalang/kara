@@ -1,0 +1,23 @@
+// design.md §15 (6461-6464): Pod covers the integer and float primitives,
+// bool (zero is false), tuples and arrays of Pod, and a struct that opts in
+// with #[derive(Pod)] or an empty impl; mem.zeroed() returns T in safe code.
+import std.mem;
+#[derive(Copy, Clone, Pod)]
+struct Px { r: u8, g: u16 }
+#[derive(Copy, Clone)]
+struct Pt { x: f64, y: i32 }
+impl Pod for Pt { }
+fn main() {
+    let buf: Array[u8, 4096] = mem.zeroed(); // ok: u8 is Pod, all zeros is valid
+    let mut sum: i64 = 0;
+    for b in buf { sum += b as i64; }
+    let i: i64 = mem.zeroed();
+    let u: u32 = mem.zeroed();
+    let f: f64 = mem.zeroed();
+    let b: bool = mem.zeroed();
+    let t: (i32, bool) = mem.zeroed();
+    let a: Array[(u8, f32), 2] = mem.zeroed();
+    let px: Px = mem.zeroed();
+    let pt: Pt = mem.zeroed();
+    println(f"{sum} {i} {u} {f} {b} {t.0} {t.1} {a[1].0} {a[1].1} {px.r} {px.g} {pt.x} {pt.y}");
+}

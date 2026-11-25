@@ -1,0 +1,3 @@
+// design.md §15 (6902): a bare parameter of a non-Copy type (a borrow) is not permitted.
+host fn total(xs: Vec[i64]) -> i64 with reads(Env);
+fn main() {}

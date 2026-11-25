@@ -1,0 +1,17 @@
+// design.md §15 Enum discriminant runtime surface (6527-6557): the
+// generated discriminant() and values(), in declaration order.
+#[repr(u8)]
+#[derive(Display)] // `{c}` below prints the variant's name
+enum UsbClass { Audio = 0x01, Hid = 0x03, MassStorage = 0x08 }
+
+fn all() -> Slice[UsbClass] { UsbClass.values() } // static data: borrows nothing
+
+fn main() {
+    let c = UsbClass.Hid;
+    let byte: u8 = c.discriminant(); // 0x03
+    println(f"{byte}");
+    for c in UsbClass.values() {
+        println(f"{c.discriminant()}: {c}");
+    }
+    println(f"{all().len()}");
+}

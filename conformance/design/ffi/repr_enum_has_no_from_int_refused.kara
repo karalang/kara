@@ -1,0 +1,7 @@
+// design.md §15 (6540): there is no From[intN] for a repr enum.
+#[repr(u8)]
+enum UsbClass { Audio = 0x01, Hid = 0x03 }
+fn main() {
+    let raw: u8 = 1;
+    let c: UsbClass = UsbClass.from(raw);
+}

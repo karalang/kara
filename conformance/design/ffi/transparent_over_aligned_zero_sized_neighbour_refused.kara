@@ -1,0 +1,4 @@
+// design.md §15 (6636): `Array[u64, 0]` is 8-aligned and refused as a neighbour.
+#[repr(transparent)]
+struct Q { raw: i32, a: Array[u64, 0] }
+fn main() {}

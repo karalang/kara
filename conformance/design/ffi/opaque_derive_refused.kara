@@ -1,0 +1,11 @@
+/// libc.
+///
+/// # Safety
+///
+/// The declarations match glibc.
+unsafe extern "C" {
+    #[derive(Debug)]
+    type Handle;
+}
+// design.md §15 (6790, 6812): no derives on an opaque type: E_OPAQUE_TYPE_NO_INHERENT_OR_TRAIT_IMPLS.
+fn main() {}

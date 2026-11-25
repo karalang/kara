@@ -1,0 +1,4 @@
+// design.md §15 (6585, 6586): negative values are legal only under a signed repr.
+#[repr(u16)]
+enum Op { Reset = -1, Send(i64) = 2 }
+fn main() {}

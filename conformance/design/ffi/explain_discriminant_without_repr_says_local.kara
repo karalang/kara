@@ -1,0 +1,7 @@
+// design.md §15 Semver lock (6563): a C-like enum without #[repr] has
+// compiler-chosen discriminants; a caller using .discriminant() on it relies
+// on a local property, not a semver contract, and `karac explain` on such a
+// call says so.
+enum Plain { A, B }
+fn code() -> u32 { Plain.B.discriminant() }
+fn main() { println(f"{code()}"); }

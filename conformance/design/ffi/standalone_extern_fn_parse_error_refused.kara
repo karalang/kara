@@ -1,0 +1,4 @@
+// design.md §15 No standalone form (6708): `extern "C" fn name(...);` on
+// its own is a parse error.
+extern "C" fn getpid() -> i32;
+fn main() {}

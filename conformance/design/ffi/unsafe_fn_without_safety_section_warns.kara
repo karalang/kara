@@ -1,0 +1,12 @@
+// design.md §15 (6228, 6257): an `unsafe fn` requires a `# Safety`
+// section in its doc comment.
+/// Reads through `p`.
+unsafe fn rd(p: *const i64) -> i64 {
+    // Safety: the caller guarantees p is valid.
+    unsafe { *p }
+}
+fn main() {
+    let x: i64 = 2;
+    // Safety: ptr.const(x) points at the live local x.
+    println(f"{unsafe { rd(ptr.const(x)) }}");
+}

@@ -1,0 +1,16 @@
+// design.md §15 (6308): hard rule, no opt-out: there is no
+// `#[allow(unsafe_op_in_unsafe_fn)]`; the bare operation stays an error.
+/// Reads through `p`.
+///
+/// # Safety
+///
+/// `p` must be valid.
+#[allow(unsafe_op_in_unsafe_fn)]
+unsafe fn rd(p: *const i64) -> i64 {
+    *p
+}
+fn main() {
+    let x: i64 = 1;
+    // Safety: p points at x.
+    println(f"{unsafe { rd(ptr.const(x)) }}");
+}

@@ -1,0 +1,15 @@
+// design.md §15 (6496, 6521): #[repr(u8)], (u16), (u32), (i32) fix the
+// discriminant representation of a C-like enum.
+#[repr(u8)]
+enum A8 { X = 1, Y = 2 }
+#[repr(u16)]
+enum A16 { X = 1, Y = 2 }
+#[repr(u32)]
+enum A32 { X = 1, Y = 2 }
+#[repr(i32)]
+enum I32 { X = -1, Y = 2 }
+#[repr(C)]
+enum CEnum { X, Y }
+fn main() {
+    println(f"{A8.size_of()} {A16.size_of()} {A32.size_of()} {I32.size_of()} {CEnum.size_of()}");
+}

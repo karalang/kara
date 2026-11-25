@@ -1,0 +1,5 @@
+// design.md §15 (6631, 6636): two non-zero-sized fields are rejected even
+// if their sizes add up to one field's worth.
+#[repr(transparent)]
+struct Two { a: u32, b: u32 }
+fn main() {}

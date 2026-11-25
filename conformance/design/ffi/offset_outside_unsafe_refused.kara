@@ -1,0 +1,6 @@
+// design.md §15 (6240, 6368): Arithmetic (`p.offset(n)`) requires `unsafe { }`.
+fn main() {
+    let x: i64 = 5;
+    let p: *const i64 = ptr.const(x);
+    let q: *const i64 = p.offset(0);
+}

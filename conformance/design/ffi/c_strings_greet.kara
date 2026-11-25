@@ -1,0 +1,24 @@
+/// libc.
+///
+/// # Safety
+///
+/// The declarations match glibc.
+unsafe extern "C" {
+    fn puts(s: *const u8) -> i32 with writes(Stdout);
+}
+
+// design.md §15 C strings (6843-6857): a c"..." literal for constant text,
+// a CString from to_cstring() for run-time text; both hand C NUL-terminated bytes.
+fn greet(name: String) -> Result[(), NulError] {
+    puts(c"hello".as_ptr());
+    let c_name = name.to_cstring()?;
+    puts(c_name.as_ptr());
+    Ok(())
+}
+
+fn main() {
+    match greet("Ada".to_string()) {
+        Ok(()) => {}
+        Err(_) => { puts(c"nul".as_ptr()); }
+    }
+}

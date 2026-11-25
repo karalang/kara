@@ -1,0 +1,9 @@
+// design.md §15 (6356): a dereference is a place; `ptr.const(*p)` is the
+// address `p` holds.
+fn main() {
+    let x: i64 = 8;
+    let p: *const i64 = ptr.const(x);
+    // Safety: p points at the live local x.
+    let q: *const i64 = unsafe { ptr.const(*p) };
+    println(f"{ptr.addr(p) == ptr.addr(q)}");
+}

@@ -1,0 +1,11 @@
+// design.md §15 Zero-sized neighbours (6636): a PhantomData-style generic
+// unit struct (declared as design.md §5 shows, `struct PhantomData[T] {}`)
+// is a size-zero, align-one neighbour; the wrapper keeps its field's layout.
+struct PhantomData[T] {}
+struct Metres {}
+#[repr(transparent)]
+struct Len[U] { raw: f64, _unit: PhantomData[U] }
+fn main() {
+    let l: Len[Metres] = Len { raw: 2.5, _unit: PhantomData {} };
+    println(f"{Len[Metres].size_of()} {Len[Metres].align_of()} {l.raw}");
+}

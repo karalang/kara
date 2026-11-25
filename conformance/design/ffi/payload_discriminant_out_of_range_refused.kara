@@ -1,0 +1,5 @@
+// design.md §15 (6586): a value outside the repr type's range is
+// E_DISCRIMINANT_OUT_OF_RANGE, naming the repr type and the value.
+#[repr(u8)]
+enum Op { Reset = 1, Send(i64) = 256 }
+fn main() {}

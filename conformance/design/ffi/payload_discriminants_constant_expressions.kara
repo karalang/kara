@@ -1,0 +1,21 @@
+// design.md §15 (6584, 6585): the value is a constant expression (literals,
+// arithmetic on literals, references to integer consts); negative values
+// are legal under a signed repr; #[repr(C)] also accepts them.
+const BASE: i16 = 0x100;
+#[repr(i16)]
+enum Msg {
+    Ping = BASE,
+    Data(i64) = BASE + 2,
+    Wide { n: i64 } = 3 * 4,
+    Neg = -5,
+}
+#[repr(C)]
+enum CMsg { A(i32) = -1, B = 7 }
+#[repr(u64)]
+enum Big { A(i32) = 0xFFFF_FFFF_FFFF, B = 0 }
+fn main() {
+    let m = Msg.Data(1);
+    let c = CMsg.A(2);
+    let b = Big.B;
+    println("ok");
+}

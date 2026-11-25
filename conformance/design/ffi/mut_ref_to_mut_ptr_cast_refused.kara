@@ -1,0 +1,6 @@
+// design.md §15 (6360): the origin cast `mut ref T` -> `*mut T` is forbidden outright.
+fn addr(r: mut ref i64) -> *mut i64 { r as *mut i64 }
+fn main() {
+    let mut x: i64 = 1;
+    let p = addr(x);
+}

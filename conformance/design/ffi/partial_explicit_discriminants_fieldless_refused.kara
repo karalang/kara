@@ -1,0 +1,5 @@
+// design.md §15 (6589): within one enum, either every variant declares an
+// explicit discriminant or none does; a field-less repr enum too.
+#[repr(u8)]
+enum UsbClass { Audio = 0x01, Hid, MassStorage = 0x08 }
+fn main() {}

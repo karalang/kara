@@ -1,0 +1,9 @@
+// design.md §15 (6248): a doc comment whose content begins with `Safety:`
+// documents the block as a line comment does.
+fn main() {
+    let x: i64 = 4;
+    let p: *const i64 = ptr.const(x);
+    /// Safety: p points at the live local x.
+    let v = unsafe { *p };
+    println(f"{v}");
+}

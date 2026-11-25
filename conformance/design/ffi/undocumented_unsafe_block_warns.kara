@@ -1,0 +1,8 @@
+// design.md §15 (6246, 6248): an `unsafe { }` block with no `Safety:`
+// comment draws the `undocumented_unsafe` warning, by default.
+fn main() {
+    let x: i64 = 3;
+    let p: *const i64 = ptr.const(x);
+    let v = unsafe { *p };
+    println(f"{v}");
+}

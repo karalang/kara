@@ -1,0 +1,4 @@
+// design.md §15 Intrinsics (6214, 6483): only standard-library packages may
+// import std.intrinsics; an import from any other package is an error.
+import std.intrinsics;
+fn main() {}

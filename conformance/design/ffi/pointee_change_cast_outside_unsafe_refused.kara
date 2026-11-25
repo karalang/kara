@@ -1,0 +1,7 @@
+// design.md §15 (6240, 6364): a pointee-changing cast (`*T as *U`)
+// requires `unsafe { }`: E_PTR_CAST_REQUIRES_UNSAFE.
+fn main() {
+    let x: u32 = 5;
+    let p: *const u32 = ptr.const(x);
+    let q: *const u8 = p as *const u8;
+}

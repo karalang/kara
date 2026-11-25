@@ -1,0 +1,12 @@
+/// libc.
+///
+/// # Safety
+///
+/// The declarations match glibc.
+unsafe extern "C" {
+    fn labs(x: i64) -> i64 with reads(Network);
+}
+// design.md §15 Trust, not verify (6733-6741): a declared clause adds its
+// effects to every caller's inferred set, unverified.
+fn caller(x: i64) -> i64 { labs(x) }
+fn main() { println(f"{caller(-1)}"); }

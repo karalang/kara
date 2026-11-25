@@ -1,0 +1,4 @@
+old 1 now 9 len 2
+drop 1
+drop 9
+drop 2

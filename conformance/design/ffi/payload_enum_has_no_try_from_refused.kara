@@ -1,0 +1,7 @@
+// design.md §15 (6593): the generated TryFrom[intN] stays unavailable on payload enums.
+#[repr(u8)]
+enum Op { Reset = 0x01, Connect { addr: u32 } = 0x05 }
+fn main() {
+    let raw: u8 = 1;
+    let r = Op.try_from(raw);
+}

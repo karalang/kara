@@ -1,0 +1,7 @@
+// design.md §15 (6360): `r as *const T` with `r: ref T` is a type error at
+// `as`; the diagnostic carries a fix replacing it with `ptr.const(...)`.
+fn addr(r: ref i64) -> *const i64 { ptr.const(r) }
+fn main() {
+    let x: i64 = 1;
+    let p = addr(x);
+}

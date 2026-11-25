@@ -1,0 +1,10 @@
+// design.md §15 (6255): each `unsafe` block needs its own comment; the
+// first block's comment does not cover the second.
+fn main() {
+    let x: i64 = 3;
+    let p: *const i64 = ptr.const(x);
+    // Safety: p points at the live local x.
+    let v = unsafe { *p };
+    let w = unsafe { *p };
+    println(f"{v + w}");
+}

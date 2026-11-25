@@ -1,0 +1,7 @@
+// design.md §15 (6228, 6268): an `unsafe extern` block requires a
+// `# Safety` section attached to the block.
+/// Bindings for libc's labs.
+unsafe extern "C" {
+    pure fn labs(x: i64) -> i64;
+}
+fn main() { println(f"{labs(-4)}"); }

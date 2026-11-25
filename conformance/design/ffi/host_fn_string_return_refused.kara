@@ -1,0 +1,3 @@
+// design.md §15 (6901): an owned non-Copy value is not permitted as a return.
+host fn read_name() -> String with reads(Env);
+fn main() {}

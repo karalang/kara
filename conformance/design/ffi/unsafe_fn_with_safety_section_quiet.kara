@@ -1,0 +1,17 @@
+// design.md §15 (6257): the documented form, `offset_unchecked` (6265) with a body.
+/// Compute `x.offset(n)` without bounds checking.
+///
+/// # Safety
+///
+/// `n` must be within the allocation `x` points into.
+unsafe fn offset_unchecked[T](x: *const T, n: i64) -> *const T {
+    // Safety: the caller guarantees n is within x's allocation.
+    unsafe { x.offset(n) }
+}
+fn main() {
+    let xs: Array[i64, 3] = [7, 8, 9];
+    // Safety: 2 is within xs.
+    let p: *const i64 = unsafe { offset_unchecked(ptr.const(xs[0]), 2) };
+    // Safety: p points at xs[2].
+    println(f"{unsafe { *p }}");
+}

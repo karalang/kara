@@ -1,0 +1,5 @@
+// design.md §15 (6459): no primitive hands out an uninitialised T.
+import std.mem;
+fn main() {
+    let x: i64 = mem.uninitialized();
+}

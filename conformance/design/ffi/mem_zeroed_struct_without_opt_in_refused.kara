@@ -1,0 +1,7 @@
+// design.md §15 (6461): a struct is Pod only when it says so; Pod is not automatic.
+import std.mem;
+#[derive(Copy, Clone)]
+struct P { x: i64 }
+fn main() {
+    let p: P = mem.zeroed();
+}

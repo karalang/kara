@@ -1,0 +1,13 @@
+// design.md §15 `unsafe` (6230, 6240): construction is safe; offset and
+// dereference sit in an `unsafe { }` expression, which has a value.
+fn main() {
+    let value: Array[i64, 6] = [10, 11, 12, 13, 14, 15];
+    let p: *const i64 = ptr.const(value[0]); // construction is safe: no unsafe { } needed
+    // Safety: `value` outlives this block and is not mutated concurrently;
+    // offset 4 lies within the allocation `value` belongs to.
+    let val = unsafe {
+        let raw = p.offset(4);
+        *raw
+    };
+    println(f"{val}");
+}

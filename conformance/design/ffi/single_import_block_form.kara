@@ -1,0 +1,10 @@
+/// libc.
+///
+/// # Safety
+///
+/// The declarations match glibc.
+unsafe extern "C" {
+    fn getpid() -> i32;     // no `with` clause: has every effect
+}
+// design.md §15 (6710): a single foreign import uses the block form with one item.
+fn main() { println(f"{getpid() > 0}"); }

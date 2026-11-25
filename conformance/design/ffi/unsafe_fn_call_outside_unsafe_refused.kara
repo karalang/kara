@@ -1,0 +1,11 @@
+// design.md §15 (6290, 6310): callers acknowledge an `unsafe fn` at each call: `unsafe { foo() }`.
+/// Returns one.
+///
+/// # Safety
+///
+/// None beyond the call itself.
+unsafe fn one() -> i64 { 1 }
+fn main() {
+    let v = one();
+    println(f"{v}");
+}

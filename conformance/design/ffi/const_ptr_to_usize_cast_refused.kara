@@ -1,0 +1,6 @@
+// design.md §15 Cast rejection (6427-6429): crossing between pointer and integer is a type error.
+fn main() {
+    let x: i64 = 1;
+    let p: *const i64 = ptr.const(x);
+    let a = p as usize;
+}

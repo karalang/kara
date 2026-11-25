@@ -1,0 +1,19 @@
+// design.md §15 (6356): `ptr.const` / `ptr.mut` take a place (a binding,
+// field access, index expression or dereference) and evaluate to its
+// address; no temporary is materialised, so a write lands in the place.
+struct P { x: i64, y: i64 }
+fn main() {
+    let mut a: i64 = 1;
+    let mut s = P { x: 2, y: 3 };
+    let mut xs: Vec[i64] = [4, 5, 6];
+    let pa: *mut i64 = ptr.mut(a);
+    let py: *mut i64 = ptr.mut(s.y);
+    let p1: *mut i64 = ptr.mut(xs[1]);
+    // Safety: each pointer names a live, unaliased place.
+    unsafe {
+        *pa = 10;
+        *py = 30;
+        *p1 = 50;
+    }
+    println(f"{a} {s.x} {s.y} {xs[0]} {xs[1]} {xs[2]}");
+}

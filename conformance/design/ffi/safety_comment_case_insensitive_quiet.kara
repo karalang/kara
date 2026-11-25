@@ -1,0 +1,10 @@
+// design.md §15 (6248): the `Safety:` prefix is case-insensitive.
+fn main() {
+    let x: i64 = 3;
+    let p: *const i64 = ptr.const(x);
+    // SAFETY: p points at the live local x.
+    let v = unsafe { *p };
+    //   safety: same pointer, same local.
+    let w = unsafe { *p };
+    println(f"{v + w}");
+}

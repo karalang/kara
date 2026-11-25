@@ -1,0 +1,15 @@
+// design.md §15 Raw pointers (6349): `ptr.const(h.field)` on a borrowed
+// parameter is the field's address; reading it gives the caller's field.
+struct Header { tag: String, field: u32 }
+
+fn header_field_addr(h: Header) -> *const u32 { // `Header` is not `Copy`, so `h` borrows
+    ptr.const(h.field) // address of a field, no reference created
+}
+
+fn main() {
+    let h = Header { tag: "hdr".to_string(), field: 4242 };
+    let p = header_field_addr(h);
+    // Safety: h is live and unmoved, so p points at h.field.
+    let v = unsafe { *p };
+    println(f"{h.tag} {v}");
+}

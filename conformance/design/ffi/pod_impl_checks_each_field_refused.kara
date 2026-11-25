@@ -1,0 +1,5 @@
+// design.md §15 (6461): an empty `impl Pod for S { }` is accepted only when
+// every field is Pod; the compiler checks each field.
+struct S { n: i64, name: String }
+impl Pod for S { }
+fn main() {}

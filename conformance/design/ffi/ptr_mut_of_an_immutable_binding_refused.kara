@@ -1,0 +1,5 @@
+// design.md §15 (6358): `ptr.mut` requires a mutably-reachable place.
+fn main() {
+    let x: i64 = 1;
+    let p: *mut i64 = ptr.mut(x);
+}

@@ -1,0 +1,4 @@
+// design.md §15 (6589): all or nothing: E_PARTIAL_EXPLICIT_DISCRIMINANTS.
+#[repr(u8)]
+enum Op { Reset = 0x01, Connect { addr: u32 }, Send(i64) = 0x06 }
+fn main() {}

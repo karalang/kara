@@ -1,0 +1,3 @@
+// design.md §15 (6901): an owned non-Copy value is not permitted as a parameter.
+host fn log_text(text: own String) with writes(Stdout);
+fn main() {}

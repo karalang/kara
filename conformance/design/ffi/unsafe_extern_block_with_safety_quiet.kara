@@ -1,0 +1,10 @@
+// design.md §15 (6268): the documented block form.
+/// Bindings for libc.
+///
+/// # Safety
+///
+/// `labs` reads only its argument.
+unsafe extern "C" {
+    pure fn labs(x: i64) -> i64;
+}
+fn main() { println(f"{labs(-4)}"); }

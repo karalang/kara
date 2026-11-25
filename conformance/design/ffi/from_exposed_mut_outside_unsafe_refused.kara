@@ -1,0 +1,6 @@
+// design.md §15 (6393): `ptr.from_exposed_mut` is unsafe.
+fn main() {
+    let mut x: i64 = 1;
+    let e: usize = ptr.expose_mut(ptr.mut(x));
+    let p: *mut i64 = ptr.from_exposed_mut(e);
+}

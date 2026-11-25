@@ -1,0 +1,8 @@
+// design.md §15 (6358): a place reached through a shared borrow is not
+// mutably reachable.
+struct C { n: i64 }
+fn poke(c: ref C) -> *mut i64 { ptr.mut(c.n) }
+fn main() {
+    let c = C { n: 1 };
+    let p = poke(c);
+}

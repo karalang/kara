@@ -1,0 +1,3 @@
+// design.md §15 (6487): size_of / align_of are safe reads with no effect.
+fn sz() -> (i64, i64) { (i32.size_of(), u16.align_of()) }
+fn main() { println(f"{sz().0}"); }

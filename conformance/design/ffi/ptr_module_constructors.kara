@@ -1,0 +1,13 @@
+// design.md §15 The ptr module (6382-6386, 6395): null / null_mut /
+// dangling / dangling_mut take T from the annotation; is_null is safe;
+// a dangling pointer is non-null and aligned to T.align_of().
+fn main() {
+    let n: *const u8 = ptr.null();
+    let nm: *mut u8 = ptr.null_mut();
+    let d: *const u64 = ptr.dangling();
+    let dm: *mut u64 = ptr.dangling_mut();
+    let al = u64.align_of();
+    let d_aligned = (ptr.addr(d) as i64) % al == 0;
+    let dm_aligned = (ptr.addr(dm as *const u64) as i64) % al == 0;
+    println(f"{ptr.is_null(n)} {ptr.is_null(nm as *const u8)} {ptr.is_null(d)} {ptr.is_null(dm as *const u64)} {d_aligned} {dm_aligned}");
+}

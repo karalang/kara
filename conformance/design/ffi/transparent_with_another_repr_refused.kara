@@ -1,0 +1,4 @@
+// design.md §15 (6634): transparent combined with any other repr.
+#[repr(transparent, C)]
+struct W { inner: i32 }
+fn main() {}

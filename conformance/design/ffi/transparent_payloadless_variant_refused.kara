@@ -1,0 +1,4 @@
+// design.md §15 (6633): an enum with a payload-less variant.
+#[repr(transparent)]
+enum Unit { A }
+fn main() {}

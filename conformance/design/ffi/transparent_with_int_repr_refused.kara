@@ -1,0 +1,5 @@
+// design.md §15 (6634): transparent combined with #[repr(intN)], written as a second attribute.
+#[repr(transparent)]
+#[repr(u8)]
+enum One { V(u8) }
+fn main() {}

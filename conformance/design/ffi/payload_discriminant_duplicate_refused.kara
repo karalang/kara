@@ -1,0 +1,4 @@
+// design.md §15 (6587): a duplicate value is E_DUPLICATE_DISCRIMINANT, naming both variants.
+#[repr(u8)]
+enum Op { Reset = 0x01, Connect { addr: u32 } = 0x05, Send(i64) = 0x05 }
+fn main() {}

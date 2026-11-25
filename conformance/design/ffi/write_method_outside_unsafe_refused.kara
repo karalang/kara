@@ -1,0 +1,7 @@
+// design.md §15 (6369): writing through the pointer (`p.write(v)`) requires `unsafe { }`.
+fn main() {
+    let mut x: i64 = 5;
+    let p: *mut i64 = ptr.mut(x);
+    p.write(6);
+    println(f"{x}");
+}

@@ -1,0 +1,4 @@
+// design.md §15 (6591): explicit discriminants on a payload variant need
+// #[repr(intN)] or #[repr(C)].
+enum Op { Reset = 0x01, Send(i64) = 0x06 }
+fn main() {}

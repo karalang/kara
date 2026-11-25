@@ -1,0 +1,4 @@
+// design.md §15 (6459): there is no `mem.uninitialized()` under any name;
+// `import std.mem.uninitialized` is an unresolved-name error.
+import std.mem.uninitialized;
+fn main() {}

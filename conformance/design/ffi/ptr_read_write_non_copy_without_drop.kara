@@ -1,0 +1,18 @@
+// design.md §15 (6397): `ptr.mut(xs[i])` moves nothing; `p.read()` copies
+// the pointee's bits out and `p.write(v)` stores without dropping what was
+// there, for a non-Copy pointee too.
+struct Noisy { n: i64 }
+impl Drop for Noisy {
+    fn drop(mut ref self) { println(f"drop {self.n}"); }
+}
+fn main() {
+    let mut xs: Vec[Noisy] = Vec.new();
+    xs.push(Noisy { n: 1 });
+    xs.push(Noisy { n: 2 });
+    let p: *mut Noisy = ptr.mut(xs[0]);
+    // Safety: p points at xs[0]; its value is read out once and owned by `old`.
+    let old = unsafe { p.read() };
+    // Safety: the slot's previous value is owned by `old`, so nothing is lost.
+    unsafe { p.write(Noisy { n: 9 }); }
+    println(f"old {old.n} now {xs[0].n} len {xs.len()}");
+}

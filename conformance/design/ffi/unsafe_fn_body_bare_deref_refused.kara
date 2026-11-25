@@ -1,0 +1,11 @@
+// design.md §15 (6288, 6308): the body of an `unsafe fn` is not an
+// implicit `unsafe { }` block; a bare unsafe operation there is a compile error.
+/// Reads through `p`.
+///
+/// # Safety
+///
+/// `p` must be valid.
+unsafe fn rd(p: *const i64) -> i64 {
+    *p
+}
+fn main() {}

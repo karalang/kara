@@ -1,0 +1,15 @@
+// design.md §15 (6540, 6550): TryFrom[intN] for a C-like #[repr(intN)]
+// enum returns Err(DiscriminantError.OutOfRange { value }).
+#[repr(u8)]
+#[derive(Display)]
+enum UsbClass { Audio = 0x01, Hid = 0x03, MassStorage = 0x08 }
+fn show(raw: u8) {
+    match UsbClass.try_from(raw) {
+        Ok(class) => println(f"ok {class}"),
+        Err(DiscriminantError.OutOfRange { value }) => println(f"out of range {value}"),
+    }
+}
+fn main() {
+    show(3);
+    show(4);
+}

@@ -1,0 +1,6 @@
+// design.md §15 (6461): Pod is implemented for the integer and float
+// primitives and bool; char is not in the list.
+import std.mem;
+fn main() {
+    let c: char = mem.zeroed();
+}

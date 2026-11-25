@@ -1,0 +1,9 @@
+// design.md §15 (6591): field-less enums without #[repr] may still write `Audio = 0x01`.
+enum UsbClass { Audio = 0x01, Hid = 0x03 }
+fn main() {
+    let c = UsbClass.Hid;
+    match c {
+        UsbClass.Audio => println("audio"),
+        UsbClass.Hid => println("hid"),
+    }
+}

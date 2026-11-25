@@ -1,0 +1,22 @@
+/// libc.
+///
+/// # Safety
+///
+/// The declarations match glibc.
+unsafe extern "C" {
+    #[kara_name("CFile")]
+    type FILE;                   // C's `FILE`, named `CFile` in Kāra (CN-8)
+
+    fn fopen(path: *const u8, mode: *const u8) -> *mut CFile
+        with reads(FileSystem) writes(FileSystem);
+
+    fn fclose(stream: *mut CFile) -> i32
+        with writes(FileSystem);
+
+    fn fread(buf: *mut u8, size: usize, count: usize, stream: *mut CFile) -> usize
+        with reads(FileSystem);
+}
+
+// design.md §15 (6805): `fn f(x: own CFile)` is the same diagnostic.
+fn take(x: own CFile) {}
+fn main() {}

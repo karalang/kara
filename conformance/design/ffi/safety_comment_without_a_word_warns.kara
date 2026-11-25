@@ -1,0 +1,8 @@
+// design.md §15 (6248): `Safety:` must be followed by at least one word.
+fn main() {
+    let x: i64 = 3;
+    let p: *const i64 = ptr.const(x);
+    // Safety:
+    let v = unsafe { *p };
+    println(f"{v}");
+}

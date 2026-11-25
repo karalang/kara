@@ -1,0 +1,3 @@
+// design.md §15 (6902): a `mut ref T` parameter is not permitted.
+host fn bump(x: mut ref i64) with writes(Stdout);
+fn main() {}

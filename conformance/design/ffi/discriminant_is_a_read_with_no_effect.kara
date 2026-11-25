@@ -1,0 +1,5 @@
+// design.md §15 (6527): the method is a read and has no effect.
+#[repr(u8)]
+enum UsbClass { Audio = 0x01, Hid = 0x03 }
+fn code() -> u8 { UsbClass.Hid.discriminant() }
+fn main() { println(f"{code()}"); }

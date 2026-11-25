@@ -1,0 +1,15 @@
+/// libc.
+///
+/// # Safety
+///
+/// The declarations match glibc.
+unsafe extern "C" {
+    pure fn strlen(s: *const u8) -> usize;
+}
+// design.md §15 (6692, 6844): usize exists for FFI signatures; a c"..."
+// literal's .as_ptr() is a NUL-terminated `const char *`.
+fn main() {
+    let n: usize = strlen(c"hello".as_ptr());
+    let m: i64 = n as i64;
+    println(f"{n} {m}");
+}

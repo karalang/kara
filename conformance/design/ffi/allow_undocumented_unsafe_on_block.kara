@@ -1,0 +1,7 @@
+// design.md §15 (6284): `#[allow(undocumented_unsafe)]` at the block silences the warning.
+fn main() {
+    let x: i64 = 3;
+    let p: *const i64 = ptr.const(x);
+    #[allow(undocumented_unsafe)]
+    unsafe { println(f"{*p}"); }
+}

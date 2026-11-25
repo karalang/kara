@@ -1,0 +1,6 @@
+// design.md §15 (6365): no implicit `*mut T` -> `*const T` coercion at an assignment.
+fn main() {
+    let mut x: i64 = 9;
+    let q: *mut i64 = ptr.mut(x);
+    let c: *const i64 = q;
+}

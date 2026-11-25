@@ -1,0 +1,6 @@
+// design.md §15 (6392, 6425, 6433): `ptr.from_exposed` is unsafe.
+fn main() {
+    let x: i64 = 1;
+    let e: usize = ptr.expose(ptr.const(x));
+    let p: *const i64 = ptr.from_exposed(e);
+}

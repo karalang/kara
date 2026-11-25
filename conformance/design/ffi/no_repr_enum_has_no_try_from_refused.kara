@@ -1,0 +1,6 @@
+// design.md §15 (6540): a C-like enum without #[repr] gets no TryFrom impl.
+enum Plain { A, B }
+fn main() {
+    let raw: u32 = 0;
+    let r = Plain.try_from(raw);
+}

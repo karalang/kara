@@ -1,0 +1,2 @@
+E_PARTIAL_EXPLICIT_DISCRIMINANTS
+enum 'Op' mixes explicit and implicit discriminants

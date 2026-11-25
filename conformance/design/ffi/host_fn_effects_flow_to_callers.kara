@@ -1,0 +1,6 @@
+// design.md §15 (6891): the declared set is a trusted declaration of
+// record; callers inherit it through ordinary inference.
+effect resource Sensor;
+host fn labs(x: i64) -> i64 with reads(Sensor);
+fn caller(x: i64) -> i64 { labs(x) }
+fn main() { println(f"{caller(-2)}"); }

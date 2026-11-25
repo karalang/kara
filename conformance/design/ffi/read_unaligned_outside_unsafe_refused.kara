@@ -1,0 +1,6 @@
+// design.md §15 (6240, 6368): Unaligned access (`p.read_unaligned()`) requires `unsafe { }`.
+fn main() {
+    let x: i64 = 5;
+    let p: *const i64 = ptr.const(x);
+    let v: i64 = p.read_unaligned();
+}

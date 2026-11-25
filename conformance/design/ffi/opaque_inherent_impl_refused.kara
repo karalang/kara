@@ -1,0 +1,13 @@
+/// libc.
+///
+/// # Safety
+///
+/// The declarations match glibc.
+unsafe extern "C" {
+    type Handle;
+}
+// design.md §15 (6808, 6812): methods cannot be defined on an opaque type.
+impl Handle {
+    fn id(self) -> i64 { 0 }
+}
+fn main() {}

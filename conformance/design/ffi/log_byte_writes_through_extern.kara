@@ -1,0 +1,20 @@
+/// libc.
+///
+/// # Safety
+///
+/// The declarations match glibc.
+unsafe extern "C" {
+    fn write(fd: i32, buf: *const u8, count: usize) -> isize with writes(FileSystem);
+}
+
+// design.md §15 Raw pointers (6339): the address of a local passed to C,
+// no reference created; write(2, ...) puts the byte on stderr.
+fn log_byte(b: u8) with writes(FileSystem) {
+    let p: *const u8 = ptr.const(b); // address of the local `b`, no reference created
+    write(2, p, 1);
+}
+
+fn main() {
+    log_byte(65);
+    log_byte(10);
+}

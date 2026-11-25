@@ -1,0 +1,5 @@
+// design.md §15 (6395): the pointee type of `ptr.null()` comes from the
+// expected type; with none, there is no T to take.
+fn main() {
+    let p = ptr.null();
+}

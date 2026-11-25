@@ -1,0 +1,37 @@
+// design.md §15 (6296, 6313, 6328): `read_unchecked` and `copy_unchecked`,
+// one inner `unsafe { }` per trust step, called from `unsafe { }`.
+/// Read the `n`-th element of `xs` without a bounds check.
+///
+/// # Safety
+///
+/// `n` must be less than `xs.len()`.
+unsafe fn read_unchecked(xs: Vec[i64], n: i64) -> i64 {
+    let p = xs.as_ptr(); // safe
+    // Safety: the caller guarantees n < xs.len(), so p.offset(n) is in bounds.
+    unsafe { *p.offset(n) }
+}
+
+/// Copy `n` values from `src` to `dst`.
+///
+/// # Safety
+///
+/// `src` and `dst` must be valid for `n` elements and must not overlap.
+unsafe fn copy_unchecked[T: Copy](src: *const T, dst: *mut T, n: i64) {
+    // Safety: the caller guarantees src and dst are valid for n elements and do not overlap.
+    unsafe {
+        for i in 0..n {
+            dst.offset(i).write(src.offset(i).read());
+        }
+    }
+}
+
+fn main() {
+    let xs: Vec[i64] = [5, 6, 7];
+    // Safety: 2 < xs.len().
+    let v = unsafe { read_unchecked(xs, 2) };
+    let src: Array[i64, 3] = [1, 2, 3];
+    let mut dst: Array[i64, 3] = [0, 0, 0];
+    // Safety: both arrays hold 3 elements and are distinct.
+    unsafe { copy_unchecked(ptr.const(src[0]), ptr.mut(dst[0]), 3) };
+    println(f"{v} {dst[0]} {dst[1]} {dst[2]}");
+}

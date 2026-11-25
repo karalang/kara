@@ -1,0 +1,22 @@
+/// libc.
+///
+/// # Safety
+///
+/// The declarations match glibc.
+unsafe extern "C" {
+    #[kara_name("CFile")]
+    type FILE;
+    fn fflush(f: *mut CFile) -> i32 with writes(Stdout);
+}
+/// More libc.
+///
+/// # Safety
+///
+/// Same C type as above.
+unsafe extern "C" {
+    #[kara_name("CFile")]
+    type FILE;
+}
+// design.md §15 Visibility (6815): a duplicate declaration of the same
+// name is W_OPAQUE_TYPE_REDECLARED, a warning, not an error.
+fn main() { println(f"{fflush(ptr.null_mut())}"); }

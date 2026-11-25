@@ -1,0 +1,6 @@
+// design.md §15 (6538, 6593): a payload enum has no .discriminant() in v1.
+enum Shape { Circle { radius: f64 }, Dot }
+fn main() {
+    let s = Shape.Dot;
+    let d = s.discriminant();
+}

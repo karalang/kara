@@ -1,0 +1,8 @@
+// design.md §15 (6371): `p.read_unaligned()` reads the pointee inside `unsafe { }`.
+fn main() {
+    let x: i64 = 77;
+    let p: *const i64 = ptr.const(x);
+    // Safety: p points at the live local x.
+    let v = unsafe { p.read_unaligned() };
+    println(f"{v}");
+}

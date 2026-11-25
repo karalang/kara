@@ -1,0 +1,6 @@
+// design.md §15 (6698, 6704): every foreign-import declaration lives inside
+// an `unsafe extern "ABI" { ... }` block.
+extern "C" {
+    fn getpid() -> i32;
+}
+fn main() {}

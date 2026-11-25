@@ -1,0 +1,16 @@
+// design.md §15 (6431): casts between integer types, and between two raw
+// pointer types, are unaffected by the provenance rule.
+fn main() {
+    let a: i64 = 300;
+    let b = a as u8;
+    let c = b as i64;
+    let w: usize = 7;
+    let i = w as i64;
+    let x: i64 = 5;
+    let p: *const i64 = ptr.const(x);
+    // Safety: i64 and u64 share size and alignment; x is live.
+    let q: *const u64 = unsafe { p as *const u64 };
+    // Safety: as above.
+    let v = unsafe { *q };
+    println(f"{b} {c} {i} {v}");
+}

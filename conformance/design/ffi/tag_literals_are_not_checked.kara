@@ -1,0 +1,13 @@
+// design.md §15 (6608): the compiler does not check that a tag method's
+// match literals equal the declared discriminants.
+#[repr(u8)]
+enum Op { Reset = 0x01, Send(i64) = 0x06 }
+impl Op {
+    fn tag(self) -> u8 {
+        match self {
+            Op.Reset => 0x02,
+            Op.Send(_) => 0x07,
+        }
+    }
+}
+fn main() { println(f"{Op.Reset.tag()} {Op.Send(1).tag()}"); }

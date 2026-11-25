@@ -1,0 +1,6 @@
+// design.md §15 (6844): a c"..." literal has type `ref CStr`.
+fn len(s: ref CStr) -> i64 { s.len() }
+fn main() {
+    let s: ref CStr = c"four";
+    println(f"{len(s)}");
+}

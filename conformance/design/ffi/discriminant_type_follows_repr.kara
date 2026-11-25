@@ -1,0 +1,16 @@
+// design.md §15 (6527): D is the repr type: u8 for #[repr(u8)], i32 for
+// #[repr(i32)] and for #[repr(C)], u32 for a C-like enum without #[repr].
+#[repr(u16)]
+enum W { A = 500 }
+#[repr(i32)]
+enum S { A = -7 }
+#[repr(C)]
+enum E { A = -1 }
+enum Plain { A, B }
+fn main() {
+    let w: u16 = W.A.discriminant();
+    let s: i32 = S.A.discriminant();
+    let e: i32 = E.A.discriminant();
+    let p: u32 = Plain.B.discriminant();
+    println(f"{w} {s} {e} {p != Plain.A.discriminant()}");
+}

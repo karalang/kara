@@ -1,0 +1,26 @@
+// design.md §15 Explicit discriminants on payload variants (6574-6606):
+// under #[repr(u8)] any variant may carry `= INT_CONST`; the tag method
+// reads the declared wire values.
+#[repr(u8)]
+enum Op {
+    Reset = 0x01,
+    Connect { addr: u32 } = 0x05,
+    Send(String) = 0x06,
+    Disconnect = 0xFF,
+}
+
+impl Op {
+    fn tag(self) -> u8 {
+        match self {
+            Op.Reset => 0x01,
+            Op.Connect { .. } => 0x05,
+            Op.Send(_) => 0x06,
+            Op.Disconnect => 0xFF,
+        }
+    }
+}
+
+fn main() {
+    let ops = [Op.Reset, Op.Connect { addr: 7 }, Op.Send("hi".to_string()), Op.Disconnect];
+    for op in ops { println(f"{op.tag()}"); }
+}

@@ -1,0 +1,5 @@
+// design.md §15 (6465): String is not Pod.
+import std.mem;
+fn main() {
+    let s: String = mem.zeroed(); // error: String is not Pod
+}

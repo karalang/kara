@@ -1,0 +1,12 @@
+// design.md §15 (6677): derives on a transparent carrier work as on the
+// carrier; Display derives as `TypeName { field: value }`, not forwarding.
+#[repr(transparent)]
+#[derive(Eq, PartialEq, Hash, Clone, Copy, Debug, Display)]
+struct Meters { v: i64 }
+fn main() {
+    let a = Meters { v: 5 };
+    let b = a;
+    let mut s: Set[Meters] = Set.new();
+    s.insert(a);
+    println(f"{a} {a == b} {s.contains(b)}");
+}

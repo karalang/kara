@@ -1,0 +1,10 @@
+/// libc.
+///
+/// # Safety
+///
+/// The declarations match glibc.
+unsafe extern "C" {
+    fn labs(x: i64) -> i64 { x }
+}
+// design.md §15 (6681, 6698): foreign-import declarations have no Kāra body.
+fn main() {}

@@ -1,0 +1,15 @@
+// design.md §15 (6240, 6363, 6364, 6431): `*mut T as *const T` is safe;
+// `*const T as *mut T` and a pointee-changing cast are accepted inside
+// `unsafe { }`; raw-to-raw casts are otherwise unaffected.
+fn main() {
+    let mut x: u32 = 0x01020304;
+    let m: *mut u32 = ptr.mut(x);
+    let c: *const u32 = m as *const u32; // the weakening cast is safe
+    // Safety: c came from ptr.mut(x), so write capability is genuine.
+    let back: *mut u32 = unsafe { c as *mut u32 };
+    // Safety: back points at the live local x.
+    unsafe { back.write(0x0A0B0C0D); }
+    // Safety: a u32 is four readable bytes; the first is the low byte on a little-endian target.
+    let low: u8 = unsafe { *(c as *const u8) };
+    println(f"{x} {low}");
+}

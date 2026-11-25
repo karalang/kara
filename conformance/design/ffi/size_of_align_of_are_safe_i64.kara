@@ -1,0 +1,8 @@
+// design.md §15 (6487): T.size_of() and T.align_of() are ordinary safe
+// functions any package may call; like every size, they return an i64.
+fn main() {
+    let s: i64 = i32.size_of();
+    let a: i64 = u64.align_of();
+    let t: i64 = s + a;
+    println(f"{s} {a} {t}");
+}

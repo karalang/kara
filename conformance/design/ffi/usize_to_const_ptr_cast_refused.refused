@@ -1,0 +1,4 @@
+E_INT_TO_PTR_CAST_FORBIDDEN
+cannot cast an integer to a pointer
+ptr.with_addr
+ptr.from_exposed

@@ -1,0 +1,5 @@
+// design.md §15 (6357): a value argument is E_PTR_CONST_REQUIRES_PLACE.
+fn main() {
+    let x: i64 = 1;
+    let p: *const i64 = ptr.const(x + 1);
+}

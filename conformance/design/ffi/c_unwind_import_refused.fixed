@@ -1,0 +1,11 @@
+/// libc.
+///
+/// # Safety
+///
+/// The declarations match glibc.
+unsafe extern "C" {
+    pure fn labs(x: i64) -> i64;
+}
+// design.md §15 extern "C" (6690): every 0.8 build aborts, so a "C-unwind"
+// import is refused (E0415) with "C" as the fix.
+fn main() { println(f"{labs(-1)}"); }

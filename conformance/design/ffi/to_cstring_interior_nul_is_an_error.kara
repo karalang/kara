@@ -1,0 +1,11 @@
+// design.md §15 C strings (6845, 6852): to_cstring() returns
+// Result[CString, NulError]; interior NUL is the error case.
+fn main() {
+    let s = "a\0b".to_string();
+    match s.to_cstring() {
+        Ok(_) => println("ok"),
+        Err(_) => println("nul"),
+    }
+    let t = "ab".to_string();
+    println(f"{t.to_cstring().is_ok()}");
+}

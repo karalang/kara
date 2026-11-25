@@ -1,0 +1,4 @@
+// design.md §15 (6461): `#[derive(Pod)]` on a struct with a non-Pod field is refused.
+#[derive(Pod)]
+struct S { n: i64, name: String }
+fn main() {}

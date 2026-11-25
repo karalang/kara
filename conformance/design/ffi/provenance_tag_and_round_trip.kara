@@ -1,0 +1,25 @@
+// design.md §15 Pointer provenance (6410-6425): tagging with addr /
+// with_addr_mut (safe), a round trip through expose_mut / from_exposed
+// (only the last needs `unsafe`), and addr and expose give the same bits.
+fn main() {
+    let mut my_buffer: u32 = 7;
+    let p: *mut u32 = ptr.mut(my_buffer);
+    let tagged: *mut u32 = ptr.with_addr_mut(p, ptr.addr(p as *const u32) | 1);
+    let cleaned: *mut u32 = ptr.with_addr_mut(tagged, ptr.addr(tagged as *const u32) & ~1);
+    println(f"{ptr.addr(tagged as *const u32) & 1} {ptr.addr(cleaned as *const u32) == ptr.addr(p as *const u32)}");
+    // Safety: cleaned is p with the tag cleared.
+    unsafe { *cleaned = 8; }
+    let c: *const u32 = p as *const u32;
+    let moved: *const u32 = ptr.with_addr(c, ptr.addr(c));
+    let a = ptr.addr(c);
+    let exposed: usize = ptr.expose_mut(p);
+    let exposed_c: usize = ptr.expose(c);
+    println(f"{a == exposed} {exposed == exposed_c}");
+    // Safety: exposed came from expose_mut(p) and my_buffer is live.
+    let recovered: *const u32 = unsafe { ptr.from_exposed(exposed) };
+    // Safety: as above.
+    let recovered_m: *mut u32 = unsafe { ptr.from_exposed_mut(exposed) };
+    // Safety: recovered and moved both point at my_buffer.
+    let v = unsafe { *recovered + *moved };
+    println(f"{v} {my_buffer} {ptr.addr(recovered_m as *const u32) == a}");
+}
