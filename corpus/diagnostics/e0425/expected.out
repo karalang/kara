@@ -1,0 +1,1 @@
+ERROR at line 3: binding `Stdout` to `Tee` here nests more than 16 provider bindings, each bound where the one before it is in scope and used by its methods, which need a copy per binding (core semantics §14.4, E_PROVIDER_NEST); a recursion that binds it on every round never stops: bind it once, outside the recursion

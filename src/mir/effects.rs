@@ -2267,6 +2267,36 @@ impl<'p> Analysis<'p> {
         Some((resource, access, impls))
     }
 
+    /// The default provider's method a call on a resource, `R.m`, runs
+    /// when no override binds `R`: it runs where the call is.
+    fn default_methods(&self, name: &str) -> Vec<String> {
+        let Some((r, m)) = name.split_once('.') else {
+            return Vec::new();
+        };
+        let Some(decl) = self.program.resources.get(r) else {
+            return Vec::new();
+        };
+        let via = super::providers::via_method(r, m);
+        decl.default
+            .and_then(|t| decl.impls.get(&t))
+            .and_then(|ms| ms.get(m).or_else(|| ms.get(via)).cloned())
+            .into_iter()
+            .collect()
+    }
+
+    /// Every method of the provider type `t` bound to `r`, which runs with
+    /// the bindings in scope at the `with_provider` that binds it (core
+    /// semantics §14.4, B-2026-11-25-50).
+    fn provider_methods(&self, r: &str, t: Ty) -> Vec<String> {
+        let t = self.tys.pointee(t).unwrap_or(t);
+        self.program
+            .resources
+            .get(r)
+            .and_then(|d| d.impls.get(&t))
+            .map(|ms| ms.values().cloned().collect())
+            .unwrap_or_default()
+    }
+
     /// The effects `body`'s own clause declares on resources the program
     /// declares itself (design.md § User-declared resources: "It enters
     /// the effect graph where a function declares it"). Such a resource
@@ -2605,12 +2635,25 @@ impl<'p> Analysis<'p> {
                     }
                     if self.program.bodies.contains_key(&inst.name) {
                         of(vec![inst.name.clone()], &mut n, None);
-                    } else if let Some((r, access, impls)) = self.resource_call(&inst.name) {
+                    } else if let Some((r, access, _)) = self.resource_call(&inst.name) {
                         need(&mut n, r, access);
-                        of(impls, &mut n, None);
+                        // A bound provider's methods run with the bindings
+                        // where it was bound, so their needs are that
+                        // site's (core semantics §14.4, B-2026-11-25-50);
+                        // the default's run here.
+                        of(self.default_methods(&inst.name), &mut n, None);
                     } else if let Some(r) = binds {
                         if let Some(f) = args.get(1) {
                             of(self.fn_value_bodies(body, f), &mut n, Some(r));
+                        }
+                        // The provider's own methods, `R`'s outer binding
+                        // among their needs (§14.4).
+                        if let Some(Ok(pt)) = args
+                            .first()
+                            .and_then(Operand::place)
+                            .map(|p| place_ty(body, self.tys, p))
+                        {
+                            of(self.provider_methods(r, pt.ty), &mut n, None);
                         }
                         // The provider drops when the call returns (§14.4).
                         if let Some(Ok(pt)) = args
@@ -2653,6 +2696,27 @@ impl<'p> Analysis<'p> {
             }
             if !n.is_empty() {
                 out.push((block, bb.terminator.source_info.span, n, None));
+            }
+        }
+        // A `providers` block's provider runs its methods with the bindings
+        // around the block, the blocks enclosing it (later in the list)
+        // included (core semantics §14.4, §14.8; B-2026-11-25-50).
+        for (i, p) in body.provided.iter().enumerate() {
+            let Some(&first) = p.blocks.first() else {
+                continue;
+            };
+            let t = body.local(p.local).ty;
+            let mut n = Needs::new();
+            of(self.provider_methods(&p.resource, t), &mut n, None);
+            for q in body.provided[i + 1..]
+                .iter()
+                .filter(|q| q.blocks.contains(&first))
+            {
+                n.remove(&q.resource);
+            }
+            if !n.is_empty() {
+                let span = body.blocks[first.index()].terminator.source_info.span;
+                out.push((first, span, n, None));
             }
         }
         out

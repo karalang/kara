@@ -3607,6 +3607,7 @@ pub(crate) fn effect_error_code(
         crate::effectchecker::EffectErrorKind::HandleUsesOverride => ("E0422", "error"),
         crate::effectchecker::EffectErrorKind::DynProvider => ("E0423", "error"),
         crate::effectchecker::EffectErrorKind::TaskProviderConflict => ("E0424", "error"),
+        crate::effectchecker::EffectErrorKind::ProviderNestTooDeep => ("E0425", "error"),
         crate::effectchecker::EffectErrorKind::GpuEffectViolation => ("E0802", "error"),
     }
 }

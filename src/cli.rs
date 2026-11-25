@@ -3309,6 +3309,10 @@ impl Pipeline {
                     format!("error[E_DYN_PROVIDER]: {text}"),
                     crate::effectchecker::EffectErrorKind::DynProvider,
                 ),
+                crate::mir::lower::SourceEffectError::ProviderNest => (
+                    format!("error[E_PROVIDER_NEST]: {text}"),
+                    crate::effectchecker::EffectErrorKind::ProviderNestTooDeep,
+                ),
                 crate::mir::lower::SourceEffectError::TaskConflict => (
                     text,
                     crate::effectchecker::EffectErrorKind::TaskProviderConflict,

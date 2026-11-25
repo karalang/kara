@@ -1,0 +1,9 @@
+source = "B-2026-11-25-50"
+dedup_of = []
+expect = "error:E0425"
+exit = 1
+tags = ["diagnostics"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-25-50: the smallest program that produces E0425, seventeen nested tees each forwarding to the one outside it (core semantics §14.4), the example behind `karac explain E0425`. tests/diagnostics_corpus.rs checks the code is still produced and explained. The expected.out wording of an error pin is guidance, not a byte oracle."

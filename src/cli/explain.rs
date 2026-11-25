@@ -842,6 +842,7 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
     ("E_STATEFUL_DEFAULT", eff("StatefulDefault", None)),
     ("E_PROVIDER_UNSUPPORTED", eff("ProviderUnsupported", None)),
     ("E_DYN_PROVIDER", eff("DynProvider", None)),
+    ("E_PROVIDER_NEST", eff("ProviderNestTooDeep", None)),
     // ── effect ──────────────────────────────────────────────────
     //
     // `L0001` is a NOTE, not an error, and its `L` prefix puts it outside the
@@ -924,6 +925,8 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
     ("E0422", eff("HandleUsesOverride", None)),
     // `E_DYN_PROVIDER` (design.md §9), unclassified like `NoProvider`.
     ("E0423", eff("DynProvider", None)),
+    // `E_PROVIDER_NEST` (core semantics §14.4), unclassified like `NoProvider`.
+    ("E0425", eff("ProviderNestTooDeep", None)),
     // A provider held by a `TaskGroup` task (core semantics §14.9), the
     // tasks' counterpart of `ParBranchConflict`.
     (
@@ -4609,6 +4612,18 @@ const CODE_PROSE: &[(&str, &str)] = &[
          resource a default provider.",
     ),
     (
+        "E0425",
+        "A provider's methods run with the bindings in scope where it was \
+         bound (core-semantics.md §14.4), so each binding whose provider \
+         uses a binding outside it needs its own copy of the provider's \
+         methods. A recursion that binds such a provider on every round (a \
+         tee that forwards to the stream it fakes) would need one copy per \
+         round, and an explicit nest needs one per level. The compiler \
+         accepts 16 such nested bindings and refuses the 17th. Bind the \
+         provider once, outside the recursion, or give it a provider that \
+         does not use the binding outside it.",
+    ),
+    (
         "E0801",
         "Whether a function may run on the GPU is declared where it is \
          defined, not inferred from where it is called. A generic function \
@@ -4703,6 +4718,7 @@ const SPEC_SYMBOLS: &[(&str, &str)] = &[
     ("E_STATEFUL_DEFAULT", "E0420"),
     ("E_PROVIDER_UNSUPPORTED", "E0421"),
     ("E_DYN_PROVIDER", "E0423"),
+    ("E_PROVIDER_NEST", "E0425"),
 ];
 
 /// The prose for `code`, if it has any: a [`SPEC_SYMBOLS`] name's is its
@@ -6545,6 +6561,7 @@ fn concept_for_kind(kind: &str) -> Option<&'static str> {
         | "ProviderUnsupported"
         | "HandleUsesOverride"
         | "DynProvider"
+        | "ProviderNestTooDeep"
         | "TaskProviderConflict"
         | "ProviderEscape" => "effects/providers",
         "ParFieldNotConcurrent"
@@ -7015,6 +7032,7 @@ mod tests {
             ("E0422", E::HandleUsesOverride),
             ("E0423", E::DynProvider),
             ("E0424", E::TaskProviderConflict),
+            ("E0425", E::ProviderNestTooDeep),
             ("L0001", E::FfiLintHint),
             ("L0002", E::MutualRecursionNote),
             ("L0003", E::PureLoopInPar),

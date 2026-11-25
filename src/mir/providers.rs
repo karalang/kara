@@ -40,12 +40,28 @@ enum Binding {
     /// The resource's default provider, of this type, built where it is
     /// used.
     Default(Ty),
-    /// A provider of this type, reached through a hidden parameter.
-    Bound(Ty),
+    /// A provider of this type, reached through a hidden parameter, whose
+    /// methods run with the bindings of the environment this indexes
+    /// ([`Spec::envs`]): those in scope where it was bound, which a nearer
+    /// binding of the same resource does not change (core semantics §14.4,
+    /// B-2026-11-25-50).
+    Bound(Ty, u32),
 }
 
 type Env = BTreeMap<String, Binding>;
 type Needs = BTreeMap<String, Access>;
+
+/// One provider a body can reach: a resource and its binding. A body
+/// takes a hidden parameter for each it reaches (core semantics §14.3):
+/// the bindings of its own environment it uses, and those that the
+/// providers among them were bound under and use in turn.
+type Key = (String, Binding);
+
+/// How deep the bindings of one resource may nest through their
+/// providers' own environments before specialisation stops: a provider
+/// that uses its resource's outer binding, bound again on every round of
+/// a recursion, would need a copy per depth.
+const MAX_NEST: usize = 16;
 
 /// What the pass needs to know about a body before any is rewritten.
 struct Sig {
@@ -70,7 +86,7 @@ struct Sig {
 struct Carried {
     ty: Ty,
     def: DefId,
-    fields: Vec<(String, u32, bool)>,
+    fields: Vec<(Key, u32, bool)>,
 }
 
 /// The ambient native a default provider's method is (core semantics
@@ -187,6 +203,9 @@ pub enum Refusal {
     /// resource, or one overridden at the coercion (`E_DYN_PROVIDER`,
     /// design.md §9): the message.
     DynProvider { text: String },
+    /// Bindings nested more than [`MAX_NEST`] deep through their
+    /// providers' environments (`E_PROVIDER_NEST`, §14.4): the message.
+    NestTooDeep { text: String },
 }
 
 /// A [`Refusal`] and where it is: the call, or the `with_provider` call or
@@ -476,6 +495,8 @@ pub fn specialise(
         around: BTreeMap::new(),
         file_uses: Vec::new(),
         handle_refused: BTreeSet::new(),
+        envs: Vec::new(),
+        env_ids: BTreeMap::new(),
     };
     // A body that reaches only resources with a default runs against the
     // defaults under its own name; it is also the template of its copies.
@@ -559,6 +580,10 @@ struct Spec<'p> {
     /// A provider type and a resource its handle methods use that its
     /// binding site already refused.
     handle_refused: BTreeSet<(Ty, String)>,
+    /// The environments bound providers' methods run with, indexed by
+    /// [`Binding::Bound`], each once.
+    envs: Vec<Env>,
+    env_ids: BTreeMap<Env, u32>,
 }
 
 /// One body being rewritten under one environment.
@@ -566,20 +591,174 @@ struct Fx<'b> {
     body: &'b mut Body,
     /// What each resource is bound to in the block being rewritten.
     env: Env,
-    /// Where the provider of each bound resource is, in the block being
-    /// rewritten: behind a hidden parameter, or in a `providers` block's
-    /// local.
-    src: BTreeMap<String, Place>,
+    /// Where each provider the block can reach is: behind a hidden
+    /// parameter, in a carried closure's environment, or in a `providers`
+    /// block's local.
+    hidden: BTreeMap<Key, Place>,
 }
 
 impl Spec<'_> {
+    /// The index of `env` in [`Self::envs`].
+    fn intern(&mut self, env: Env) -> u32 {
+        if let Some(&i) = self.env_ids.get(&env) {
+            return i;
+        }
+        let i = self.envs.len() as u32;
+        self.envs.push(env.clone());
+        self.env_ids.insert(env, i);
+        i
+    }
+
+    /// What the methods of `t`, bound to `r`, need: the resources they
+    /// run with, from where `t` was bound.
+    fn provider_needs(&self, r: &str, t: Ty) -> Needs {
+        let mut out = Needs::new();
+        let methods = self.resources.get(r).and_then(|d| d.impls.get(&t));
+        for m in methods.into_iter().flat_map(|ms| ms.values()) {
+            for (q, a) in self.needs.get(m).into_iter().flatten() {
+                let e = out.entry(q.clone()).or_insert(*a);
+                if *a == Access::Writes {
+                    *e = Access::Writes;
+                }
+            }
+        }
+        out
+    }
+
+    /// The providers a body under `env` that needs `needs` reaches, each
+    /// with whether it writes: the bindings of `env` it uses, and through
+    /// each, the bindings its provider's methods use where it was bound.
+    fn reach(&self, env: &Env, needs: &Needs) -> BTreeMap<Key, Access> {
+        let mut out = BTreeMap::new();
+        self.reach_into(env, needs, &mut out);
+        out
+    }
+
+    fn reach_into(&self, env: &Env, needs: &Needs, out: &mut BTreeMap<Key, Access>) {
+        for (r, a) in needs {
+            let Some(b @ Binding::Bound(t, o)) = env.get(r).copied() else {
+                continue;
+            };
+            let e = out.entry((r.clone(), b)).or_insert(*a);
+            if *a == Access::Writes {
+                *e = Access::Writes;
+            }
+            let inner = self.provider_needs(r, t);
+            self.reach_into(&self.envs[o as usize], &inner, out);
+        }
+    }
+
+    /// Every binding reachable from `env`'s, whatever it needs.
+    fn reach_all(&self, env: &Env, out: &mut BTreeSet<Key>) {
+        for (r, b) in env {
+            if let Binding::Bound(_, o) = b {
+                if out.insert((r.clone(), *b)) {
+                    self.reach_all(&self.envs[*o as usize], out);
+                }
+            }
+        }
+    }
+
+    /// How many bindings nest in `b`, through its providers' environments.
+    fn depth(&self, b: Binding) -> usize {
+        match b {
+            Binding::Default(_) => 0,
+            Binding::Bound(_, o) => {
+                1 + self.envs[o as usize]
+                    .values()
+                    .map(|b| self.depth(*b))
+                    .max()
+                    .unwrap_or(0)
+            }
+        }
+    }
+
+    /// The binding of `r` to a provider of type `pt` made where `env` is in
+    /// force (a `with_provider` or `providers` block): the provider's
+    /// methods run with `env`'s bindings of what they use, never this one
+    /// (core semantics §14.4). An older binding of `r` to the same type
+    /// under the same bindings that is still reachable (through another
+    /// provider's environment) would be the same key, so the new one then
+    /// also records the binding it shadows, which tells them apart.
+    /// The binding, and the refusal when it nests too deep.
+    fn bind(&mut self, env: &Env, r: &str, pt: Ty) -> Result<(Binding, Option<String>), String> {
+        let pn = self.provider_needs(r, pt);
+        let outer: Env = env
+            .iter()
+            .filter(|(q, _)| pn.contains_key(*q))
+            .map(|(q, b)| (q.clone(), *b))
+            .collect();
+        let o = self.intern(outer.clone());
+        let mut b = Binding::Bound(pt, o);
+        let mut seen = BTreeSet::new();
+        let mut rest = env.clone();
+        rest.remove(r);
+        self.reach_all(&rest, &mut seen);
+        self.reach_all(&outer, &mut seen);
+        if seen.contains(&(r.to_string(), b)) {
+            let mut outer = outer;
+            if let Some(old) = env.get(r) {
+                outer.insert(r.to_string(), *old);
+            }
+            let o = self.intern(outer);
+            b = Binding::Bound(pt, o);
+            if seen.contains(&(r.to_string(), b)) {
+                return Err(format!(
+                    "providers: two bindings of `{r}` to `{}` under the same providers are \
+                     both reachable here, which specialisation cannot tell apart",
+                    self.tys.display(pt)
+                ));
+            }
+        }
+        if self.depth(b) > MAX_NEST {
+            let text = format!(
+                "binding `{r}` to `{}` here nests more than {MAX_NEST} provider bindings, \
+                 each bound where the one before it is in scope and used by its methods, \
+                 which need a copy per binding (core semantics §14.4, E_PROVIDER_NEST); a \
+                 recursion that binds it on every round never stops: bind it once, outside \
+                 the recursion",
+                self.tys.display(pt)
+            );
+            // The program runs nowhere; an earlier binding of `r` to the
+            // same type stands for this one, so that a recursion's copies
+            // stop (one is always found there: only a repeat grows a chain
+            // without end).
+            let mut chain = BTreeSet::new();
+            self.reach_all(env, &mut chain);
+            let earlier = chain
+                .into_iter()
+                .find(|(q, e)| q == r && matches!(e, Binding::Bound(t, _) if *t == pt))
+                .map(|(_, e)| e);
+            return Ok((earlier.unwrap_or(b), Some(text)));
+        }
+        Ok((b, None))
+    }
+
+    /// How a binding shows in a copy's name: the provider type, and the
+    /// bindings its methods run with that are not the defaults.
+    fn show(&self, r: &str, b: Binding) -> String {
+        let (Binding::Bound(t, _) | Binding::Default(t)) = b;
+        let mut out = self.tys.display(t).to_string();
+        if let Binding::Bound(_, o) = b {
+            let inner: Vec<String> = self.envs[o as usize]
+                .iter()
+                .filter(|(q, b)| matches!(b, Binding::Bound(..)) || *q == r)
+                .map(|(q, b)| format!("{q}={}", self.show(q, *b)))
+                .collect();
+            if !inner.is_empty() {
+                out.push_str(&format!("<{}>", inner.join(", ")));
+            }
+        }
+        out
+    }
+
     /// The name of `template`'s copy under `env` (restricted to what it
     /// needs), queued if it is new.
     fn request(&mut self, template: &str, env: &Env) -> Result<String, String> {
         let mut around = self.around.get(&self.current).cloned().unwrap_or_default();
         around.extend(
             env.iter()
-                .filter(|(_, b)| matches!(b, Binding::Bound(_)))
+                .filter(|(_, b)| matches!(b, Binding::Bound(..)))
                 .map(|(r, _)| r.clone()),
         );
         let (env, name) = self.copy_name(template, env)?;
@@ -607,7 +786,7 @@ impl Spec<'_> {
         let bound: Vec<String> = env
             .iter()
             .filter_map(|(r, b)| match b {
-                Binding::Bound(t) => Some(format!("{r}={}", self.tys.display(*t))),
+                Binding::Bound(..) => Some(format!("{r}={}", self.show(r, *b))),
                 Binding::Default(_) => None,
             })
             .collect();
@@ -625,7 +804,7 @@ impl Spec<'_> {
         let mut fx = Fx {
             body,
             env: env.clone(),
-            src: BTreeMap::new(),
+            hidden: BTreeMap::new(),
         };
         if let Some(c) = self.carried.get(&fx.body.instance.name).cloned() {
             // Its providers are in its environment, after the captures.
@@ -648,39 +827,67 @@ impl Spec<'_> {
             if by_ref {
                 at = at.project(ProjElem::Deref);
             }
-            for (r, k, mutable) in &c.fields {
-                let Some(Binding::Bound(pt)) = env.get(r) else {
+            for (key, k, mutable) in &c.fields {
+                let Binding::Bound(pt, _) = key.1 else {
                     continue;
                 };
-                let rt = self.tys.tcx().reference(*pt, *mutable);
-                fx.src
-                    .insert(r.clone(), at.field(*k, rt).project(ProjElem::Deref));
+                let rt = self.tys.tcx().reference(pt, *mutable);
+                fx.hidden
+                    .insert(key.clone(), at.field(*k, rt).project(ProjElem::Deref));
             }
         } else {
-            // The hidden parameters, after the body's own.
+            // The hidden parameters, after the body's own: one for each
+            // provider it can reach (core semantics §14.3).
             let mut params = Vec::new();
-            for (r, b) in env {
-                if let Binding::Bound(t) = b {
-                    let mutable = needs.get(r) == Some(&Access::Writes);
-                    params.push((r.clone(), self.tys.tcx().reference(*t, mutable)));
+            for (key, a) in self.reach(env, &needs) {
+                if let Binding::Bound(t, _) = key.1 {
+                    let rt = self.tys.tcx().reference(t, a == Access::Writes);
+                    params.push((key, rt));
                 }
             }
             if !params.is_empty() {
                 fx.add_params(&params);
             }
         }
-        let src = fx.src.clone();
+        let hidden = fx.hidden.clone();
         let provided = std::mem::take(&mut fx.body.provided);
+        // The binding each `providers` block makes, under the bindings
+        // around it (core semantics §14.4, §14.8), by the block's first
+        // basic block: the same in every block it covers.
+        let mut region_binding: Vec<Option<Binding>> = vec![None; provided.len()];
+        for (i, p) in provided.iter().enumerate().rev() {
+            let Some(&first) = p.blocks.first() else {
+                continue;
+            };
+            let mut around = env.clone();
+            for (j, q) in provided.iter().enumerate().skip(i + 1).rev() {
+                if let (true, Some(b)) = (q.blocks.contains(&first), region_binding[j]) {
+                    around.insert(q.resource.clone(), b);
+                }
+            }
+            let t = fx.body.local(p.local).ty;
+            let (b, deep) = self.bind(&around, &p.resource, t)?;
+            if let Some(text) = deep {
+                self.refuse(&fx, first, &p.resource, Refusal::NestTooDeep { text });
+            }
+            region_binding[i] = Some(b);
+        }
         for i in 0..fx.body.blocks.len() {
             let bb = BasicBlock(i as u32);
             // A `providers` block binds its resources to its locals, the
             // innermost last (core semantics §14.8).
             fx.env = env.clone();
-            fx.src = src.clone();
-            for p in provided.iter().rev().filter(|p| p.blocks.contains(&bb)) {
-                let t = fx.body.local(p.local).ty;
-                fx.env.insert(p.resource.clone(), Binding::Bound(t));
-                fx.src.insert(p.resource.clone(), Place::local(p.local));
+            fx.hidden = hidden.clone();
+            for (j, p) in provided.iter().enumerate().rev() {
+                if !p.blocks.contains(&bb) {
+                    continue;
+                }
+                let Some(b) = region_binding[j] else {
+                    continue;
+                };
+                fx.env.insert(p.resource.clone(), b);
+                fx.hidden
+                    .insert((p.resource.clone(), b), Place::local(p.local));
             }
             self.carry_erased(&mut fx, bb)?;
             self.carry_native(&mut fx, bb, template)?;
@@ -722,8 +929,10 @@ impl Spec<'_> {
                         own.remove(i);
                     }
                     for p in own {
-                        let t = fx.body.local(p.local).ty;
-                        outer.insert(p.resource.clone(), Binding::Bound(t));
+                        let j = provided.iter().position(|q| std::ptr::eq(q, p)).unwrap();
+                        if let Some(b) = region_binding[j] {
+                            outer.insert(p.resource.clone(), b);
+                        }
                     }
                     self.region_extent(&mut fx, bb, &r, &outer)?;
                 }
@@ -752,7 +961,8 @@ impl Spec<'_> {
     /// environment, with the hidden arguments it takes.
     fn plain_call(&mut self, fx: &mut Fx, bb: BasicBlock, callee: &str) -> Result<(), String> {
         let new = self.request(callee, &fx.env)?;
-        let extra = self.hidden_args(fx, bb, callee, &BTreeMap::new())?;
+        let env = fx.env.clone();
+        let extra = self.hidden_args(fx, bb, callee, &env, &BTreeMap::new())?;
         let sig = &self.sigs[callee];
         let (def, args) = (sig.def, sig.args.clone());
         let TerminatorKind::Call {
@@ -766,36 +976,43 @@ impl Spec<'_> {
         Ok(())
     }
 
-    /// The hidden arguments of a call of `callee` from `fx`: a reborrow of
-    /// each of `fx`'s hidden parameters the callee takes, or of the local
-    /// `local` holds for a resource this call supplies.
+    /// The hidden arguments of a call of `callee`, whose copy runs under
+    /// `env`, from `fx`: a reborrow of each provider it reaches, from
+    /// `fx`'s own, or the local `local` holds for one this call binds.
     fn hidden_args(
         &self,
         fx: &mut Fx,
         bb: BasicBlock,
         callee: &str,
-        local: &BTreeMap<String, Local>,
+        env: &Env,
+        local: &BTreeMap<Key, Local>,
     ) -> Result<Vec<Operand>, String> {
+        let needs = self.needs.get(callee).cloned().unwrap_or_default();
+        for r in needs.keys() {
+            if !env.contains_key(r) {
+                return Err(format!(
+                    "providers: in `{}`, `{callee}` needs `{r}` and nothing supplies it",
+                    fx.body.instance.name
+                ));
+            }
+        }
         let mut out = Vec::new();
-        for (r, a) in self.needs.get(callee).cloned().unwrap_or_default() {
+        for (key, a) in self.reach(env, &needs) {
             let mutable = a == Access::Writes;
-            if let Some(&l) = local.get(&r) {
+            if let Some(&l) = local.get(&key) {
                 out.push(fx.borrow(bb, Place::local(l), mutable, self.tys));
                 continue;
             }
-            match fx.env.get(&r) {
-                Some(Binding::Bound(_)) => {
-                    let p = fx.src[&r].clone();
-                    out.push(fx.borrow(bb, p, mutable, self.tys));
-                }
-                Some(Binding::Default(_)) => {}
-                None => {
-                    return Err(format!(
-                        "providers: in `{}`, `{callee}` needs `{r}` and nothing supplies it",
-                        fx.body.instance.name
-                    ))
-                }
-            }
+            let p = fx.hidden.get(&key).cloned().ok_or_else(|| {
+                format!(
+                    "providers: in `{}`, `{callee}` reaches `{}`'s provider `{}`, which \
+                     nothing here holds",
+                    fx.body.instance.name,
+                    key.0,
+                    self.show(&key.0, key.1)
+                )
+            })?;
+            out.push(fx.borrow(bb, p, mutable, self.tys));
         }
         Ok(out)
     }
@@ -817,16 +1034,16 @@ impl Spec<'_> {
             )
         })?;
         let bb = match (binding, m) {
-            (Binding::Bound(_), "http_get" | "http_post") => self.owned_texts(fx, bb),
+            (Binding::Bound(..), "http_get" | "http_post") => self.owned_texts(fx, bb),
             _ => bb,
         };
         if let Some(native) = file_native(r, m) {
             match (binding, m) {
-                (Binding::Bound(_), "open_file") => return self.open_via(fx, bb, r),
+                (Binding::Bound(..), "open_file") => return self.open_via(fx, bb, r),
                 // The provider's `__get`, `__post`, `__send_builder`,
                 // `__bind` or `__connect`, below.
                 (
-                    Binding::Bound(_),
+                    Binding::Bound(..),
                     "http_get" | "http_post" | "http_send" | "tcp_bind" | "tcp_connect",
                 ) => {}
                 // Out of an override and in one alike, an operation on an
@@ -855,10 +1072,10 @@ impl Spec<'_> {
                     *func = fn_def(self.tys, DefId(u32::MAX), Vec::new(), native.to_string());
                     Ok(())
                 }
-                Binding::Bound(_) => self.print_to(fx, bb, r, m == "println"),
+                Binding::Bound(..) => self.print_to(fx, bb, r, m == "println"),
             };
         }
-        let (Binding::Bound(t) | Binding::Default(t)) = binding;
+        let (Binding::Bound(t, _) | Binding::Default(t)) = binding;
         let method = decl
             .impls
             .get(&t)
@@ -884,8 +1101,8 @@ impl Spec<'_> {
             None => decl.methods.get(m).copied().unwrap_or(false),
         };
         let recv = match (binding, decl.default_static) {
-            (Binding::Bound(_), _) => {
-                let p = fx.src[r].clone();
+            (Binding::Bound(..), _) => {
+                let p = fx.src(r)?;
                 fx.borrow(bb, p, mutable, self.tys)
             }
             (Binding::Default(t), Some(i)) => {
@@ -925,8 +1142,14 @@ impl Spec<'_> {
             }
         };
         let (name, def, args, extra) = if self.sigs.contains_key(&method) {
-            let new = self.request(&method, &fx.env)?;
-            let extra = self.hidden_args(fx, bb, &method, &BTreeMap::new())?;
+            // A bound provider's method runs with the bindings where it was
+            // bound; the default's, with those here (core semantics §14.4).
+            let env = match binding {
+                Binding::Bound(_, o) => self.envs[o as usize].clone(),
+                Binding::Default(_) => fx.env.clone(),
+            };
+            let new = self.request(&method, &env)?;
+            let extra = self.hidden_args(fx, bb, &method, &env, &BTreeMap::new())?;
             let sig = &self.sigs[&method];
             (new, sig.def, sig.args.clone(), extra)
         } else {
@@ -1089,7 +1312,8 @@ impl Spec<'_> {
                 "providers: in `{here}`, an open without a path and flags"
             ));
         };
-        let (Some(Binding::Bound(t)) | Some(Binding::Default(t))) = fx.env.get(r).copied() else {
+        let (Some(Binding::Bound(t, _)) | Some(Binding::Default(t))) = fx.env.get(r).copied()
+        else {
             unreachable!()
         };
         let open = self.resources[r]
@@ -1135,7 +1359,7 @@ impl Spec<'_> {
         let opts_arg = fx.borrow(bb, Place::local(opts), false, self.tys);
         let id = fx.temp(res);
         let adopt = fx.block(TerminatorKind::Goto { target: after }, info);
-        let provider = fx.borrow(adopt, fx.src[r].clone(), true, self.tys);
+        let provider = fx.borrow(adopt, fx.src(r)?, true, self.tys);
         fx.body.blocks[adopt.index()].terminator.kind = TerminatorKind::Call {
             func: fn_def(
                 self.tys,
@@ -1254,7 +1478,11 @@ impl Spec<'_> {
         );
         let entered = fx.body.blocks[bb.index()].statements.len();
         let mut env = fx.env.clone();
-        env.insert(r.to_string(), Binding::Bound(pt));
+        let (b, deep) = self.bind(&fx.env, r, pt)?;
+        if let Some(text) = deep {
+            self.refuse(fx, bb, r, Refusal::NestTooDeep { text });
+        }
+        env.insert(r.to_string(), b);
         let new = self.request(&callee, &env)?;
         let mut ops = Vec::new();
         // The closure's environment: by value, or a borrow of it that is
@@ -1274,11 +1502,8 @@ impl Spec<'_> {
                 _ => ops.push(Operand::Move(fp)),
             }
         }
-        let local = BTreeMap::from([(r.to_string(), pv)]);
-        let saved = std::mem::replace(&mut fx.env, env);
-        let extra = self.hidden_args(fx, bb, &callee, &local);
-        fx.env = saved;
-        ops.extend(extra?);
+        let local = BTreeMap::from([((r.to_string(), b), pv)]);
+        ops.extend(self.hidden_args(fx, bb, &callee, &env, &local)?);
         let info = fx.body.blocks[bb.index()].terminator.source_info;
         let after = target.ok_or_else(|| {
             format!("providers: in `{here}`, a `with_provider` call that does not return")
@@ -1445,7 +1670,7 @@ impl Spec<'_> {
                 for r in self.needs.get(m).into_iter().flat_map(|n| n.keys()) {
                     let rooted = self.resources.get(r).is_some_and(|d| d.default.is_some());
                     let why = match fx.env.get(r) {
-                        Some(Binding::Bound(_)) if rooted => format!(
+                        Some(Binding::Bound(..)) if rooted => format!(
                             "overridden where it is made, by a `with_provider[{r}]` or `providers` block"
                         ),
                         _ if rooted => continue,
@@ -1467,7 +1692,7 @@ impl Spec<'_> {
     /// The library's calls of them are the program's call's, not reported
     /// again.
     fn refuse_unsupported(&mut self, fx: &Fx, bb: BasicBlock, template: &str, callee: &str) {
-        if !matches!(fx.env.get("Network"), Some(Binding::Bound(_)))
+        if !matches!(fx.env.get("Network"), Some(Binding::Bound(..)))
             || !net_unsupported(callee)
             || self.sigs.get(template).is_some_and(|s| s.library)
         {
@@ -1507,7 +1732,7 @@ impl Spec<'_> {
         if self.sigs.get(template).is_some_and(|s| s.library) {
             return;
         }
-        let Some(Binding::Bound(t)) = fx.env.get(R).copied() else {
+        let Some(Binding::Bound(t, _)) = fx.env.get(R).copied() else {
             return;
         };
         // An opening, or an operation on an open file: what runs the
@@ -1543,7 +1768,7 @@ impl Spec<'_> {
         let bound = fx
             .env
             .iter()
-            .filter(|(_, b)| matches!(b, Binding::Bound(_)))
+            .filter(|(_, b)| matches!(b, Binding::Bound(..)))
             .map(|(r, _)| r.clone())
             .collect();
         let site = super::effects::NoProvider {
@@ -1633,7 +1858,7 @@ impl Spec<'_> {
             // A handle method that uses one is refused (the program then
             // runs nowhere), and its copy made as if it did not.
             for used in self.needs.get(&method).into_iter().flat_map(|n| n.keys()) {
-                if let Some(Binding::Bound(_)) = env.get(used) {
+                if let Some(Binding::Bound(..)) = env.get(used) {
                     let text = format!(
                         "`{method}` uses `{used}`, which is overridden where {site} is; a \
                          {what}'s `{m}` runs with every other resource at its default (core \
@@ -1683,14 +1908,12 @@ impl Spec<'_> {
     /// The bound resources the body of the closure type `t` reaches, each
     /// with whether it writes, and that body's name; `None` for another
     /// type or a closure that reaches none.
-    fn carrying(&self, fx: &Fx, t: Ty) -> Option<(String, Vec<(String, bool)>)> {
+    fn carrying(&self, fx: &Fx, t: Ty) -> Option<(String, Vec<(Key, bool)>)> {
         let (template, _) = self.sigs.iter().find(|(_, s)| s.closure == Some(t))?;
-        let bound: Vec<(String, bool)> = self
-            .needs
-            .get(template)?
-            .iter()
-            .filter(|(r, _)| matches!(fx.env.get(*r), Some(Binding::Bound(_))))
-            .map(|(r, a)| (r.clone(), *a == Access::Writes))
+        let bound: Vec<(Key, bool)> = self
+            .reach(&fx.env, self.needs.get(template)?)
+            .into_iter()
+            .map(|(k, a)| (k, a == Access::Writes))
             .collect();
         (!bound.is_empty()).then(|| (template.clone(), bound))
     }
@@ -1703,7 +1926,7 @@ impl Spec<'_> {
         template: &str,
         from: Ty,
         env: &Env,
-        bound: &[(String, bool)],
+        bound: &[(Key, bool)],
     ) -> Result<(Ty, String), String> {
         let (env, copy) = self.copy_name(template, env)?;
         let name = format!("{copy}.carried");
@@ -1727,11 +1950,11 @@ impl Spec<'_> {
         // (`effects::TaskConflict`, §14.9).
         let mut caps = captures;
         let mut fields = Vec::new();
-        for (r, mutable) in bound {
-            let Some(Binding::Bound(pt)) = env.get(r).copied() else {
+        for (key, mutable) in bound {
+            let Binding::Bound(pt, _) = key.1 else {
                 continue;
             };
-            fields.push((r.clone(), caps.len() as u32, *mutable));
+            fields.push((key.clone(), caps.len() as u32, *mutable));
             caps.push(self.tys.tcx().reference(pt, *mutable));
         }
         let def = DefId(CARRIED_DEFS - self.carried.len() as u32);
@@ -1866,10 +2089,10 @@ impl Spec<'_> {
         let Some(needs) = self.needs.get(name) else {
             return Ok(None);
         };
-        let bound: Vec<(String, bool)> = needs
-            .iter()
-            .filter(|(r, _)| matches!(fx.env.get(*r), Some(Binding::Bound(_))))
-            .map(|(r, a)| (r.clone(), *a == Access::Writes))
+        let bound: Vec<(Key, bool)> = self
+            .reach(&fx.env, needs)
+            .into_iter()
+            .map(|(k, a)| (k, a == Access::Writes))
             .collect();
         if bound.is_empty() {
             return Ok(None);
@@ -1878,8 +2101,8 @@ impl Spec<'_> {
         let (ty, _) = self.carry_request(name, item_ty, &env, &bound)?;
         let info = fx.body.locals[0].source_info;
         let mut ops = Vec::new();
-        for (r, mutable) in &bound {
-            let p = fx.src[r].clone();
+        for (key, mutable) in &bound {
+            let p = fx.hidden[key].clone();
             let pt = place_ty(fx.body, self.tys, &p)?.ty;
             let l = fx.temp(self.tys.tcx().reference(pt, *mutable));
             let kind = if *mutable {
@@ -1936,8 +2159,8 @@ impl Spec<'_> {
                 }
             })
             .collect();
-        for (r, mutable) in &bound {
-            let p = fx.src[r].clone();
+        for (key, mutable) in &bound {
+            let p = fx.hidden[key].clone();
             let pt = place_ty(fx.body, self.tys, &p)?.ty;
             let l = fx.temp(self.tys.tcx().reference(pt, *mutable));
             let kind = if *mutable {
@@ -2056,13 +2279,13 @@ impl Fx<'_> {
         self.body.arg_count += 1;
     }
 
-    fn add_params(&mut self, params: &[(String, Ty)]) {
+    fn add_params(&mut self, params: &[(Key, Ty)]) {
         let n = self.body.arg_count as u32;
         let k = params.len() as u32;
         let shift = |l: Local| if l.0 > n { Local(l.0 + k) } else { l };
         renumber(self.body, &shift);
         let info = self.body.locals[0].source_info;
-        for (i, (r, t)) in params.iter().enumerate() {
+        for (i, ((r, b), t)) in params.iter().enumerate() {
             let l = Local(n + 1 + i as u32);
             self.body.locals.insert(
                 l.index(),
@@ -2076,10 +2299,24 @@ impl Fx<'_> {
                     source_info: info,
                 },
             );
-            self.src
-                .insert(r.clone(), Place::local(l).project(ProjElem::Deref));
+            self.hidden
+                .insert((r.clone(), *b), Place::local(l).project(ProjElem::Deref));
         }
         self.body.arg_count += params.len();
+    }
+
+    /// Where the provider `r` is bound to here is.
+    fn src(&self, r: &str) -> Result<Place, String> {
+        self.env
+            .get(r)
+            .and_then(|b| self.hidden.get(&(r.to_string(), *b)))
+            .cloned()
+            .ok_or_else(|| {
+                format!(
+                    "providers: in `{}`, no provider of `{r}` is held",
+                    self.body.instance.name
+                )
+            })
     }
 
     fn temp(&mut self, ty: Ty) -> Local {

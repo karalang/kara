@@ -1131,6 +1131,19 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   capture says. A tuple path (`t.0.1.1`) splits the same way. These
   passed `karac check` and then stopped with MIR's internal "move check:
   use of _1.0.0.x" on every backend (B-2026-11-25-39).
+- A provider's methods run with the bindings in scope where it was bound,
+  never its own binding and never a nearer one of the same resource (core
+  semantics §14.3, §14.4). A fake `Stderr` whose `write` prints with
+  `eprintln`, or a tee that forwards to the stream it fakes, reaches the
+  binding outside it; a `Stdout` fake bound inside a `Stderr` fake prints
+  through that fake even when another `Stderr` binding is nearer the call.
+  Such programs passed `karac check` and every backend refused them with an
+  internal borrow-check error, as did two fakes of each other's streams bound
+  one after the other, never nested. A function takes a hidden
+  parameter for each provider binding its calls can reach. A program with no
+  override compiles as before. Such bindings nest at most 16 deep: the 17th, and
+  a recursion that binds a tee on every round, are refused with
+  `E_PROVIDER_NEST` (`E0425`) (B-2026-11-25-50).
 - `karac run` and `karac run --interp` now answer `has_debug_metadata()`
   from the package's `[profile.dev] runtime_debug_metadata`, on by default,
   as `karac build` does. `karac run` used to answer true whatever the

@@ -948,6 +948,13 @@ pub enum EffectErrorKind {
     /// (`E_DYN_PROVIDER`, design.md §9): the value has no room to carry
     /// the provider. Found as `ProviderUnsupported` is.
     DynProvider,
+    /// Provider bindings nested more than 16 deep through their providers'
+    /// environments (`E_PROVIDER_NEST`, core semantics §14.4): each
+    /// provider bound where the one before it is in scope and using it, as
+    /// a recursion that binds a tee on every round does, needs a copy of
+    /// its methods per depth (B-2026-11-25-50). Found as
+    /// `ProviderUnsupported` is.
+    ProviderNestTooDeep,
     /// A `TaskGroup` task holds a provider-rooted resource's provider
     /// while another task of the group, a second run of its spawn or the
     /// spawner uses it, one of them writing (core semantics §14.9): a task
@@ -1113,6 +1120,7 @@ pub(crate) fn class_for_effect_error_kind(
         | EffectErrorKind::ProviderUnsupported
         | EffectErrorKind::HandleUsesOverride
         | EffectErrorKind::DynProvider
+        | EffectErrorKind::ProviderNestTooDeep
         | EffectErrorKind::TraitDefaultExceedsCeiling
         | EffectErrorKind::EffectVariableConflict
         | EffectErrorKind::ProfileIncompatibleEffect

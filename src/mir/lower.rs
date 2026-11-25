@@ -32394,7 +32394,8 @@ pub fn refusal_text(why: &crate::mir::providers::Refusal) -> String {
              override; test a handler by calling it with a `Request`"
         ),
         crate::mir::providers::Refusal::HandleUsesOverride { text }
-        | crate::mir::providers::Refusal::DynProvider { text } => text.clone(),
+        | crate::mir::providers::Refusal::DynProvider { text }
+        | crate::mir::providers::Refusal::NestTooDeep { text } => text.clone(),
     }
 }
 
@@ -32497,6 +32498,8 @@ pub enum SourceEffectError {
     HandleUsesOverride,
     /// A coercion to `dyn` whose methods need a provider (design.md §9).
     DynProvider,
+    /// Provider bindings nested too deep through their providers (§14.4).
+    ProviderNest,
     /// A use of a provider while a `TaskGroup` task holds it (§14.9).
     TaskConflict,
 }
@@ -32629,6 +32632,7 @@ pub fn source_effect_errors(src: &str) -> Vec<((usize, usize), SourceEffectError
                 SourceEffectError::HandleUsesOverride
             }
             crate::mir::providers::Refusal::DynProvider { .. } => SourceEffectError::DynProvider,
+            crate::mir::providers::Refusal::NestTooDeep { .. } => SourceEffectError::ProviderNest,
         };
         add(n.span, kind, refusal_text(why));
     }
