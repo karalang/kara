@@ -1,0 +1,6 @@
+import std.time.{Clock, Instant, SystemTime};
+fn main() {
+    let (a, b) = par { Clock.now(), SystemTime.now().since_epoch().as_secs() };
+    let (i, j) = par { Instant.now(), Instant.now() };
+    println(f"{a > 0} {b > 0} {i <= Instant.now() and j <= Instant.now()}");
+}

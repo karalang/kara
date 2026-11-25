@@ -1,0 +1,2 @@
+discarded `PooledConnection` value
+`PooledConnection` is `#[must_use]`

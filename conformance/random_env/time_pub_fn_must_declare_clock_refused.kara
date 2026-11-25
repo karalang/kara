@@ -1,0 +1,3 @@
+import std.time.{Clock};
+pub fn stamp() -> i64 { Clock.now() }
+fn main() { println(stamp()); }

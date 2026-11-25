@@ -1,0 +1,15 @@
+import std.time.{Duration, sleep, timeout, TimedOut};
+struct Noisy {}
+impl Drop for Noisy { fn drop(mut ref self) { println("task's value dropped"); } }
+fn main() {
+    let r = timeout(Duration.ms(30), || {
+        let _n = Noisy {};
+        defer println("task's defer ran");
+        sleep(Duration.secs(5));
+        1
+    });
+    match r {
+        Ok(v) => println(f"ok {v}"),
+        Err(TimedOut {}) => println("timeout returned"),
+    }
+}

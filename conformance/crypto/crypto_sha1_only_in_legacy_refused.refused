@@ -1,0 +1,1 @@
+unknown item `sha1` in module `std.crypto`; `sha1` is in `std.crypto.legacy`

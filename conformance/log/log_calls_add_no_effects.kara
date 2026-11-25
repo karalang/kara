@@ -1,0 +1,13 @@
+import std.log.{debug, info, warn, error};
+
+fn quiet(a: i64) -> i64 {
+    debug("d", a: a);
+    info("i", a: a);
+    warn("w");
+    error("e", a: a);
+    a
+}
+
+fn main() {
+    println(quiet(1));
+}

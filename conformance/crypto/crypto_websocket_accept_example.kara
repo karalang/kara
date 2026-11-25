@@ -1,0 +1,20 @@
+import std.crypto.legacy.{sha1, Sha1};
+import std.crypto.sha2.{Sha256};
+import std.encoding.{base64_encode, hex_encode};
+
+fn accept_value(key: Str) -> String {
+    base64_encode(sha1(f"{key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11".bytes()))
+}
+
+fn main() {
+    println(accept_value("dGhlIHNhbXBsZSBub25jZQ=="));
+    let mut h = Sha1.new();
+    h.update("ab".bytes());
+    h.update("c".bytes());
+    println(hex_encode(h.finish()));
+    // A hash dropped without `finish` frees its state (the ASan lane sees a leak otherwise).
+    let mut unfinished = Sha256.new();
+    unfinished.update("abc".bytes());
+    drop(unfinished);
+    println("dropped");
+}

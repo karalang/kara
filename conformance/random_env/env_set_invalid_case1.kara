@@ -1,0 +1,12 @@
+// env.set panics on an invalid name/value; argv[1] picks the case.
+fn main() {
+    let k = i64.parse(env.args()[1]).unwrap_or(0);
+    match k {
+        0 => env.set("", "x"),
+        1 => env.set("A=B", "x"),
+        2 => env.set("A\0B", "x"),
+        3 => env.set("A", "x\0y"),
+        _ => env.set("OK_NAME", ""),
+    }
+    println("no panic");
+}

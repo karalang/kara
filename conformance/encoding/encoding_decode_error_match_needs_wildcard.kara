@@ -1,0 +1,8 @@
+import std.encoding.{hex_decode, DecodeError};
+
+fn main() {
+    match hex_decode("0g").unwrap_err() {
+        DecodeError.InvalidByte(at) => println(at),
+        DecodeError.InvalidLength => println("len"),
+    }
+}

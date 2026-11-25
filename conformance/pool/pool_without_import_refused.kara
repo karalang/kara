@@ -1,0 +1,5 @@
+struct Conn { id: i64 }
+fn main() {
+    let pool: Pool[Conn, String] = Pool.new(|| Ok(Conn { id: 1 }), 1, 1);
+    pool.close();
+}

@@ -1,0 +1,12 @@
+import std.log.{info};
+
+fn main() {
+    let mut total = 0;
+    for i in 0..4 {
+        info("tick", i: i);
+        total += i;
+    }
+    if total == 6 {
+        panic("stop");
+    }
+}

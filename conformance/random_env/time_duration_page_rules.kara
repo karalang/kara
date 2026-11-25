@@ -1,0 +1,11 @@
+import std.time.{Duration};
+fn main() {
+    println(Duration.us(1500).as_ms());
+    println(Duration.ms(1) - Duration.ms(3));
+    println(Duration.ns(9) / 4);
+    let mut total = Duration.secs(0);
+    total += Duration.ms(1500);
+    total *= 2;
+    println(total);
+    println(f"{Duration.ns(999)} {Duration.ns(1500)} {Duration.ms(250)} {Duration.ms(1500)} {Duration.secs(90)} {Duration.secs(7200)}");
+}

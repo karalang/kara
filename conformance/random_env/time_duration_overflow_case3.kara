@@ -1,0 +1,19 @@
+// Each Duration overflow case panics; argv[1] picks the case.
+import std.time.{Duration};
+fn main() {
+    let k = i64.parse(env.args()[1]).unwrap_or(0);
+    let d = match k {
+        0 => Duration.secs(9223372037),
+        1 => Duration.ns(i64.MAX) + Duration.ns(1),
+        2 => Duration.ns(5) / 0,
+        3 => Duration.ns(i64.MIN) - Duration.ns(1),
+        4 => Duration.ns(i64.MAX) * 2,
+        5 => Duration.ms(9223372036855),
+        6 => Duration.us(-9223372036854776),
+        7 => Duration.ns(i64.MIN) / -1,
+        8 => { let mut x = Duration.ns(i64.MAX); x += Duration.ns(1); x },
+        9 => Duration.secs(9223372036),
+        _ => Duration.ns(0),
+    };
+    println(f"no panic: {d}");
+}

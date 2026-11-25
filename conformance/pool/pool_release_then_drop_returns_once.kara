@@ -1,0 +1,25 @@
+import std.pool.{Pool, PoolError, PooledConnection};
+import std.time.{Duration};
+
+shared struct Count { mut made: i64 }
+struct Conn { id: i64 }
+impl Drop for Conn {
+    fn drop(mut ref self) { println(f"drop {self.id}"); }
+}
+
+fn main() {
+    let n = Count { made: 0 };
+    let mk = n.clone();
+    let pool: Pool[Conn, String] = Pool.new(|| { mk.made += 1; Ok(Conn { id: mk.made }) }, 2, 0);
+    let a = pool.acquire(Duration.ms(5)).unwrap();
+    pool.release(a);
+    // One idle value, not two: two loans need a second create.
+    let x = pool.acquire(Duration.ms(5)).unwrap();
+    let y = pool.acquire(Duration.ms(5)).unwrap();
+    println(f"loans {x.val.id} {y.val.id}, made {n.made}");
+    drop(x);
+    drop(y);
+    println("-- the pool drops, its idle values drop");
+    drop(pool);
+    println("-- end");
+}

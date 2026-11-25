@@ -1,0 +1,10 @@
+import std.time.{SystemTime};
+struct FakeClock {}
+impl ClockProvider for FakeClock {
+    fn now(ref self) -> i64 { 1234 }
+}
+fn main() {
+    with_provider[Clock](FakeClock {}, || {
+        println(f"{SystemTime.now().since_epoch()}");
+    });
+}

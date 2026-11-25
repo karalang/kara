@@ -1,0 +1,13 @@
+fn port() -> i64 {
+    match env.var("PORT") {
+        Ok(s) => i64.parse(s).unwrap_or(8080),
+        Err(_) => 8080,
+    }
+}
+fn main() {
+    println(port());
+    env.set("PORT", "9090");
+    println(port());
+    env.set("PORT", "x");
+    println(port());
+}

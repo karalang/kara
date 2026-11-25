@@ -1,0 +1,5 @@
+import std.crypto.sha2.{sha256};
+fn main() {
+    let d = sha256("abc");
+    println(d.len());
+}

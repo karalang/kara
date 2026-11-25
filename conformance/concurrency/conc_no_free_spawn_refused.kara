@@ -1,0 +1,4 @@
+fn main() {
+    let h = spawn(|| 1);
+    println(h.join());
+}

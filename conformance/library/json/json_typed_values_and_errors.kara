@@ -1,0 +1,54 @@
+import std.json.{Json, JsonError};
+#[derive(Serialize, Deserialize)]
+struct A { a: i64 }
+#[derive(Serialize, Deserialize)]
+struct Envelope { kind: String, data: Json }
+#[derive(Serialize, Deserialize)]
+struct F { f: f64 }
+#[derive(Serialize, Deserialize)]
+struct G { g: f32 }
+#[derive(Serialize, Deserialize)]
+struct Flag { a: i64, active: bool }
+#[derive(Serialize, Deserialize)]
+struct Small { u: u8, c: char }
+#[derive(Serialize, Deserialize)]
+struct Inner { small: i64 }
+#[derive(Serialize, Deserialize)]
+struct Outer { inner: Inner }
+fn show[T](r: Result[T, DeserializeError]) -> String {
+    match r { Ok(_) => "ok".to_string(), Err(e) => f"{e}" }
+}
+fn main() {
+    let r1: Result[A, DeserializeError] = Json.deserialize("{\"a\":1,\"a\":2}");
+    println(show(r1));
+    let r2: Result[A, DeserializeError] = Json.deserialize("{\"a\":1,\"z\":5,\"z\":6}");
+    match r2 { Ok(v) => println(f"skipped unknown: a={v.a}"), Err(e) => println(f"{e}") }
+    let r3: Result[Envelope, DeserializeError] = Json.deserialize("{\"kind\":\"event\",\"data\":{\"id\":7,\"id\":8}}");
+    let e = r3.unwrap();
+    match e.data.clone() {
+        Json.Object(o) => match o[0].1.clone() { Json.Int(n) => println(f"data {o.len()} key, {o[0].0} Int({n})"), _ => println("not Int") },
+        _ => println("?"),
+    }
+    println(Json.serialize(e));
+    println(Json.serialize(F { f: 0.1 }));
+    println(Json.serialize(G { g: 0.1 }));
+    println(Json.serialize(F { f: f64.NAN }));
+    let r4: Result[F, DeserializeError] = Json.deserialize("{\"f\":null}");
+    println(show(r4));
+    let r5: Result[Flag, DeserializeError] = Json.deserialize("{\"a\": 1");
+    println(show(r5));
+    let r6: Result[Flag, DeserializeError] = Json.deserialize("{\"a\":\"x\",\"active\":true}");
+    println(show(r6));
+    let r7: Result[Flag, DeserializeError] = Json.deserialize("{\"a\":1}");
+    println(show(r7));
+    let r8: Result[Small, DeserializeError] = Json.deserialize("{\"c\":\"a\",                       \"u\":256}");
+    println(show(r8));
+    let r9: Result[Small, DeserializeError] = Json.deserialize("{\"u\":1,                 \"c\":\"xy\"}");
+    println(show(r9));
+    let r10: Result[Outer, DeserializeError] = Json.deserialize("{\"inner\":{}}");
+    println(show(r10));
+    match Json.parse("{\"a\" 1}") {
+        Ok(_) => println("?"),
+        Err(e) => println(f"{e.line}:{e.column} {e.message} | {e}"),
+    }
+}

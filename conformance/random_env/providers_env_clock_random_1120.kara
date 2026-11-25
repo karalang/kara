@@ -1,0 +1,62 @@
+// Provider fakes: Env, Clock, RandomSource; default methods panic naming resource and method.
+import std.time.{Instant, SystemTime, Clock};
+import std.random;
+import std.uuid;
+struct FakeEnv {}
+impl EnvProvider for FakeEnv {
+    fn args(ref self) -> Vec[String] { ["prog", "--verbose"] }
+}
+struct FakeClock {}
+impl ClockProvider for FakeClock {
+    fn now(ref self) -> i64 { 1234 }
+    fn monotonic_ns(ref self) -> i64 { 5000000000 }
+}
+struct FakeRand { n: u64 }
+impl RandomProvider for FakeRand {
+    fn next_u64(mut ref self) -> u64 { self.n = self.n + 1; self.n }
+}
+fn main() {
+    with_provider[Env](FakeEnv {}, || {
+        println(f"{qv(env.args())}");
+    });
+    with_provider[Clock](FakeClock {}, || {
+        println(f"clock {Clock.now()}");
+        let i = Instant.now();
+        println(f"elapsed {i.elapsed()}");
+    });
+    with_provider[RandomSource](FakeRand { n: 0 }, || {
+        println(f"{random.next_u64()} {random.next_u64()}");
+        println(f"{uuid.v4()}");
+    });
+    let u = uuid.v4();
+    println(f"real uuid len={u.len()} v4={u.char_at(14) == Some('4')}");
+    with_provider[Env](FakeEnv {}, || {
+        match env.var("HOME") { Ok(s) => println(s), Err(e) => println(f"{e}") }
+    });
+}
+
+fn q(s: Str) -> String {
+    let mut o = "\"".to_string();
+    for c in s.chars() {
+        if c == '\n' { o.push_str("\\n"); }
+        else if c == '\r' { o.push_str("\\r"); }
+        else if c == '\t' { o.push_str("\\t"); }
+        else if c == '\0' { o.push_str("\\0"); }
+        else if c == '"' { o.push_str("\\\""); }
+        else { o.push(c); }
+    }
+    o.push_str("\"");
+    o
+}
+fn qv(v: ref Vec[String]) -> String {
+    let mut o = "[".to_string();
+    let mut first = true;
+    for s in v {
+        if not first { o.push_str(", "); }
+        first = false;
+        o.push_str(q(s));
+    }
+    o.push_str("]");
+    o
+}
+fn qo(x: Option[i32]) -> String { match x { Some(n) => f"Some({n})", None => "None".to_string() } }

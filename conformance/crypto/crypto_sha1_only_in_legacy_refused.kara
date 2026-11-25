@@ -1,0 +1,4 @@
+import std.crypto.{sha1};
+fn main() {
+    println(sha1("abc".bytes()).len());
+}

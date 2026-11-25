@@ -1,0 +1,11 @@
+import std.json.{Json};
+fn main() -> Result[(), AnyError] {
+    let v = Json.parse("{\"name\": \"ada\", \"tags\": [1, 2.5]}")?;
+    match v {
+        Json.Object(fields) => println(f"{fields.len()} fields"),
+        _ => println("not an object"),
+    }
+    let out = Json.Object(Vec[("ok", Json.Bool(true)), ("n", Json.Int(3))]);
+    println(out.stringify());
+    Ok(())
+}

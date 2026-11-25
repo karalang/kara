@@ -1,0 +1,23 @@
+import std.pool.{Pool, PoolError, PooledConnection};
+import std.time.{Duration, Instant};
+
+struct Conn { id: i64 }
+
+fn main() {
+    let pool: Pool[Conn, String] = Pool.new(|| Ok(Conn { id: 1 }), 1, 4);
+    let held = pool.acquire(Duration.ms(5)).unwrap();
+    let g = TaskGroup.new();
+    let h = g.spawn(|| {
+        let get = |t: Duration| pool.acquire(t);
+        let start = Instant.now();
+        let r = get(Duration.ms(40));
+        let waited = start.elapsed().as_ms() >= 40;
+        match r {
+            Err(PoolError.Timeout) => f"Timeout after the whole timeout: {waited}",
+            Ok(c) => f"lent {c.val.id}",
+            Err(e) => f"{e}",
+        }
+    });
+    println(h.join());
+    drop(held);
+}

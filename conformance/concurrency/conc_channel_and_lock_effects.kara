@@ -1,0 +1,26 @@
+import std.sync.{channel, Sender, Receiver, Mutex, Atomic};
+
+pub fn put(tx: ref Sender[i64]) -> bool with sends(tx) blocks allocates(Heap) { tx.send(1).is_ok() }
+pub fn get(rx: ref Receiver[i64]) -> Option[i64] with receives(rx) blocks { rx.recv() }
+fn peek(rx: ref Receiver[i64]) -> Option[i64] { rx.try_recv() }
+fn bump(m: ref Mutex[i64]) { let g = m.lock(); *g.value += 1; }
+fn try_bump(m: ref Mutex[i64]) -> bool {
+    match m.try_lock() {
+        Some(g) => { *g.value += 1; true }
+        None => false,
+    }
+}
+fn count(a: ref Atomic[i64]) -> i64 { a.fetch_add(1) }
+
+fn main() {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1);
+    println(put(tx));
+    println(peek(rx));
+    println(put(tx));
+    println(get(rx));
+    let m = Mutex.new(0);
+    bump(m);
+    println(try_bump(m));
+    let a = Atomic.new(0);
+    println(count(a));
+}

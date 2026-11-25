@@ -1,0 +1,12 @@
+import std.random;
+fn step(s: u64) -> u64 {
+    let mut x = s;
+    x = x ^ (x << 13);
+    x = x ^ (x >> 7);
+    x ^ (x << 17)
+}
+fn roll() -> u64 { random.next_u64() }
+fn main() {
+    let a = step(42);
+    println(f"{a == step(42)} {roll() >= 0}");
+}

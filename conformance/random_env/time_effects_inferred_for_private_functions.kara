@@ -1,0 +1,9 @@
+import std.time.{Clock, Instant, Duration, sleep};
+import std.random;
+fn wall() -> i64 { Clock.now() }
+fn mono() -> Instant { Instant.now() }
+fn nap() { sleep(Duration.ms(1)); }
+fn draw() -> u64 { random.next_u64() }
+fn home() -> bool { env.var("HOME").is_ok() }
+fn setx() { env.set("KARA_TRE_X", "1"); }
+fn main() { println(f"{wall() > 0} {mono() <= Instant.now()} {draw() >= 0} {home() or true}"); nap(); setx(); }

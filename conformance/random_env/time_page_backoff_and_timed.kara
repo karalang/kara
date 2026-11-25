@@ -1,0 +1,11 @@
+import std.time.{Duration, Instant, sleep};
+fn backoff(attempt: i64) { sleep(Duration.ms(100 * attempt)); }
+fn timed(work: Fn()) -> Duration {
+    let start = Instant.now();
+    work();
+    start.elapsed()
+}
+fn main() {
+    let t = timed(|| backoff(1));
+    println(f"{t >= Duration.ms(100)} {t < Duration.secs(5)}");
+}

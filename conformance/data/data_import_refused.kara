@@ -1,0 +1,4 @@
+import data.{Column};
+fn main() {
+    let c: Column[i64] = Column.new();
+}

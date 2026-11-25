@@ -1,0 +1,15 @@
+duplicate field `a` at line 1 column 10
+skipped unknown: a=1
+data 1 key, id Int(8)
+{"kind":"event","data":{"id":8}}
+{"f":0.1}
+{"g":0.1}
+{"f":null}
+f: expected a number, found null at line 1 column 6
+EOF while parsing an object at line 1 column 7
+a: expected an integer, found a string at line 1 column 6
+missing field `active`
+u: 256 is out of range for u8 at line 1 column 39
+c: expected one character, found "xy" at line 1 column 32
+inner: missing field `small`
+1:6 expected `:` at line 1 column 6 | expected `:` at line 1 column 6

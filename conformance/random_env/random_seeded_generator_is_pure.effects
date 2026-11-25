@@ -1,0 +1,2 @@
+step lacks writes(RandomSource), reads(Clock), reads(Env)
+roll = writes(RandomSource)

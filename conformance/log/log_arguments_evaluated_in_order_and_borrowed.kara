@@ -1,0 +1,18 @@
+import std.log;
+import std.log.{debug, info};
+
+fn side(n: i64) -> i64 {
+    println(f"eval {n}");
+    n
+}
+
+fn main() {
+    log.init(log.json_backend(log.Stream.Stdout));
+    let v = Vec[1, 2];
+    info("kept", a: side(1), b: side(2), v: v);
+    debug("dropped", c: side(3), d: side(4));
+    println(v.len());
+    log.init(log.json_backend(log.Stream.Stderr));
+    info("later");
+    println("end");
+}

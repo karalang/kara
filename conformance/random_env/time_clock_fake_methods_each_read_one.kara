@@ -1,0 +1,11 @@
+import std.time.{Clock, Instant, SystemTime};
+struct Wall {}
+impl ClockProvider for Wall {
+    fn wall_ns(ref self) -> i64 { 3000000000 }
+}
+fn main() {
+    with_provider[Clock](Wall {}, || {
+        println(SystemTime.now().since_epoch().as_secs());
+        println(Instant.now() <= Instant.now());
+    });
+}

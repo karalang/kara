@@ -1,0 +1,5 @@
+import std.crypto.sha2.{sha256};
+import std.encoding.{hex_encode};
+fn main() {
+    println(hex_encode(sha256("abc".bytes())));
+}

@@ -1,0 +1,46 @@
+import std.time.{Duration, Instant, SystemTime, Clock, sleep, timeout, TimedOut};
+
+fn main() {
+    let ds = [Duration.ns(0), Duration.ns(999), Duration.ns(1000), Duration.ns(1500), Duration.us(999), Duration.ms(1), Duration.ms(250),
+              Duration.ns(999999999), Duration.secs(1), Duration.ms(1500), Duration.secs(59), Duration.secs(60), Duration.secs(90),
+              Duration.secs(3600), Duration.secs(7200), Duration.secs(3661), Duration.ms(3661001), Duration.ns(3661000000001),
+              Duration.ns(-1), Duration.ms(-1500), Duration.secs(-90), Duration.ns(1001), Duration.ns(1100000), Duration.ns(1000001),
+              Duration.ns(i64.MAX), Duration.ns(i64.MIN), Duration.ms(100) - Duration.ms(350), Duration.secs(86400 * 3)];
+    for d in ds {
+        println(f"{d} ns={d.as_ns()} us={d.as_us()} ms={d.as_ms()} s={d.as_secs()}");
+    }
+    println(f"{Duration.us(1500).as_ms()} {Duration.ms(-1500).as_secs()} {Duration.ns(-999).as_us()}");
+    let mut t = Duration.secs(1);
+    t += Duration.ms(500);
+    println(f"{t}");
+    t -= Duration.secs(2);
+    println(f"{t}");
+    t *= 3;
+    println(f"{t}");
+    t /= 4;
+    println(f"{t}");
+    println(f"{Duration.ns(7) / 2} {Duration.ns(-7) / 2} {Duration.secs(1) * -2}");
+    println(f"{Duration.ms(1) == Duration.us(1000)} {Duration.ms(1) < Duration.ms(2)}");
+    let a = Instant.now();
+    sleep(Duration.ms(20));
+    let b = Instant.now();
+    println(f"sleep >= 20ms: {(b - a) >= Duration.ms(20)} b>a: {b > a} a+d: {a + (b - a) == b}");
+    println(f"elapsed >= 20ms: {a.elapsed() >= Duration.ms(20)}");
+    let c = Clock.now();
+    let s = SystemTime.now().since_epoch();
+    println(f"clock sane: {c > 1700000000} wall sane: {s.as_secs() - c <= 1 and s.as_secs() >= c}");
+    match timeout(Duration.ms(50), || { sleep(Duration.secs(5)); 1 }) {
+        Ok(v) => println(f"timeout ok {v}"),
+        Err(TimedOut {}) => println(f"timeout err: {TimedOut {}}"),
+    }
+    match timeout(Duration.secs(5), || 42) {
+        Ok(v) => println(f"timeout ok {v}"),
+        Err(e) => println(f"timeout err: {e}"),
+    }
+    let st = Instant.now();
+    let _ = timeout(Duration.ms(30), || { sleep(Duration.secs(3)); 0 });
+    println(f"timeout returned promptly: {st.elapsed() < Duration.secs(2)}");
+    sleep(Duration.ns(0));
+    sleep(Duration.ms(-5));
+    println("slept zero/negative");
+}

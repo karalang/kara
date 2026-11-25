@@ -1,0 +1,1 @@
+public function 'stamp' performs effects [reads(Clock)] but has no effect declaration

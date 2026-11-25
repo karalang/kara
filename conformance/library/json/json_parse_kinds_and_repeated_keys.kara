@@ -1,0 +1,25 @@
+import std.json.{Json};
+fn kind(j: ref Json) -> String {
+    match j {
+        Json.Null => "Null".to_string(),
+        Json.Bool(b) => f"Bool({b})",
+        Json.Number(n) => f"Number({n})",
+        Json.String(s) => f"String({s})",
+        Json.Array(a) => f"Array({a.len()})",
+        Json.Object(o) => f"Object({o.len()})",
+        Json.Int(i) => f"Int({i})",
+    }
+}
+fn main() {
+    for t in [" 7 ", "-0", "7.0", "1e2", "9223372036854775807", "9223372036854775808", "null", "true", "\"x\"", "[1,[2]]", "{}"] {
+        println(f"{t.trim()} -> {kind(Json.parse(t).unwrap())}");
+    }
+    let r = Json.parse("{\"a\":1,\"b\":2,\"a\":3}").unwrap();
+    println(r.clone().stringify());
+    match r { Json.Object(o) => println(f"{o.len()} keys"), _ => {} }
+    println(Json.Array(Vec[Json.Number(1.0), Json.Number(0.1), Json.Number(1e21), Json.Number(1e-7), Json.Number(f64.NAN), Json.Number(f64.INFINITY), Json.String("q\"\\\n\u{1}é")]).stringify());
+    let deep = "[".repeat(128) + "]".repeat(128);
+    println(Json.parse(deep).is_err());
+    let ok = "[".repeat(127) + "]".repeat(127);
+    println(Json.parse(ok).is_ok());
+}

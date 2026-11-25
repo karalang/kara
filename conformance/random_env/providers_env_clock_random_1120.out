@@ -1,0 +1,6 @@
+["prog", "--verbose"]
+clock 1234
+elapsed 0s
+1 2
+00000000-0000-4003-8000-000000000004
+real uuid len=36 v4=true

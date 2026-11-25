@@ -1,0 +1,23 @@
+import std.pool.{Pool, PoolError};
+import std.time.{Duration};
+
+struct Conn { id: i64 }
+
+fn take(pool: ref Pool[Conn, String]) -> Result[i64, AnyError] {
+    let c = pool.acquire(Duration.ms(5))?;
+    Ok(c.val.id)
+}
+
+fn main() {
+    let busy: Pool[Conn, String] = Pool.new(|| Ok(Conn { id: 1 }), 1, 0);
+    let held = busy.acquire(Duration.ms(5)).unwrap();
+    match busy.acquire(Duration.ms(5)) { Err(e) => println(f"{e}"), Ok(_) => println("lent") }
+    let waits: Pool[Conn, String] = Pool.new(|| Ok(Conn { id: 2 }), 1, 4);
+    let held2 = waits.acquire(Duration.ms(5)).unwrap();
+    match waits.acquire(Duration.ms(5)) { Err(e) => println(f"{e}"), Ok(_) => println("lent") }
+    waits.close();
+    match waits.acquire(Duration.ms(5)) { Err(e) => println(f"{e}"), Ok(_) => println("lent") }
+    let bad: Pool[Conn, String] = Pool.new(|| Err("refused".to_string()), 1, 4);
+    match take(bad) { Err(e) => println(f"any: {e}"), Ok(n) => println(n) }
+    println(held.val.id + held2.val.id);
+}

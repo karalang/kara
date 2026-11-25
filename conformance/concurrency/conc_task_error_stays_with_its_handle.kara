@@ -1,0 +1,27 @@
+import std.sync.{TaskGroup, TaskHandle};
+
+fn job(i: i64) -> Result[i64, String] {
+    if i == 2 { return Err(f"job {i} failed"); }
+    Ok(i * 10)
+}
+
+fn start(g: ref TaskGroup, i: i64) -> TaskHandle[Result[i64, String]] {
+    g.spawn(|| job(i))
+}
+
+fn main() {
+    let mut handles = Vec.new();
+    {
+        let g = TaskGroup.new();
+        for i in 1..4 {
+            handles.push(start(g, i));
+        }
+    }
+    // The group has dropped: every task is done, and each handle holds its result.
+    for h in handles.into_iter() {
+        match h.join() {
+            Ok(v) => println(f"ok {v}"),
+            Err(e) => println(f"err {e}"),
+        }
+    }
+}

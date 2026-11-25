@@ -1,0 +1,7 @@
+eval 1
+eval 2
+{"level":"info","msg":"kept","a":1,"b":2,"v":[1,2],"task_id":null}
+eval 3
+eval 4
+2
+end

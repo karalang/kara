@@ -1,0 +1,14 @@
+import std.log;
+import std.log.{info};
+
+fn step(i: i64) -> i64 {
+    info("step", i: i);
+    info("step done", i: i);
+    i
+}
+
+fn main() {
+    log.init(log.text_backend(log.Stream.Stdout));
+    let (a, b) = par { step(1), step(2) };
+    println(a + b);
+}

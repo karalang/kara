@@ -1,0 +1,6 @@
+wall = reads(Clock)
+mono = reads(Clock)
+nap = blocks, suspends, reads(Clock)
+draw = writes(RandomSource)
+home has reads(Env)
+setx has writes(Env)

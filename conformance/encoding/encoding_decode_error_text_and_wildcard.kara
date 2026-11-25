@@ -1,0 +1,15 @@
+import std.encoding.{base64_decode, base64url_decode, hex_decode, percent_decode, DecodeError};
+
+fn main() {
+    let e = hex_decode("0g").unwrap_err();
+    println(f"{e}");
+    match e {
+        DecodeError.InvalidByte(at) => println(f"InvalidByte({at})"),
+        _ => println("other"),
+    }
+    println(f"{base64_decode("aGk").unwrap_err()}");
+    println(f"{percent_decode("a%2").unwrap_err()}");
+    println(String.from_utf8(percent_decode("a+b%20c%e2%82%AC").unwrap()).unwrap());
+    println(base64url_decode("aGk").unwrap().len());
+    println(base64url_decode("aGk=").unwrap().len());
+}

@@ -1,0 +1,5 @@
+loans 1 2, made 2
+-- the pool drops, its idle values drop
+drop 1
+drop 2
+-- end

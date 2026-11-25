@@ -1,0 +1,8 @@
+import std.time.{Duration, sleep, timeout};
+fn slow() -> Result[i64, AnyError] {
+    let v = timeout(Duration.ms(10), || { sleep(Duration.secs(5)); 1 })?;
+    Ok(v)
+}
+fn main() {
+    match slow() { Ok(v) => println(f"ok {v}"), Err(e) => println(f"err: {e}") }
+}
