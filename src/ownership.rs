@@ -4401,6 +4401,41 @@ impl<'a> OwnershipChecker<'a> {
                         .find(|(n, u, _)| n == name && *u == want)
                         .map(|(_, _, span)| span.line)
                 };
+                // `karac query ownership` reports the DECLARED mode
+                // (B-2026-10-30-35), so where the body alone would infer
+                // another, the reason says both (B-2026-11-25-58).
+                let declared_mode = declared
+                    .iter()
+                    .find(|(n, _)| n == name)
+                    .map(|(_, m)| m)
+                    .filter(|d| *d != mode);
+                if let (Some(d), false) = (declared_mode, escaping_own_params.contains(name)) {
+                    let (line, body) = match mode {
+                        OwnershipMode::Own => (
+                            site(ParamUsage::Consumed).unwrap_or(f.span.line),
+                            format!(
+                                "the body moves `{name}` here, which alone would make it `own`"
+                            ),
+                        ),
+                        OwnershipMode::MutRef => (
+                            site(ParamUsage::Mutated).unwrap_or(f.span.line),
+                            format!(
+                                "the body writes `{name}` here, which alone would need `mut ref`"
+                            ),
+                        ),
+                        OwnershipMode::Ref => (
+                            f.span.line,
+                            format!(
+                                "the body never moves or writes `{name}`, so a borrow would do"
+                            ),
+                        ),
+                    };
+                    return (
+                        name.clone(),
+                        line,
+                        format!("{body}; it is declared `{d}`, which is how a caller passes it"),
+                    );
+                }
                 let (line, reason) = if escaping_own_params.contains(name) {
                     (
                         f.span.line,
