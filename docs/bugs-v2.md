@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 766 |
-| false-positive | 376 |
+| false-positive | 378 |
 | missing-feature | 256 |
 | perf | 204 |
 | other | 149 |
@@ -76,8 +76,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 913 |
-| mir | 337 |
+| typecheck | 914 |
+| mir | 338 |
 | mir-llvm | 330 |
 | cli | 314 |
 | parser | 162 |
@@ -131,6 +131,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-25-35 | 2026-11-25 | effect | medium | A `pub fn` over `f: ref File` cannot declare io.md's `writes(f)`: E0400 asks for `writes(FileSystem)`; `karac query effects` shows the class, and a `TcpStream` read is charged `sends(Network)` beside `receives(Network)` | — |
 | B-2026-11-25-36 | 2026-11-25 | typecheck+mir | medium | `min(1.5, 2.5)`, or `let x = 0.5; min(x, 2.5)`, the free `min` / `max` over float literals only, passes `karac check` and then stops __mir-run with 'call of unknown function min': the bound `T: Ord` is skipped while T is still the literals' open float type, so the refusal a typed `f64` gets never comes | — |
 | B-2026-11-25-38 | 2026-11-25 | typecheck | low | A program's own `enum Option` or `enum Result` (or `struct Option`) draws no `prelude_shadow` warning, while its own `Vec` or `Map` does; design.md §4 says a lint flags a declaration that shadows a prelude name and book ch05 says the compiler warns for `Option` | — |
+| B-2026-11-25-39 | 2026-11-25 | mir | high | An escaping closure that reads a field path two deep (`|| o.i.t.len()` pushed into a `Vec[Fn() -> i64]`) passes `karac check`, which moves only `o.i.t`, but every backend then refuses the later read of the sibling `o.i.u` with MIR's internal 'move check main: use of _1.0.1, which may have been moved or never initialized'; one level deep (`o.t` / `o.u`) runs | — |
+| B-2026-11-25-40 | 2026-11-25 | typecheck | medium | A UFCS call of a built-in type's method is refused 'no associated function' (E0236): `i64.abs(-3)`, `f64.sqrt(4.0)`, `i64.pow(2, 10)`, `u8.is_ascii_digit(49u8)`, `char.is_alphabetic('x')`, `Vec.len(v)`, and `Vec.len` as a value; `String.len(s)` and user types' `P.get(p)` work, and `let f = i64.abs; f(-4)` (the value form, 3e78d89862) runs | — |
 
 ### Relocated
 
