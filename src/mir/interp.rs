@@ -4147,12 +4147,13 @@ impl<'a> Interp<'a> {
             (
                 t,
                 "trailing_zeros" | "leading_zeros" | "trailing_ones" | "leading_ones"
-                | "count_zeros" | "count_ones" | "abs_diff" | "checked_add" | "checked_sub"
-                | "checked_mul" | "saturating_add" | "saturating_sub" | "saturating_mul" | "clamp"
-                | "overflowing_add" | "overflowing_sub" | "overflowing_mul" | "to_ne_bytes"
-                | "to_le_bytes" | "to_be_bytes" | "rotate_left" | "rotate_right" | "swap_bytes"
-                | "reverse_bits" | "next_power_of_two" | "isqrt" | "div_ceil" | "ilog2" | "ilog10"
-                | "ilog" | "checked_ilog2" | "checked_ilog10" | "checked_ilog",
+                | "count_zeros" | "count_ones" | "abs_diff" | "unsigned_abs" | "checked_add"
+                | "checked_sub" | "checked_mul" | "saturating_add" | "saturating_sub"
+                | "saturating_mul" | "clamp" | "overflowing_add" | "overflowing_sub"
+                | "overflowing_mul" | "to_ne_bytes" | "to_le_bytes" | "to_be_bytes" | "rotate_left"
+                | "rotate_right" | "swap_bytes" | "reverse_bits" | "next_power_of_two" | "isqrt"
+                | "div_ceil" | "ilog2" | "ilog10" | "ilog" | "checked_ilog2" | "checked_ilog10"
+                | "checked_ilog",
             ) if int_width(t).is_some() => self.int_method(name, t, method, &args, ret),
             // B-2026-10-19-11: the families' div / rem / neg / shl / shr / pow.
             (t, m) if int_width(t).is_some() && is_overflow_family_op(m) => {
@@ -13390,6 +13391,8 @@ impl<'a> Interp<'a> {
                 }
             }
             "neg" => (wrap(raw(a).wrapping_neg()), a.checked_neg()),
+            // `MIN.abs()` is past the width: it wraps to MIN (B-2026-11-25-47).
+            "abs" => (wrap(raw(a.wrapping_abs())), a.checked_abs()),
             "shl" | "shr" => {
                 let n = int(1)?;
                 let k = n.rem_euclid(i128::from(bits)) as u32;
@@ -13672,6 +13675,9 @@ impl<'a> Interp<'a> {
             // pair can exceed in `i128` arithmetic: `i128.MIN.abs_diff(3)` is
             // `2^127 + 3`, held as its `u128` bits.
             ("abs_diff", [a, b]) => Ok(Value::Int(a.abs_diff(*b) as i128)),
+            // The magnitude in the unsigned sibling; `i128.MIN`'s is held as
+            // its bits, as every `u128` is (B-2026-11-25-47).
+            ("unsigned_abs", [a]) => Ok(Value::Int(a.unsigned_abs() as i128)),
             // The truncated quotient, one more when a remainder is left and
             // it has the divisor's sign (the exact quotient was positive).
             ("div_ceil", [a, b]) => {
@@ -22748,7 +22754,7 @@ fn is_overflow_family_op(method: &str) -> bool {
         matches!(
             family,
             "checked" | "wrapping" | "saturating" | "overflowing"
-        ) && matches!(op, "div" | "rem" | "neg" | "shl" | "shr" | "pow")
+        ) && matches!(op, "div" | "rem" | "neg" | "shl" | "shr" | "pow" | "abs")
     })
 }
 

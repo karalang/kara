@@ -1,0 +1,4 @@
+fn main() {
+    let u: u32 = 3;
+    println(u.unsigned_abs());
+}

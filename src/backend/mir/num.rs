@@ -1471,7 +1471,7 @@ impl<'ctx> Cx<'ctx, '_> {
         if !matches!(
             family,
             "checked" | "wrapping" | "saturating" | "overflowing"
-        ) || !matches!(op, "div" | "rem" | "neg" | "shl" | "shr" | "pow")
+        ) || !matches!(op, "div" | "rem" | "neg" | "shl" | "shr" | "pow" | "abs")
         {
             return Ok(None);
         }
@@ -1503,6 +1503,20 @@ impl<'ctx> Cx<'ctx, '_> {
                     b.build_int_compare(IntPredicate::NE, x, z, "")
                 }
                 .map_err(e)?;
+                (v, o, max)
+            }
+            // Signed only (the checker's rule): `MIN.abs()` wraps to MIN
+            // and is the one overflow (B-2026-11-25-47).
+            ("abs", []) if signed => {
+                let b = &self.builder;
+                let n = b.build_int_sub(z, x, "").map_err(e)?;
+                let lt = b
+                    .build_int_compare(IntPredicate::SLT, x, z, "")
+                    .map_err(e)?;
+                let v = b.build_select(lt, n, x, "").map_err(e)?.into_int_value();
+                let o = b
+                    .build_int_compare(IntPredicate::EQ, x, min, "")
+                    .map_err(e)?;
                 (v, o, max)
             }
             ("div" | "rem", [y]) => {
@@ -1829,6 +1843,20 @@ impl<'ctx> Cx<'ctx, '_> {
             return Ok(Some(()));
         }
         if self.int_family_op(it, method, args, dest)?.is_some() {
+            return Ok(Some(()));
+        }
+        // The magnitude, in the unsigned sibling: `0 - x` wraps `MIN` to
+        // its own bits, which read unsigned are `|MIN|` (B-2026-11-25-47).
+        if method == "unsigned_abs" && args.len() == 1 && it.signed() {
+            let x = self.operand_scalar(&args[0])?.into_int_value();
+            let b = &self.builder;
+            let z = x.get_type().const_zero();
+            let n = b.build_int_sub(z, x, "").map_err(e)?;
+            let lt = b
+                .build_int_compare(IntPredicate::SLT, x, z, "")
+                .map_err(e)?;
+            let v = b.build_select(lt, n, x, "").map_err(e)?.into_int_value();
+            self.store_int_as(dest, v, false)?;
             return Ok(Some(()));
         }
         if method == "abs_diff" && args.len() == 2 {

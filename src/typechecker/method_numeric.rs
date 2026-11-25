@@ -152,7 +152,16 @@ pub(crate) const INT_METHODS: &[&str] = &[
 ];
 
 /// The methods only a signed integer has.
-pub(crate) const SIGNED_INT_METHODS: &[&str] = &["abs", "saturating_neg", "signum"];
+pub(crate) const SIGNED_INT_METHODS: &[&str] = &[
+    "abs",
+    "checked_abs",
+    "overflowing_abs",
+    "saturating_abs",
+    "saturating_neg",
+    "signum",
+    "unsigned_abs",
+    "wrapping_abs",
+];
 
 /// The methods only an unsigned integer has.
 pub(crate) const UNSIGNED_INT_METHODS: &[&str] = &["is_power_of_two", "next_power_of_two"];
@@ -764,17 +773,19 @@ impl<'a> super::TypeChecker<'a> {
         // B-2026-10-19-11: the families' other operations, as Rust's
         // `iN`: `div` / `rem` take a `Self`, `neg` nothing, and `shl` /
         // `shr` / `pow` a `u32`. `saturating_` has no `rem` / `shl` / `shr`
-        // (there is no bound to clamp to), and no unsigned `neg`.
+        // (there is no bound to clamp to), and no unsigned `neg`. `abs`
+        // (B-2026-11-25-47) takes nothing and is signed only, as Rust's.
         if let Some((family, op)) = method.split_once('_') {
             let signed = matches!(receiver_for_lookup, Type::Int(_));
             let known = matches!(
                 family,
                 "checked" | "wrapping" | "saturating" | "overflowing"
-            ) && matches!(op, "div" | "rem" | "neg" | "shl" | "shr" | "pow")
+            ) && matches!(op, "div" | "rem" | "neg" | "shl" | "shr" | "pow" | "abs")
                 && !(family == "saturating"
-                    && (matches!(op, "rem" | "shl" | "shr") || (op == "neg" && !signed)));
+                    && (matches!(op, "rem" | "shl" | "shr") || (op == "neg" && !signed)))
+                && !(op == "abs" && !signed);
             if known && matches!(receiver_for_lookup, Type::Int(_) | Type::UInt(_)) {
-                let want = usize::from(op != "neg");
+                let want = usize::from(!matches!(op, "neg" | "abs"));
                 if args.len() != want {
                     self.type_error(
                         format!("{method} expects {want} argument(s), got {}", args.len()),
@@ -1262,6 +1273,31 @@ impl<'a> super::TypeChecker<'a> {
                 // Already unsigned — `abs_diff` returns the same unsigned type.
                 other => other.clone(),
             });
+        }
+        // `unsigned_abs(self) -> unsigned sibling` (Rust `iN::unsigned_abs`,
+        // B-2026-11-25-47): the magnitude, which always fits the unsigned
+        // type of the same width (`i8.MIN.unsigned_abs() == 128u8`). Signed
+        // receivers only; the receiver type is stashed as `abs_diff`'s.
+        if method == "unsigned_abs" {
+            if let Type::Int(size) = receiver_for_lookup {
+                if !args.is_empty() {
+                    self.type_error(
+                        format!("unsigned_abs expects 0 arguments, got {}", args.len()),
+                        *span,
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    return Some(Type::Error);
+                }
+                self.record_expr_type(args_close_span, receiver_for_lookup);
+                return Some(Type::UInt(match size {
+                    IntSize::I8 => UIntSize::U8,
+                    IntSize::I16 => UIntSize::U16,
+                    IntSize::I32 => UIntSize::U32,
+                    IntSize::I64 => UIntSize::U64,
+                    IntSize::I128 => UIntSize::U128,
+                    IntSize::Isize => UIntSize::Usize,
+                }));
+            }
         }
         // Bit-permutation intrinsics on integer scalars — `reverse_bits` /
         // `swap_bytes` -> Self (Rust's `iN::{reverse_bits,swap_bytes}`). Both

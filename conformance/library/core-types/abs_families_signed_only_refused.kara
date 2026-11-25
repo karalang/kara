@@ -1,0 +1,4 @@
+fn main() {
+    let u: u8 = 3;
+    println(u.checked_abs());
+}
