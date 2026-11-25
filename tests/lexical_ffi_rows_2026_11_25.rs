@@ -183,3 +183,11 @@ fn mem_uninitialized_points_at_maybe_uninit() {
         assert!(!out.contains("undefined name 'mem'\n"), "{out}");
     }
 }
+
+/// B-2026-11-25-11: a pointee-changing raw-pointer cast is a byte view on
+/// the interpreter too, for reads, writes and offsets (design.md §15, 6364).
+#[test]
+fn pointee_changing_cast_views_the_bytes() {
+    runs("ffi", "raw_pointer_casts_safe_and_unsafe");
+    runs("ffi", "byte_views_read_write_and_offset");
+}

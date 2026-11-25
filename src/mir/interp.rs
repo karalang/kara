@@ -988,6 +988,7 @@ fn run_with(
         erased_index: Default::default(),
         decoded: Default::default(),
         droppable: Default::default(),
+        view_tys: Vec::new(),
         heap: Vec::new(),
         free: Vec::new(),
         key_index: Default::default(),
@@ -1706,6 +1707,8 @@ struct Interp<'a> {
     /// Each body's locals that can own a value to drop
     /// ([`Interp::droppable_locals`]), keyed by its address.
     droppable: rustc_hash::FxHashMap<usize, std::rc::Rc<[usize]>>,
+    /// The element types a byte view's path step names ([`BYTE_VIEW`]).
+    view_tys: Vec<Ty>,
     heap: Vec<Option<HeapObj>>,
     /// Freed slots of `heap`, reused by [`Interp::alloc`].
     free: Vec<u32>,
@@ -2054,6 +2057,16 @@ const SYNTH_ADDR_STRIDE: i128 = 0x1000;
 /// The value of type `it` that C returned in the integer register `r`: its
 /// low bits, sign-extended for a signed type. Pure, so not cfg-gated:
 /// `native_load` (raw pointer reads) uses it on every target.
+/// The tag of the last step of a raw pointer's path that makes it a byte
+/// view of the scalar it reaches: below the tag, the index into
+/// `view_tys` of that scalar's type, shifted by 4, and the byte offset into
+/// it (always below its size). A pointee-changing cast (`c as *const u8`
+/// over a `*const u32`) makes one: the interpreter keeps memory as typed
+/// values, and the view reads and writes their little-endian bytes, as
+/// compiled code does (design.md §15, 6364; B-2026-11-25-11). No real index
+/// reaches 2^30.
+const BYTE_VIEW: u64 = 1 << 30;
+
 fn from_c_word(r: u64, it: IntTy) -> i128 {
     let bits = it.bits().min(64);
     let shift = 64 - bits;
@@ -16246,6 +16259,8 @@ impl<'a> Interp<'a> {
                         &mut self.frames.last_mut().expect("frame").locals[p.local.index()],
                         v,
                     );
+                } else if let Some((parent, elem, off, t)) = self.view_target(body, p) {
+                    self.view_store(&parent, elem, off, t, v)?;
                 } else if let Some((at, t)) = self.native_target(body, p) {
                     self.native_store(at, t, v)?;
                 } else {
@@ -16481,6 +16496,10 @@ impl<'a> Interp<'a> {
 
     fn operand_slow(&mut self, body: &Body, o: &Operand) -> R<(Value, Ty)> {
         match o {
+            Operand::Copy(p) | Operand::Move(p) if self.view_target(body, p).is_some() => {
+                let (parent, elem, off, t) = self.view_target(body, p).expect("checked");
+                Ok((self.view_load(&parent, elem, off, t)?, t))
+            }
             Operand::Copy(p) | Operand::Move(p) if self.native_target(body, p).is_some() => {
                 let (at, t) = self.native_target(body, p).expect("checked");
                 Ok((self.native_load(at, t)?, t))
@@ -16655,8 +16674,11 @@ impl<'a> Interp<'a> {
                 }
             }
             // A raw pointer is the address the reference held.
-            Rvalue::Cast(CastKind::RefToPtr | CastKind::PtrToPtr, o, _) => {
-                Ok(self.operand(body, o)?.0)
+            Rvalue::Cast(CastKind::RefToPtr, o, _) => Ok(self.operand(body, o)?.0),
+            // A cast to another pointee views the same place as that type.
+            Rvalue::Cast(CastKind::PtrToPtr, o, to) => {
+                let (v, from) = self.operand(body, o)?;
+                self.retype_raw_ptr(v, from, *to)
             }
             // An address `ptr.addr` made is its place again.
             Rvalue::Cast(CastKind::IntToPtr, o, _) => match self.operand(body, o)?.0 {
@@ -16885,6 +16907,17 @@ impl<'a> Interp<'a> {
                 };
                 Ok(Value::Int(at.wrapping_add(n * i128::from(l.size))))
             }
+            Value::Ref(a) if self.split_view(&a).is_some() => {
+                let (parent, elem, off) = self.split_view(&a).expect("checked");
+                let TyKind::RawPtr { pointee, .. } = self.tys.kind(ty) else {
+                    return err("Offset of a non-pointer");
+                };
+                let Some(size) = self.scalar_size(pointee) else {
+                    return err("Offset of a byte view by a non-scalar pointee");
+                };
+                let at = i128::from(off) + n * i128::from(size);
+                Ok(Value::Ref(self.make_view(parent, elem, at)?))
+            }
             Value::Ref(mut a) => {
                 if n != 0 {
                     let Some(i) = a.path.pop() else {
@@ -17002,6 +17035,203 @@ impl<'a> Interp<'a> {
                 self.tys.display(t)
             )),
         }
+    }
+
+    /// The bytes a scalar of type `t` takes, for a byte view; `None` for
+    /// anything else (and for the 128-bit integers, wider than a view's
+    /// word).
+    fn scalar_size(&self, t: Ty) -> Option<u64> {
+        match self.tys.kind(t) {
+            TyKind::Int(it) if it.bits() <= 64 => Some(u64::from(it.bits()) / 8),
+            TyKind::Bool => Some(1),
+            TyKind::Char | TyKind::Float(FloatTy::F32) => Some(4),
+            TyKind::Float(FloatTy::F64) => Some(8),
+            _ => None,
+        }
+    }
+
+    /// A byte view's place: the scalar it starts in, that scalar's type
+    /// and the byte offset into it ([`BYTE_VIEW`]).
+    fn split_view(&self, a: &Addr) -> Option<(Addr, Ty, u64)> {
+        let n = a.path.len();
+        if n == 0 {
+            return None;
+        }
+        let step = a.path.get(n - 1);
+        if step & BYTE_VIEW == 0 {
+            return None;
+        }
+        let elem = *self.view_tys.get(((step & !BYTE_VIEW) >> 4) as usize)?;
+        let mut parent = a.clone();
+        parent.path.pop();
+        Some((parent, elem, step & 0xF))
+    }
+
+    /// The scalar `d` elements after `at`'s, in the sequence `at` is in.
+    fn view_elem(at: &Addr, d: i128) -> R<Addr> {
+        if d == 0 {
+            return Ok(at.clone());
+        }
+        let mut a = at.clone();
+        let Some(i) = a.path.pop() else {
+            return err("a byte view reaches past a value that is in no sequence");
+        };
+        match u64::try_from(i128::from(i) + d) {
+            Ok(j) => a.path.push(j),
+            Err(_) => return err("a byte view reaches before the start of a sequence"),
+        }
+        Ok(a)
+    }
+
+    /// The byte view `at` bytes into the `elem` scalar at `parent`, its
+    /// whole elements carried into `parent`'s index.
+    fn make_view(&self, parent: Addr, elem: Ty, at: i128) -> R<Addr> {
+        let size = i128::from(
+            self.scalar_size(elem)
+                .expect("a view's element is a scalar"),
+        );
+        let mut a = Self::view_elem(&parent, at.div_euclid(size))?;
+        let Some(k) = self.view_tys.iter().position(|t| *t == elem) else {
+            return err("a byte view of an element type no cast registered");
+        };
+        a.path
+            .push(BYTE_VIEW | ((k as u64) << 4) | at.rem_euclid(size) as u64);
+        Ok(a)
+    }
+
+    /// `p as *const U` for `p: *const T`: the same place, seen as `U`. A
+    /// scalar (or an array of them) read as another scalar becomes a byte
+    /// view of it; seen as itself again at a whole element, the plain
+    /// place. A cast this cannot view (a struct pointee) keeps the place.
+    fn retype_raw_ptr(&mut self, v: Value, from: Ty, to: Ty) -> R<Value> {
+        let (TyKind::RawPtr { pointee: fp, .. }, TyKind::RawPtr { pointee: tp, .. }) =
+            (self.tys.kind(from), self.tys.kind(to))
+        else {
+            return Ok(v);
+        };
+        let Value::Ref(a) = &v else { return Ok(v) };
+        if fp == tp {
+            return Ok(v);
+        }
+        let (parent, elem, off) = match self.split_view(a) {
+            Some(view) => view,
+            None => {
+                let mut at = a.clone();
+                let mut t = fp;
+                while let TyKind::Array(e, _) = self.tys.kind(t) {
+                    at.path.push(0);
+                    t = e;
+                }
+                if self.scalar_size(t).is_none() {
+                    return Ok(v);
+                }
+                (at, t, 0)
+            }
+        };
+        if self.scalar_size(tp).is_none() {
+            return err(format!(
+                "a byte view read as `{}`: the interpreter views a scalar's bytes only as \
+                 another scalar; `karac build` gives it real memory",
+                self.tys.display(tp)
+            ));
+        }
+        if off == 0 && tp == elem {
+            return Ok(Value::Ref(parent));
+        }
+        if !self.view_tys.contains(&elem) {
+            self.view_tys.push(elem);
+        }
+        Ok(Value::Ref(self.make_view(parent, elem, i128::from(off))?))
+    }
+
+    /// The little-endian word of the scalar `v`, `size` bytes of it.
+    fn scalar_word(v: &Value, size: u64) -> R<u64> {
+        Ok(match *v {
+            Value::Int(i) => i as u64,
+            Value::Bool(b) => u64::from(b),
+            Value::Char(c) => u64::from(c),
+            Value::Float(f) if size == 4 => u64::from((f as f32).to_bits()),
+            Value::Float(f) => f.to_bits(),
+            ref other => return err(format!("a byte view of {other:?}")),
+        })
+    }
+
+    /// The scalar of type `t` whose little-endian bytes are `w`.
+    fn word_scalar(&self, w: u64, t: Ty) -> R<Value> {
+        Ok(match self.tys.kind(t) {
+            TyKind::Int(it) => Value::Int(from_c_word(w, it)),
+            TyKind::Bool => Value::Bool(w & 0xFF != 0),
+            TyKind::Char => match char::from_u32(w as u32) {
+                Some(c) => Value::Char(c),
+                None => return err(format!("{:#x} read as a char", w as u32)),
+            },
+            TyKind::Float(FloatTy::F32) => Value::Float(f64::from(f32::from_bits(w as u32))),
+            TyKind::Float(FloatTy::F64) => Value::Float(f64::from_bits(w)),
+            _ => return err("a byte view read as a non-scalar"),
+        })
+    }
+
+    /// The byte view a `*p` reads or writes: `p` a raw pointer local
+    /// holding one. Its place, element type, offset and the pointee.
+    fn view_target(&self, body: &Body, p: &Place) -> Option<(Addr, Ty, u64, Ty)> {
+        let [ProjElem::Deref] = p.projection.as_slice() else {
+            return None;
+        };
+        let TyKind::RawPtr { pointee, .. } = self.tys.kind(body.local(p.local).ty) else {
+            return None;
+        };
+        let Value::Ref(a) = &self.frames.last()?.locals[p.local.index()] else {
+            return None;
+        };
+        let (parent, elem, off) = self.split_view(a)?;
+        Some((parent, elem, off, pointee))
+    }
+
+    /// The `t` whose bytes start `off` bytes into the `elem` at `parent`.
+    fn view_load(&mut self, parent: &Addr, elem: Ty, off: u64, t: Ty) -> R<Value> {
+        let esize = self
+            .scalar_size(elem)
+            .expect("a view's element is a scalar");
+        let Some(n) = self.scalar_size(t) else {
+            return err("a byte view read as a non-scalar");
+        };
+        let mut w = 0u64;
+        for i in 0..n {
+            let b = off + i;
+            let at = Self::view_elem(parent, i128::from(b / esize))?;
+            let word = Self::scalar_word(self.slot_ref(&at)?, esize)?;
+            let byte = (word >> (8 * (b % esize))) & 0xFF;
+            w |= byte << (8 * i);
+        }
+        self.word_scalar(w, t)
+    }
+
+    /// Writes the `t` value `v` as the bytes starting `off` bytes into the
+    /// `elem` at `parent`, each scalar it overlaps rewritten.
+    fn view_store(&mut self, parent: &Addr, elem: Ty, off: u64, t: Ty, v: Value) -> R<()> {
+        let esize = self
+            .scalar_size(elem)
+            .expect("a view's element is a scalar");
+        let Some(n) = self.scalar_size(t) else {
+            return err("a byte view written as a non-scalar");
+        };
+        let w = Self::scalar_word(&v, n)?;
+        let mut i = 0;
+        while i < n {
+            let b = off + i;
+            let d = b / esize;
+            let at = Self::view_elem(parent, i128::from(d))?;
+            let mut word = Self::scalar_word(self.slot_ref(&at)?, esize)?;
+            while i < n && (off + i) / esize == d {
+                let shift = 8 * ((off + i) % esize);
+                let byte = (w >> (8 * i)) & 0xFF;
+                word = (word & !(0xFF << shift)) | (byte << shift);
+                i += 1;
+            }
+            let new = self.word_scalar(word, elem)?;
+            Value::overwrite(self.slot_mut(&at)?, new);
+        }
+        Ok(())
     }
 
     /// The made-up address of the place `at` (see `exposed_addrs`).

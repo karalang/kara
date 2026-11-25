@@ -1,0 +1,39 @@
+// design.md §15 (6364, B-2026-11-25-11): a pointee-changing cast views the
+// same bytes as the new type, for reads, writes and offsets, on every lane.
+fn main() {
+    let xs: Array[u8, 8] = [1, 2, 3, 4, 5, 6, 7, 8];
+    let f: f32 = 1.5;
+    let mut x: u32 = 0x0A0B0C0D;
+    let c: *const u32 = ptr.const(x);
+    // Safety: a u32 is four readable bytes.
+    let b: *const u8 = unsafe { c as *const u8 };
+    let mut i: i64 = 0;
+    while i < 4 {
+        // Safety: i < 4 stays inside x.
+        print(f"{unsafe { b.offset(i).read() }} ");
+        i += 1;
+    }
+    println("");
+    let m: *mut u32 = ptr.mut(x);
+    // Safety: m points at x.
+    let mb: *mut u8 = unsafe { m as *mut u8 };
+    // Safety: byte 1 of x.
+    unsafe { mb.offset(1).write(0xFF); }
+    println(f"{x}");
+    let p: *const Array[u8, 8] = ptr.const(xs);
+    // Safety: eight bytes, read as two u32 words.
+    let w: *const u32 = unsafe { p as *const u32 };
+    // Safety: as above.
+    println(f"{unsafe { w.read() }} {unsafe { w.offset(1).read() }}");
+    // Safety: the same byte, read signed.
+    let s: *const i8 = unsafe { mb as *const i8 };
+    // Safety: byte 1 is 0xFF, -1 as an i8.
+    println(f"{unsafe { s.offset(1).read() }}");
+    let fp: *const f32 = ptr.const(f);
+    // Safety: an f32 is a u32's four bytes.
+    let bits: *const u32 = unsafe { fp as *const u32 };
+    println(f"{unsafe { bits.read() }}");
+    // Safety: back to the element type at a whole element.
+    let back: *const u32 = unsafe { b as *const u32 };
+    println(f"{unsafe { back.read() }}");
+}
