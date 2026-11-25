@@ -9834,7 +9834,9 @@ impl<'a> Interp<'a> {
     }
 
     /// `CStr` and `CString` (design.md § C-String Literals): a value is
-    /// its bytes, without the trailing NUL, one `u8` field each.
+    /// its bytes, one `u8` field each, and then the NUL the type's surface
+    /// does not show, so a pointer from `as_ptr` reads it after the last
+    /// byte as C does (B-2026-11-25-7).
     fn c_string_method(
         &mut self,
         name: &str,
@@ -9844,7 +9846,9 @@ impl<'a> Interp<'a> {
         ret: Ty,
     ) -> R<Value> {
         if (base, method) == ("CStr", "from_bytes") {
-            return Ok(Value::Agg(args));
+            let mut bytes = args;
+            bytes.push(Value::Int(0));
+            return Ok(Value::Agg(bytes));
         }
         if (base, method) == ("CStr", "from_ptr") {
             // The bytes from the pointed-at element of a byte sequence up
@@ -9867,6 +9871,7 @@ impl<'a> Interp<'a> {
                     other => return err(format!("{name}: byte {other:?}")),
                 }
             }
+            bytes.push(Value::Int(0));
             // A `ref CStr` view of them, held until exit like any other
             // read-only snapshot a library method hands out.
             let id = self.alloc(HeapObj {
@@ -9906,6 +9911,7 @@ impl<'a> Interp<'a> {
             }
             let bytes = text
                 .into_iter()
+                .chain([0])
                 .map(|b| Value::Int(i128::from(b)))
                 .collect();
             return self.variant_named(ret, None, "Ok", vec![Value::Agg(bytes)]);
@@ -9917,9 +9923,13 @@ impl<'a> Interp<'a> {
             v = self.slot(&a)?;
             at = Some(a);
         }
-        let Value::Agg(cells) = v else {
+        let Value::Agg(mut cells) = v else {
             return err(format!("{name} of {v:?}"));
         };
+        // The NUL after the bytes is not one of them.
+        if matches!(cells.last(), Some(Value::Int(0))) {
+            cells.pop();
+        }
         let mut bytes = Vec::with_capacity(cells.len());
         for c in &cells {
             match c {

@@ -93,3 +93,9 @@ fn byte_unicode_escape_error_is_the_pages_sentence() {
 fn from_utf8_takes_a_byte_string_by_value() {
     runs("lexical", "byte_string_from_utf8");
 }
+
+/// B-2026-11-25-7: a `c"..."` literal's NUL follows its bytes.
+#[test]
+fn c_string_literal_ends_in_a_nul() {
+    runs("lexical", "c_string_nul_terminated");
+}
