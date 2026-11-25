@@ -4076,6 +4076,11 @@ impl<'a> super::TypeChecker<'a> {
         if matches!(&obj_ty_for_named, Type::Named { name, .. } if name == "StringSlice")
             && !view_routes_to_user_impl
         {
+            // `half.find(|c| c != 'a')` over a slice of a `String`
+            // (kata 1328, B-2026-11-24-42).
+            if let Some(ty) = self.find_with_closure(object, method, args, args_close_span) {
+                return ty;
+            }
             return self.infer_str_view_method(method, args, span);
         }
 
@@ -8186,7 +8191,14 @@ impl<'a> super::TypeChecker<'a> {
         let PatternKind::Binding(name) = &param.pattern.kind else {
             return None;
         };
-        if param.ty.is_some() || param.is_own {
+        // `|c: char|`, as Rust writes it, names the type the pair pattern
+        // the fix writes binds anyway, so the rewrite drops it; any other
+        // annotation is not this shape (B-2026-11-24-42).
+        let names_char = |t: &TypeExpr| {
+            matches!(&t.kind, TypeKind::Path(p)
+                if p.generic_args.is_none() && matches!(p.segments.as_slice(), [n] if n == "char"))
+        };
+        if param.ty.as_ref().is_some_and(|t| !names_char(t)) || param.is_own {
             return None;
         }
         let end = args_close_span.offset + args_close_span.length;
