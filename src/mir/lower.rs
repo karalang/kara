@@ -9005,6 +9005,13 @@ impl<'l, 'a> Bx<'l, 'a> {
                     None => self.unsupported(e.span, &format!("the field `{field}`")),
                 }
             }
+            ExprKind::TupleIndex { object, index }
+                if self.captured_field(object, &index.to_string()).is_some() =>
+            {
+                Ok(self
+                    .captured_field(object, &index.to_string())
+                    .expect("checked"))
+            }
             ExprKind::TupleIndex { object, index } => {
                 let (base, bt) = self.deref_place(object, mutable)?;
                 match self.tys().field_ty(bt, None, *index as u32) {
@@ -28675,10 +28682,13 @@ impl<'l, 'a> Bx<'l, 'a> {
         sym: SymbolId,
         t: Ty,
     ) -> Option<Vec<(String, Vec<(u32, Ty)>, Ty)>> {
+        // A plain struct or a tuple splits into its fields; `t.0.1` is the
+        // path `0.1` (B-2026-11-25-39).
         let plain_struct = |t: Ty| {
-            self.tys().tcx().adt_of(t).is_some_and(|(adt, _)| {
-                !adt.is_enum && !matches!(self.tys().tcx().kind(t), HK::Shared { .. })
-            })
+            matches!(self.tys().tcx().kind(t), HK::Tuple(_))
+                || self.tys().tcx().adt_of(t).is_some_and(|(adt, _)| {
+                    !adt.is_enum && !matches!(self.tys().tcx().kind(t), HK::Shared { .. })
+                })
         };
         if !plain_struct(t) {
             return None;
@@ -28698,15 +28708,10 @@ impl<'l, 'a> Bx<'l, 'a> {
             false,
         );
         crate::span_visitor::for_each_expr(body, &mut |x| match &x.kind {
-            ExprKind::FieldAccess { object, .. } => {
+            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
                 inner.insert(object.id);
-                let (mut e, mut names) = (x, Vec::new());
-                while let ExprKind::FieldAccess { object, field } = &e.kind {
-                    names.push(field.clone());
-                    e = object;
-                }
+                let (e, names) = field_chain(x);
                 if is_sym(e) {
-                    names.reverse();
                     chains.push((x.id, names));
                     roots.push(e.id);
                 }
@@ -28728,7 +28733,13 @@ impl<'l, 'a> Bx<'l, 'a> {
                 if !plain_struct(cur) {
                     break;
                 }
-                let (i, ft) = self.field_of(cur, None, &n)?;
+                let (i, ft) = match self.tys().tcx().kind(cur) {
+                    HK::Tuple(_) => {
+                        let i: u32 = n.parse().ok()?;
+                        (i, self.tys().field_ty(cur, None, i)?)
+                    }
+                    _ => self.field_of(cur, None, &n)?,
+                };
                 kept.push(n);
                 proj.push((i, ft));
                 cur = ft;
@@ -28756,18 +28767,14 @@ impl<'l, 'a> Bx<'l, 'a> {
         if self.captured_fields.is_empty() {
             return None;
         }
-        let (mut e, mut names) = (object, vec![field]);
-        while let ExprKind::FieldAccess { object, field } = &e.kind {
-            names.push(field);
-            e = object;
-        }
+        let (e, mut names) = field_chain(object);
         if !matches!(e.kind, ExprKind::Identifier(_) | ExprKind::SelfValue) {
             return None;
         }
         let Some(Res::Local(sym)) = self.lcx.res.get(&e.id) else {
             return None;
         };
-        names.reverse();
+        names.push(field.to_string());
         self.captured_fields.get(&(*sym, names.join("."))).cloned()
     }
 
@@ -29510,12 +29517,54 @@ impl<'l, 'a> Bx<'l, 'a> {
                         .tcx()
                         .adt_of(t)
                         .is_some_and(|(a, _)| a.has_drop_impl);
-                let names = self
-                    .disjoint_fields(body, sym, t)
-                    .filter(|names| !whole || names.iter().all(|(_, _, ft)| self.is_copy(*ft)));
+                // Each field path the body uses moves alone, at any depth
+                // (`|| o.i.t.len()` takes `o.i.t`, leaving `o.i.u`): the
+                // paths the borrowed captures above take (B-2026-11-25-39).
+                // A path stops at a part whose type gives up no part (a
+                // `Drop` body, counted handles), which moves whole, as a
+                // one-level capture of it always did.
+                let gives_up_none = |pt: Ty| {
+                    self.is_handle_aggregate(pt)
+                        || self
+                            .tys()
+                            .tcx()
+                            .adt_of(pt)
+                            .is_some_and(|(a, _)| a.has_drop_impl)
+                };
+                let names = self.disjoint_paths(body, sym, t).map(|paths| {
+                    let mut cut: Vec<FieldPath> = Vec::new();
+                    for (name, mut proj, mut ft) in paths {
+                        if let Some(i) = proj
+                            .iter()
+                            .take(proj.len().saturating_sub(1))
+                            .position(|&(_, pt)| gives_up_none(pt))
+                        {
+                            proj.truncate(i + 1);
+                            ft = proj[i].1;
+                        }
+                        let name = name
+                            .split('.')
+                            .take(proj.len())
+                            .collect::<Vec<_>>()
+                            .join(".");
+                        let covered = |a: &str, b: &str| {
+                            a == b || a.strip_prefix(b).is_some_and(|r| r.starts_with('.'))
+                        };
+                        if cut.iter().any(|(k, _, _)| covered(&name, k)) {
+                            continue;
+                        }
+                        cut.retain(|(k, _, _)| !covered(k, &name));
+                        cut.push((name, proj, ft));
+                    }
+                    cut
+                });
+                let names = names
+                    .filter(|paths| !whole || paths.iter().all(|(_, _, ft)| self.is_copy(*ft)));
                 if let Some(names) = names {
-                    for (name, idx, ft) in names {
-                        let fp = place.clone().field(idx, ft);
+                    for (name, proj, ft) in names {
+                        let fp = proj
+                            .iter()
+                            .fold(place.clone(), |p, &(idx, t)| p.field(idx, t));
                         let op = if self.is_copy(ft) {
                             Operand::Copy(fp)
                         } else {
@@ -35438,6 +35487,31 @@ fn type_expr_names(t: &ast::TypeExpr, n: &str) -> bool {
         }
     }
     found
+}
+
+/// A captured field path: its dotted name, its projections and the type
+/// at its end ([`Bx::disjoint_paths`]).
+type FieldPath = (String, Vec<(u32, Ty)>, Ty);
+
+/// The root of a chain of field and tuple-index accesses, and the steps
+/// from it in order: `o.a.0.b` is `o` and `[a, 0, b]`.
+fn field_chain(mut e: &Expr) -> (&Expr, Vec<String>) {
+    let mut names = Vec::new();
+    loop {
+        match &e.kind {
+            ExprKind::FieldAccess { object, field } => {
+                names.push(field.clone());
+                e = object;
+            }
+            ExprKind::TupleIndex { object, index } => {
+                names.push(index.to_string());
+                e = object;
+            }
+            _ => break,
+        }
+    }
+    names.reverse();
+    (e, names)
 }
 
 #[cfg(test)]

@@ -1,0 +1,96 @@
+// design.md § Disjoint capture: any chain of `.field` (or tuple index)
+// accesses from a captured local is its own path, so a closure that moves
+// or escapes with one path leaves its siblings usable, at any depth
+// (core-semantics §9.3). Each case moved or borrowed the whole two-deep
+// parent before (B-2026-11-25-39).
+struct L1 { x: String, y: i64, z: Vec[i64] }
+struct L2 { b: L1, q: String, r: i64 }
+struct L3 { a: L2, p: String }
+struct Hold { f: Fn() -> i64 }
+
+fn take(s: own String) -> i64 {
+    s.len()
+}
+
+fn mk() -> L3 {
+    L3 {
+        a: L2 { b: L1 { x: "xx".to_string(), y: 5, z: [1] }, q: "qq".to_string(), r: 7 },
+        p: "pp".to_string(),
+    }
+}
+
+// A once-called closure moves one path out, two and three deep.
+fn moves_once() {
+    let o = mk();
+    let f = || take(o.a.q);
+    println(f());
+    println(f"{o.a.b.x} {o.a.r} {o.p}");
+    let o = mk();
+    let g = || take(o.a.b.x);
+    println(g());
+    println(f"{o.a.b.y} {o.a.b.z} {o.a.q} {o.p}");
+}
+
+// Escaping closures held in a Vec, a struct field and an Option.
+fn escapes() {
+    let o = mk();
+    let mut fs: Vec[Fn() -> i64] = Vec.new();
+    fs.push(|| o.a.q.len());
+    println(f"{fs[0]()} {o.a.b.x} {o.a.r} {o.p}");
+    let o = mk();
+    let mut gs: Vec[Fn() -> String] = Vec.new();
+    gs.push(|| f"{o.a.b.x}{o.a.q}");
+    println(f"{gs[0]()} {o.a.b.y} {o.a.r} {o.p}");
+    let o = mk();
+    let h = Hold { f: || o.a.b.y + o.a.r };
+    println(f"{(h.f)()} {o.a.b.x} {o.a.q} {o.p}");
+    let o = mk();
+    let k: Option[Fn() -> i64] = Some(|| o.a.b.x.len());
+    match k {
+        Some(g) => println(g()),
+        None => {}
+    }
+    println(f"{o.a.b.z} {o.a.q}");
+}
+
+// An escaping MutFn writes its path; the siblings stay readable.
+fn mutates() {
+    let mut o = mk();
+    let mut fs: Vec[MutFn() -> i64] = Vec.new();
+    fs.push(|| {
+        o.a.b.z.push(3);
+        o.a.b.z.len()
+    });
+    let mut g = fs.remove(0);
+    println(f"{g()} {g()}");
+    println(f"{o.a.b.x} {o.a.q} {o.p}");
+}
+
+// A tuple path, three deep, beside a sibling that is assigned.
+fn tuples() {
+    let mut t = (("a".to_string(), (1, "b".to_string())), 2);
+    let mut fs: Vec[Fn() -> i64] = Vec.new();
+    fs.push(|| t.0.1.1.len() + t.0.1.0);
+    println(fs[0]());
+    t.1 = 5;
+    println(f"{t.0.0} {t.1}");
+}
+
+// A non-escaping closure reads two paths while a sibling is written.
+fn reads_beside_writes() {
+    let mut o = mk();
+    let f = || o.a.b.x.len() + o.a.b.y;
+    println(f());
+    o.a.b.z.push(2);
+    o.a.q.push_str("!");
+    println(f());
+    println(f"{o.a.b.z} {o.a.q} {o.p}");
+}
+
+fn main() {
+    moves_once();
+    escapes();
+    mutates();
+    tuples();
+    reads_beside_writes();
+}

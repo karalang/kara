@@ -1,0 +1,9 @@
+source = "B-2026-11-25-39"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "closures", "captures"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Disjoint capture with core-semantics §9.3: each `.field` / tuple-index chain from a captured local is its own path, so a closure that moves a path (a once-called `|| take(o.a.q)`, `|| take(o.a.b.x)`), escapes with it (held in a Vec, a struct field, an Option, an escaping MutFn) or borrows it leaves the sibling paths usable, two and three deep, tuples included (`t.0.1.1`). Every case stopped with MIR's internal 'move check: use of _1.0.0.x' before the fix, since captures by value split only one level deep and tuple paths not at all."

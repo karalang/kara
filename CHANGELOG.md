@@ -1113,6 +1113,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `s` as moved (B-2026-11-25-42) and the interpreter failed with "deref of
   non-reference Box" (B-2026-11-25-41). A closure literal in an annotated
   tuple slot now takes its parameter types from the slot.
+- A closure that moves a field path two or more levels deep, or escapes
+  with one (held in a `Vec`, a struct field or an `Option`, or an escaping
+  `MutFn`), takes only that path: `|| o.a.q.len()` pushed into a
+  `Vec[Fn() -> i64]` leaves `o.a.b.x` usable, as design.md § Disjoint
+  capture says. A tuple path (`t.0.1.1`) splits the same way. These
+  passed `karac check` and then stopped with MIR's internal "move check:
+  use of _1.0.0.x" on every backend (B-2026-11-25-39).
 - `karac run` and `karac run --interp` now answer `has_debug_metadata()`
   from the package's `[profile.dev] runtime_debug_metadata`, on by default,
   as `karac build` does. `karac run` used to answer true whatever the
