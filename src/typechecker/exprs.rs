@@ -15236,7 +15236,7 @@ impl<'a> super::TypeChecker<'a> {
 
     /// The fill binding an element read reads and how many indexes deep:
     /// `g` and 2 for `g[i][j]`.
-    fn element_read_root(e: &Expr) -> Option<(&str, usize)> {
+    pub(super) fn element_read_root(e: &Expr) -> Option<(&str, usize)> {
         match &e.kind {
             ExprKind::Index { object, index } if !matches!(index.kind, ExprKind::Range { .. }) => {
                 match &object.kind {
@@ -16665,6 +16665,12 @@ impl<'a> super::TypeChecker<'a> {
             {
                 return None;
             }
+            // A fill an `i64` no literal typed was stored into (`parent[v] =
+            // u`) holds that `i64`: its literal's suffix would refuse the
+            // store, so it is no fix (B-2026-11-25-20).
+            if entry.element && self.literal_fills_written_wide.contains(&entry.at.offset) {
+                return None;
+            }
             let fits = match (entry.value, Self::int_literal_range(target)) {
                 (Some(v), Some((lo, hi))) => {
                     v >= lo && v <= hi && entry.low.is_none_or(|l| l >= lo && l <= hi)
@@ -17434,6 +17440,38 @@ impl<'a> super::TypeChecker<'a> {
                 TypeErrorKind::TypeMismatch,
             );
             return;
+        }
+        // `at = parent[at]` with `let mut at = start;` an `i32` and the
+        // value an `i64`: the narrow side is the binding, typed by its first
+        // value, and widening it keeps every value, so the fix declares it
+        // wider (B-2026-11-25-20).
+        if let Some((key, name, end)) = self.assign_widen_let.clone() {
+            if key == SpanKey::from_span(&expr.span)
+                && matches!(source, Type::Int(_) | Type::UInt(_))
+                && int_coercion_is_widening(&target, &source)
+            {
+                let (s, t) = (type_display(&source), type_display(&target));
+                self.type_error_with_fix_it(
+                    format!(
+                        "implicit coercion from '{s}' to '{t}' would narrow or change sign: \
+                         `{name}` is an '{t}' because it took its first value's type, and \
+                         this value is an '{s}'; declare it `{name}: {s}` where it is bound, \
+                         which widens its first value implicitly, or write `as {t}` here to \
+                         truncate"
+                    ),
+                    expr.span,
+                    TypeErrorKind::TypeMismatch,
+                    FixIt {
+                        span: Span {
+                            offset: end,
+                            length: 0,
+                            ..expr.span
+                        },
+                        replacement: format!(": {s}"),
+                    },
+                );
+                return;
+            }
         }
         self.type_error(
             format!(

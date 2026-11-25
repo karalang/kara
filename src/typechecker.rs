@@ -4743,6 +4743,16 @@ pub struct TypeChecker<'a> {
     /// Where the body of the function being checked begins: a name
     /// declared before it is a parameter (B-2026-11-25-22).
     pub(super) current_fn_body_offset: usize,
+    /// The value of `name = value` being checked against `name`'s type, by
+    /// the value's span, when `name` is an unannotated `let`: its name and
+    /// where its pattern ends, for the fix that widens the binding
+    /// (B-2026-11-25-20).
+    pub(super) assign_widen_let: Option<(SpanKey, String, usize)>,
+    /// The fills of `literal_lets` an `i64` no literal typed was stored
+    /// into (`parent[v] = u` into `Vec.filled(n, 0)`), by the literal's
+    /// offset: a narrowing at a later read is not fixed by the literal's
+    /// suffix, which would refuse the store (B-2026-11-25-20).
+    pub(super) literal_fills_written_wide: FxHashSet<usize>,
     /// `let x = <library iterator>` with no annotation, by name: where
     /// `karac fix` writes `: Vec[T]` and `.collect()` when `x` is used as a
     /// `Vec` (B-2026-10-12-7).
@@ -5401,6 +5411,8 @@ impl<'a> TypeChecker<'a> {
             let_binding_ends: FxHashMap::default(),
             pattern_view_bindings: FxHashSet::default(),
             current_fn_body_offset: 0,
+            assign_widen_let: None,
+            literal_fills_written_wide: FxHashSet::default(),
             iter_lets: FxHashMap::default(),
             untyped_let_names: FxHashMap::default(),
             collect_items: FxHashMap::default(),

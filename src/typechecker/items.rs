@@ -14431,7 +14431,58 @@ impl<'a> super::TypeChecker<'a> {
                     self.cast_lints_reported
                         .insert(SpanKey::from_span(&value.span));
                 }
+                // `at = parent[at]` into `let mut at = start;`: a value wider
+                // than the binding's first one is fixed by widening the
+                // binding (B-2026-11-25-20).
+                let widen_let = match &target.kind {
+                    ExprKind::Identifier(name) => self
+                        .resolve_result
+                        .resolutions
+                        .get(&SpanKey::from_span(&target.span))
+                        .map(|id| self.resolve_result.symbol_table.get_symbol(*id).span)
+                        .and_then(|decl| self.let_binding_ends.get(&SpanKey::from_span(&decl)))
+                        .copied()
+                        .flatten()
+                        .map(|end| (SpanKey::from_span(&value.span), name.clone(), end)),
+                    _ => None,
+                };
+                let outer_widen_let = std::mem::replace(&mut self.assign_widen_let, widen_let);
                 self.check_expr(value, &slot_ty);
+                self.assign_widen_let = outer_widen_let;
+                // `parent[v] = u` with `u` an `i64` no literal typed: the
+                // fill's elements hold a real `i64`, so a narrowing at a later
+                // read is not fixed by the fill literal's suffix
+                // (B-2026-11-25-20).
+                if let Some((root, depth)) = Self::element_read_root(target) {
+                    let fill = self
+                        .literal_lets
+                        .get(root)
+                        .filter(|e| e.element && e.depth == depth)
+                        .map(|e| e.at.offset);
+                    let wide = self
+                        .expr_types
+                        .get(&SpanKey::from_span(&value.span))
+                        .map(|t| match self.resolved_now(t) {
+                            // `for u in order.iter()`: the loop's `u` is a
+                            // view of an `i64`, which the store copies.
+                            Type::Ref(inner) | Type::MutRef(inner) => self.resolved_now(&inner),
+                            t => t,
+                        })
+                        == Some(Type::Int(IntSize::I64));
+                    if let Some(at) = fill.filter(|_| wide) {
+                        let from_literal = Self::unsuffixed_int_literal_value(value).is_some()
+                            || self
+                                .literal_let_annotation(
+                                    value,
+                                    &Type::Int(IntSize::I64),
+                                    &Type::Int(IntSize::I32),
+                                )
+                                .is_some();
+                        if !from_literal {
+                            self.literal_fills_written_wide.insert(at);
+                        }
+                    }
+                }
                 // The first walk read a call with no slot, so a generic
                 // constructor's parameters (`b = Bag.new()`, `m[1] =
                 // PriorityQueue.new()`) stayed open there and were reported
