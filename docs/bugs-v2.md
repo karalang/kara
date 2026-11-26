@@ -151,13 +151,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-15 | 2026-11-26 | typecheck | medium | A hand-written `impl PartialOrd` (with `partial_cmp`) is refused by every `T: PartialOrd` bound: free `min`/`max`, a user `fn g[T: PartialOrd]` and an `impl[T: PartialOrd]` block | — |
 | B-2026-11-26-16 | 2026-11-26 | resolver | medium | `karac fix` copies a std import's misspelled item into correct uses (`import std.time.{Duratoin}`), leaves a std module typo unfixed or rewrites its uses (`std.tiem`, `std.randmo` to `rand.`), and loses a method typo's edit before a `(` argument (`v.psuh((1))`) | — |
 | B-2026-11-26-17 | 2026-11-26 | typecheck | low | A built-in method with no library wrapper cannot be named as a value: `let f = i64.checked_add;` and `let g = Vec.windows;` are refused (E0200 / E0236, with the closure to write), though `i64.abs`, `i64.pow`, `Vec.len`, `Vec.first` are function values | — |
-| B-2026-11-26-60 | 2026-11-26 | parser | low | Rust's rest pattern for a tuple variant, `F.Eq(..)`, had no fix to Kāra's `F.Eq { .. }` | — |
-| B-2026-11-26-61 | 2026-11-26 | ownership | medium | `for (t, vs) in ref self.attrs { return Some(vs) }` in a method returning `Option[ref Vec[String]]` was refused with E0509, as if `vs` borrowed a local | — |
-| B-2026-11-26-62 | 2026-11-26 | typecheck | medium | A list literal in a tuple literal's `Slice` slot inside a call argument (`attrs([("objectClass", ["top", "domain"])])` for a `Slice[(Str, Slice[Str])]`) was refused with "expected '(Str, Slice[Str])', found '(String, Vec[String])'" | — |
-| B-2026-11-26-63 | 2026-11-26 | typecheck+interp+mir-llvm+runtime | low | `String` / `Str` had no `to_ascii_lowercase` / `to_ascii_uppercase` ("no method 'to_ascii_lowercase' on type 'String'"), which LDAP attribute names and DNs want | — |
-| B-2026-11-26-64 | 2026-11-26 | typecheck | low | `.map_err(|_| e)` on an `Option` (Rust's `u8::from_str_radix(..).map_err(..)?`, an `Option` here) was "fixed" to `.map_or(|_| e)`, which takes two arguments | — |
-| B-2026-11-26-65 | 2026-11-26 | parser | low | `assert_eq!(a, b, "fmt '{}'", x)` lost its `!` and then failed with "`assert_eq` takes two operands and an optional message, but 4 arguments were given", with no fix | — |
-| B-2026-11-26-66 | 2026-11-26 | typecheck+mir | medium | `Some` / `Ok` / `Err` named as a function value (`parse_message(raw).map(Some)`) passed `karac check` and failed to build with "a call to this function value is not lowered yet; no body for `Some`" | — |
 
 ### Relocated
 
@@ -2367,6 +2360,13 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-25-80 | typecheck+interp+mir-llvm+runtime+cli | medium | A client request body could only be text: `RequestBuilder.body` and `Request.with_body` took a `String`, so an S3-style client could not upload a bin… | 007ec989df |
 | B-2026-11-25-81 | typecheck+interp+mir-llvm+runtime | low | `String` / `Str` had no `eq_ignore_ascii_case`, which a header-name lookup wants (Rust's `k.eq_ignore_ascii_case(name)` was refused with "no method '… | 007ec989df |
 | B-2026-11-25-82 | mir+mir-llvm | medium | `Some(ref s)` with `s: String` handed to an `Option[Str]` passes the check, then fails MIR validation ("field 0 of Option has the wrong type") on bot… | 007ec989df |
+| B-2026-11-26-60 | parser | low | Rust's rest pattern for a tuple variant, `F.Eq(..)`, had no fix to Kāra's `F.Eq { . | ba41739764 |
+| B-2026-11-26-61 | ownership | medium | `for (t, vs) in ref self.attrs { return Some(vs) }` in a method returning `Option[ref Vec[String]]` was refused with E0509, as if `vs` borrowed a loc… | ba41739764 |
+| B-2026-11-26-62 | typecheck | medium | A list literal in a tuple literal's `Slice` slot inside a call argument (`attrs([("objectClass", ["top", "domain"])])` for a `Slice[(Str, Slice[Str])… | ba41739764 |
+| B-2026-11-26-63 | typecheck+interp+mir-llvm+runtime | low | `String` / `Str` had no `to_ascii_lowercase` / `to_ascii_uppercase` ("no method 'to_ascii_lowercase' on type 'String'"), which LDAP attribute names a… | ba41739764 |
+| B-2026-11-26-64 | typecheck | low | `.map_err(\|_\| e)` on an `Option` (Rust's `u8::from_str_radix(..).map_err(..)?`, an `Option` here) was "fixed" to `.map_or(\|_\| e)`, which takes two ar… | ba41739764 |
+| B-2026-11-26-65 | parser | low | `assert_eq!(a, b, "fmt '{}'", x)` lost its `!` and then failed with "`assert_eq` takes two operands and an optional message, but 4 arguments were giv… | ba41739764 |
+| B-2026-11-26-66 | typecheck+mir | medium | `Some` / `Ok` / `Err` named as a function value (`parse_message(raw).map(Some)`) passed `karac check` and failed to build with "a call to this functi… | ba41739764 |
 
 </details>
 
