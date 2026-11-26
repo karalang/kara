@@ -3208,7 +3208,7 @@ impl WordCount {
 ```
 
 The rules:
-- **Method calls and UFCS are the same call.** `user.validate()` and `User.validate(user)` call the same method. The second form, with a trait name (`Shape.area(c)`), names a trait method explicitly.
+- **Method calls and UFCS are the same call.** `user.validate()` and `User.validate(user)` call the same method. The second form, with a trait name (`Shape.area(c)`), names a trait method explicitly. A trait name reaches the methods of its supertraits too, as a bound does: under `trait Ord: PartialOrd + Eq`, `Ord.partial_cmp(a, b)` is `PartialOrd`'s. A method that neither the trait nor any supertrait declares is an error at the call (`Ord.max(a, b)`: `max` is the free function, [library/core-types.md](library/core-types.md#min-max-and-clamp)).
 - **Receivers.** A method's first parameter may be a receiver: `self` (borrowed), `own self` (consuming) or `mut ref self` ([§7 Parameter modes](#parameter-modes)). A `shared` type's methods take `self` only.
 - **A method without a receiver is an associated function**, called on the type: `T.default()`. See [Associated functions](#associated-functions).
 - **Parameter names are required in trait methods too.** `fn visit(self, i32);` is error `E_TRAIT_METHOD_ANONYMOUS_PARAM`. Write `_: i32` for a parameter whose name means nothing. An impl may use different parameter names from the trait; only types and modes must match.

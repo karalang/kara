@@ -675,6 +675,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   from the method's family for the methods a program names that way
   (B-2026-11-26-17).
 
+- A trait name in a UFCS call reaches the methods of its supertraits, as a
+  bound does: `Ord.partial_cmp(a, b)` calls `PartialOrd`'s. A method no trait
+  of the family declares is refused by name at the call (`Ord.max(a, b)`
+  points at the free `max`), where it used to fail later as code not yet
+  lowered (B-2026-11-26-4).
+
 - `karac explain <file>.<fn>` on a function in a recursive group, or one
   that calls itself, adds a `Fixpoint:` section: the group, then the
   chain `φ0 = ∅`, `φ1`, … up to `φ*`, each step with the atoms it added

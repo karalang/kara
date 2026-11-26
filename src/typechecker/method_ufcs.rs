@@ -91,8 +91,13 @@ impl<'a> super::TypeChecker<'a> {
         let canon = self.unaliased_type_name(name);
         let name = canon.as_str();
         let is_type = self.env.structs.contains_key(name) || self.env.enums.contains_key(name);
-        let trait_name =
-            (!is_type && self.env.traits.contains_key(alias)).then(|| alias.to_string());
+        // `Ord.partial_cmp(a, b)`: a supertrait's method named through the
+        // trait that requires it is that supertrait's, as `x.partial_cmp(y)`
+        // under a `T: Ord` bound is (B-2026-11-26-4).
+        let trait_name = (!is_type && self.env.traits.contains_key(alias)).then(|| {
+            self.trait_declaring(alias, method)
+                .unwrap_or_else(|| alias.to_string())
+        });
         // `Clone` has no declaration for the impl lookup to narrow to: every
         // `clone` is its method, so `Clone.clone(s)` is `s.clone()`
         // (B-2026-11-09-32). It was typed as an error with no diagnostic, and
@@ -400,6 +405,32 @@ impl<'a> super::TypeChecker<'a> {
 
     /// Whether `Trait.method` takes `self`, or `None` when the trait (or a
     /// supertrait) declares no such method.
+    /// Whether `trait_name` or one of its supertraits, at any depth,
+    /// declares `method` (B-2026-11-26-4).
+    pub(super) fn trait_family_declares(&self, trait_name: &str, method: &str) -> bool {
+        self.trait_declaring(trait_name, method).is_some()
+    }
+
+    /// The trait that declares `method` for `trait_name`: itself, or the
+    /// nearest supertrait that does, breadth first (`Ord.partial_cmp` is
+    /// `PartialOrd`'s; B-2026-11-26-4).
+    pub(super) fn trait_declaring(&self, trait_name: &str, method: &str) -> Option<String> {
+        let mut todo = std::collections::VecDeque::from([trait_name.to_string()]);
+        let mut seen = std::collections::HashSet::new();
+        while let Some(t) = todo.pop_front() {
+            if !seen.insert(t.clone()) {
+                continue;
+            }
+            if self.find_trait_method(&t, method).is_some() {
+                return Some(t);
+            }
+            if let Some(info) = self.env.traits.get(t.as_str()) {
+                todo.extend(info.supertraits.iter().cloned());
+            }
+        }
+        None
+    }
+
     pub(super) fn trait_method_takes_self(&self, trait_name: &str, method: &str) -> Option<bool> {
         if let Some(m) = self.find_trait_method(trait_name, method) {
             return Some(m.self_param.is_some());

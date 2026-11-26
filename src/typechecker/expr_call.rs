@@ -1552,6 +1552,37 @@ impl<'a> super::TypeChecker<'a> {
                     self.record_expr_type(span, &Type::Error);
                     return Type::Error;
                 }
+                // `Ord.max(a, b)`: a trait named with a method neither it nor
+                // a supertrait declares. It was typed as an error with no
+                // diagnostic, and `karac check` printed MIR's "a type that
+                // failed to check is not lowered yet" (B-2026-11-26-4).
+                if self.local_scope.lookup(name).is_none()
+                    && self.env.traits.contains_key(name.as_str())
+                    && !self.env.structs.contains_key(name.as_str())
+                    && !self.env.enums.contains_key(name.as_str())
+                    && !self.trait_family_declares(name, method)
+                {
+                    let free = if matches!(method.as_str(), "max" | "min" | "clamp")
+                        && matches!(name.as_str(), "Ord" | "PartialOrd")
+                    {
+                        format!(
+                            "; the free `{method}(..)` takes any `PartialOrd` values \
+                             (library/core-types.md § min, max and clamp)"
+                        )
+                    } else {
+                        String::new()
+                    };
+                    self.type_error(
+                        format!(
+                            "trait `{name}` has no method `{method}`, and none of its \
+                             supertraits declares one{free}"
+                        ),
+                        *span,
+                        TypeErrorKind::NoMethodFound,
+                    );
+                    self.record_expr_type(span, &Type::Error);
+                    return Type::Error;
+                }
             }
         }
 
