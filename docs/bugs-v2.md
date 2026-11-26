@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 777 |
 | false-positive | 391 |
-| missing-feature | 263 |
+| missing-feature | 264 |
 | perf | 205 |
 | other | 157 |
 | soundness | 134 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 944 |
+| typecheck | 945 |
 | mir | 345 |
 | mir-llvm | 334 |
 | cli | 320 |
@@ -115,14 +115,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-20-109 | 2026-11-20 | mir-llvm | low | `v.windows(2)` builds a `Vec` of slices on every call, and each `w[0]`, `w[1]` is bounds-checked: kata 1752's drop count `nums.windows(2).into_iter().filter(|w| w[0] > w[1]).count()` runs 1.25x Rust (0.165 s vs 0.132 s, 1.96G vs 0.86G instructions) since the cursor `into_iter` (f686592c10); it was 2.0x | — |
 | B-2026-11-25-19 | 2026-11-25 | typecheck+cli | low | `lossless_cast` misses a widening cast of a `ref` operand in a binary operation or compound assignment: `total += x as i64` and `total + x as i64`, with `x` the `ref i32` that `target.iter()` yields and `total: i64`, pass silently, while `total += n as i64` with `n: i32` and `let z: i64 = x as i64` are linted and `total += x` checks and runs | — |
 | B-2026-11-25-31 | 2026-11-25 | mir-llvm+runtime | low | Inserting 10^5 random `i64` keys into a compiled `SortedMap` still takes about 1.5x Rust's `BTreeMap` (100 rounds: 1.5 s against 1.0 s; `entry(k).or_insert(0) += 1` 1.6 s against 0.97 s), after B-2026-11-24-41 | — |
-| B-2026-11-25-40 | 2026-11-25 | typecheck | medium | A UFCS call of a built-in type's method is refused 'no associated function' (E0236): `i64.abs(-3)`, `f64.sqrt(4.0)`, `i64.pow(2, 10)`, `u8.is_ascii_digit(49u8)`, `char.is_alphabetic('x')`, `Vec.len(v)`, and `Vec.len` as a value; `String.len(s)` and user types' `P.get(p)` work, and `let f = i64.abs; f(-4)` (the value form, 3e78d89862) runs | — |
 | B-2026-11-25-44 | 2026-11-25 | mir | medium | A named `..rest` over an owned `Array[T, N]` takes the remainder as an owned value, though design.md says the rest binding borrows: the remaining elements drop when `rest` goes out of scope (at the end of a match arm, before `x`), and a later use of the array passes `karac check` but every backend refuses it with 'move check main: use of _1, which may have been moved' | — |
 | B-2026-11-25-48 | 2026-11-25 | typecheck | medium | `Vec.resize`, `Vec.filled` and `fill` do not enforce their `where T: Clone` bound: a struct with no Clone impl, a `Mutex[i64]`, and an unbounded generic `T` all pass `karac check` and get field-by-field copies, so `v.resize(2, Mutex.new(1))` makes two independent mutexes (and the interpreter stops with 'Mutex[i64] has no field 0') | — |
 | B-2026-11-25-49 | 2026-11-25 | typecheck | medium | `#[derive(Serialize, Deserialize)]` accepts an `i128`, `u128`, `Array[T, N]` or `Result[T, E]` field (and `Vec[i128]`, `Option[u128]`), which `karac check` passes and every backend refuses: interp, JIT and build stop at `error[mir]: typecheck: 3:1: no method 'serialize' on type 'i128'` | — |
-| B-2026-11-25-50 | 2026-11-25 | mir | medium | A provider method that reaches a resource whose provider can reach it back passes `karac check` and is refused by every backend with an internal `borrow check Cap.write{Stderr=ErrCap, Stdout=Cap}: mutable borrow of (*_3) while it is borrowed mutably [E0516]`, even when the two overrides never nest | — |
 | B-2026-11-25-51 | 2026-11-25 | effect | medium | `.clone()` of a `Vec`, `String`, `Option[Vec[T]]` or a derived-Clone struct holding a `Vec` is not charged `allocates(Heap)`: `#[no_effect(allocates(Heap))]` accepts it, while a `Map`, `Set` or `SortedMap` clone is refused | — |
 | B-2026-11-25-52 | 2026-11-25 | effect | low | `karac check --output=json` lists the standard library's `next_u64` under `public_function_effects` for any program that calls `random.next_u64()`, though that key is only for the program's own pub fns under `public_effects = "inferred"` | — |
-| B-2026-11-25-54 | 2026-11-25 | typecheck | medium | Method visibility is not enforced: a non-`pub` method of a dependency's type (`c.inner()`) and a `private fn` method from another directory or another package (`c.very()`) are callable, though a non-`pub` field or free fn in the same place is E0111 | — |
 | B-2026-11-25-56 | 2026-11-25 | interp | medium | `karac run --interp` stops with `error[mir]: run: in main#resume ...: _3: String still owns a value at return; a drop is missing` (exit 3) when a program waits (accept, recv) inside an endless loop after its last use of an owned local; `karac run` and `karac build` serve | — |
 | B-2026-11-25-57 | 2026-11-25 | other | low | The browser playground crate (`playground/`, karac-playground) no longer builds for `wasm32-unknown-unknown`: about 45 errors, so examples/cartographer's studio.sh (a wasm-pack build of it) fails | — |
 | B-2026-11-25-58 | 2026-11-25 | cli | low | `karac query ownership` gives a derivation reason for a mode it does not report: tangle's `eval` reports `scope` as `ref` with the reason "`scope` is moved here, so the body takes it"; `Editor.set` reports `cell` as `own` with "`cell` is written here, so the body needs `mut ref`" | — |
@@ -153,6 +150,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-14 | 2026-11-26 | ownership | medium | `karac check` misses the move of a place that is the FIRST branch of an `if` or `match` used as a method receiver: `if c { b1 } else { mk() }.len(); println(b1)` checks clean, and interp and JIT stop at the internal MIR move check | — |
 | B-2026-11-26-15 | 2026-11-26 | typecheck | medium | A hand-written `impl PartialOrd` (with `partial_cmp`) is refused by every `T: PartialOrd` bound: free `min`/`max`, a user `fn g[T: PartialOrd]` and an `impl[T: PartialOrd]` block | — |
 | B-2026-11-26-16 | 2026-11-26 | resolver | medium | `karac fix` copies a std import's misspelled item into correct uses (`import std.time.{Duratoin}`), leaves a std module typo unfixed or rewrites its uses (`std.tiem`, `std.randmo` to `rand.`), and loses a method typo's edit before a `(` argument (`v.psuh((1))`) | — |
+| B-2026-11-26-17 | 2026-11-26 | typecheck | low | A built-in method with no library wrapper cannot be named as a value: `let f = i64.checked_add;` and `let g = Vec.windows;` are refused (E0200 / E0236, with the closure to write), though `i64.abs`, `i64.pow`, `Vec.len`, `Vec.first` are function values | — |
 
 ### Relocated
 
@@ -2346,13 +2344,16 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-25-37 | runtime | low | A `Json` read through `Json.deserialize` kept a repeated key twice: `{"id":7,"x":1,"id":8}` in a `data: Json` field became a three-entry `Json.Object… | 93508495cd |
 | B-2026-11-25-38 | typecheck | low | A program's own `enum Option` or `enum Result` (or `struct Option`) draws no `prelude_shadow` warning, while its own `Vec` or `Map` does; design.md §… | 8f382a26c1 |
 | B-2026-11-25-39 | mir | high | A closure that captures by value (once-called, or escaping into a Vec, a struct field, an Option, a return or an escaping MutFn) moved a whole field… | 61a9aabdaa |
+| B-2026-11-25-40 | typecheck | medium | A UFCS call of a built-in type's method is refused 'no associated function' (E0236): `i64.abs(-3)`, `f64.sqrt(4.0)`, `i64.pow(2, 10)`, `u8.is_ascii_d… | 2099ac467c |
 | B-2026-11-25-41 | interp | high | The MIR interpreter stops with 'deref of non-reference Box' when a function value taken from a Vec element is called with a non-Copy argument for a b… | 3a58c14e7b |
 | B-2026-11-25-42 | typecheck | high | Calling a function value read out of a container moves an argument whose parameter borrows: `fs[0](s)` with `fs: Vec[Fn(String) -> i64]` makes `s` mo… | 3a58c14e7b |
 | B-2026-11-25-43 | typecheck | medium | A local bound from a named fn or a method path (`let f = sq;`, `let g = i64.abs;`) is refused E_NOT_CROSS_TASK when a `par for`, `par {}` or `TaskGro… | 732483b8b9 |
 | B-2026-11-25-45 | typecheck | medium | A partial move by a destructuring pattern (`let P { a, . | b59608d39d |
 | B-2026-11-25-46 | typecheck | medium | A closure that calls an `own self` trait method on a captured `dyn Trait` or generic `T: Trait` value (`\|\| a.w()`) captures it by reference, so the c… | 03ce7e7984 |
 | B-2026-11-25-47 | typecheck | low | The signed integer types have no abs family: `checked_abs`, `wrapping_abs`, `saturating_abs`, `overflowing_abs` and `unsigned_abs` are E0236 'no meth… | f57ac48760 |
+| B-2026-11-25-50 | mir | medium | A provider method that reaches a resource whose provider can reach it back passes `karac check` and is refused by every backend with an internal `bor… | 59fc93b496 |
 | B-2026-11-25-53 | typecheck | medium | `karac check src/main.kara` inside a package refuses programs that `karac check` (no file), `karac run src/main.kara` and `karac build` all accept: a… | 292116b6d9 |
+| B-2026-11-25-54 | typecheck | medium | Method visibility is not enforced: a non-`pub` method of a dependency's type (`c.inner()`) and a `private fn` method from another directory or anothe… | 606ce3fc6e |
 | B-2026-11-25-55 | typecheck | low | A program's own `enum Ordering` cannot be used: `Ordering.Mine` is E0236 `no associated function 'Mine' on type 'Ordering'` and a match arm is E0273… | b8c09eb363 |
 | B-2026-11-25-60 | cli | low | `karac check --output=json` on a package whose module directory is not snake_case (`src/Db/`) prints a bare `{"severity":"error","phase":"build",...}… | 292116b6d9 |
 | B-2026-11-25-64 | typecheck+mir | medium | Remainder of B-2026-11-25-22: a `shared struct` cursor started from a `for` item whose child is read into a local first, `let next = at.left; let Som… | a04a0d1cf7 |
