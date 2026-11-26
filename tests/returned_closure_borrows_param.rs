@@ -253,3 +253,42 @@ fn a_method_returns_no_closure_over_another_parameter() {
         "1a\n3\n",
     );
 }
+
+/// The same parameter reached through a local closure the returned one
+/// calls, at any depth, or that closure handed back itself: the local
+/// closure goes with the result, so it captures the parameter by move and
+/// is refused as the direct form is. Accepted, the caller read freed
+/// memory (B-2026-11-26-89). Called inside the method, the local closure
+/// is still a plain borrow.
+#[test]
+fn a_method_returns_no_closure_reaching_another_parameter_through_a_local() {
+    for body in [
+        "let c = || pre.clone(); |s| f\"{c()}{s}\"",
+        "let c = || pre.clone(); let d = || c(); |s| f\"{d()}{s}\"",
+    ] {
+        refused(
+            &format!(
+                "struct K {{ n: i64 }}\n\
+                 impl K {{ fn mk(self, pre: String) -> Fn(String) -> String {{ {body} }} }}\n\
+                 fn main() {{ let k = K {{ n: 1 }}; let f = k.mk(\"<\".to_string()); println(f(\"a\")); }}\n"
+            ),
+            "E0515",
+            "captures `pre` by move",
+        );
+    }
+    refused(
+        "struct K { n: i64 }\n\
+         impl K { fn mk(self, pre: String) -> Fn() -> String { let c = || pre.clone(); c } }\n\
+         fn main() { let k = K { n: 1 }; let f = k.mk(\"<\".to_string()); println(f()); }\n",
+        "E0515",
+        "captures `pre` by move",
+    );
+    runs_everywhere(
+        "struct K { n: i64 }\n\
+         impl K { fn mk(self, pre: String) -> String { let c = || pre.clone(); c() } }\n\
+         fn mk2(pre: String) -> Fn(String) -> String { let c = || pre.clone(); |s| f\"{c()}{s}\" }\n\
+         fn main() { let k = K { n: 1 }; println(k.mk(\"<\".to_string())); \
+         let p = \">\".to_string(); let f = mk2(p); println(f(\"a\")); }\n",
+        "<\n>a\n",
+    );
+}

@@ -165,6 +165,7 @@ pub fn analyze(program: &Program, types: Option<&NodeTypes>) -> CoreEscape {
             gen_hits: None,
             fn_alias: FxHashMap::default(),
             other_params: FxHashSet::default(),
+            held_other: FxHashMap::default(),
         };
         w.walk_fn(f);
     }
@@ -226,6 +227,7 @@ fn generic_slots(
                 gen_hits: Some(Vec::new()),
                 fn_alias: FxHashMap::default(),
                 other_params: FxHashSet::default(),
+                held_other: FxHashMap::default(),
             };
             w.walk_fn_generic(f, idx);
             let hits = w.gen_hits.take().unwrap_or_default();
@@ -279,6 +281,11 @@ struct Walker<'a> {
     /// borrows `self` only (§5.4): its other parameters' names. A closure
     /// handed back that names one is no view result (B-2026-11-26-88).
     other_params: FxHashSet<String>,
+    /// In such a method, a closure bound by `let` that reaches one of
+    /// [`Self::other_params`], directly or through another such closure it
+    /// names, to those closures: handed back, every one of them escapes
+    /// (B-2026-11-26-89).
+    held_other: FxHashMap<SpanKey, Vec<SpanKey>>,
 }
 
 impl Walker<'_> {
@@ -323,6 +330,7 @@ impl Walker<'_> {
         self.walk_block(&f.body, Pos::Escape("returned"));
         self.scopes.pop();
         self.other_params.clear();
+        self.held_other.clear();
     }
 
     /// [`Self::walk_fn`] for [`generic_slots`]: the parameters at `idx` are
@@ -366,6 +374,11 @@ impl Walker<'_> {
                             let held = self.captured_params(value);
                             if !held.is_empty() {
                                 self.closure_holds.insert(k, held);
+                            }
+                            if let ExprKind::Closure { params, body, .. } = &value.kind {
+                                if let Some(subs) = self.other_param_reach(params, body) {
+                                    self.held_other.insert(k, subs);
+                                }
                             }
                             Bound::Closure(k)
                         }
@@ -508,6 +521,11 @@ impl Walker<'_> {
         match &e.kind {
             ExprKind::Identifier(n) => match (self.lookup(n), pos) {
                 (Some(Bound::Closure(k)), Pos::Escape(why)) => {
+                    if (why == "returned" || why == CLOSURE_RESULT)
+                        && self.held_other.contains_key(&k)
+                    {
+                        self.escapes_unviewed(k, why);
+                    }
                     self.escapes(k, why);
                     // `let g = |x| f(x); g`: the closure stores the
                     // parameters it captures (B-2026-11-19-103).
@@ -558,11 +576,20 @@ impl Walker<'_> {
                     // §9.3). A caller that kept it past the argument read
                     // freed memory (B-2026-11-26-88).
                     let k = SpanKey::from_span(&e.span);
-                    if (why == "returned" || why == CLOSURE_RESULT)
-                        && self.names_other_param(params, body)
-                    {
+                    let reach = if why == "returned" || why == CLOSURE_RESULT {
+                        self.other_param_reach(params, body)
+                    } else {
+                        None
+                    };
+                    if let Some(subs) = reach {
+                        // A closure it reaches the parameter through goes
+                        // with it, so that one captures it by move too
+                        // (B-2026-11-26-89).
                         self.escapes(k, why);
                         self.out.closure_result_only.remove(&k);
+                        for sub in subs {
+                            self.escapes_unviewed(sub, why);
+                        }
                     } else {
                         self.escapes(k, why);
                     }
@@ -771,12 +798,29 @@ impl Walker<'_> {
         }
     }
 
-    /// Whether a closure with these parameters and body names one of
-    /// [`Self::other_params`] as the function's parameter, not a local
-    /// that shadows it.
-    fn names_other_param(&self, params: &[ClosureParam], body: &Expr) -> bool {
+    /// A closure of [`Self::held_other`] escaping from such a method: it,
+    /// and every closure it reaches the parameter through, is no view
+    /// result.
+    fn escapes_unviewed(&mut self, k: SpanKey, why: &'static str) {
+        let mut todo = vec![k];
+        let mut seen = FxHashSet::default();
+        while let Some(k) = todo.pop() {
+            if !seen.insert(k) {
+                continue;
+            }
+            self.escapes(k, why);
+            self.out.closure_result_only.remove(&k);
+            todo.extend(self.held_other.get(&k).cloned().unwrap_or_default());
+        }
+    }
+
+    /// Whether a closure with these parameters and body reaches one of
+    /// [`Self::other_params`]: names it as the function's parameter, not a
+    /// local that shadows it, or names a closure of [`Self::held_other`].
+    /// The answer lists the closures of the second kind.
+    fn other_param_reach(&self, params: &[ClosureParam], body: &Expr) -> Option<Vec<SpanKey>> {
         if self.other_params.is_empty() {
-            return false;
+            return None;
         }
         let mut bound: FxHashSet<String> = params
             .iter()
@@ -784,11 +828,21 @@ impl Walker<'_> {
             .collect();
         let mut names = Vec::new();
         names_in(body, &mut names, &mut bound);
-        names.iter().any(|(n, _)| {
-            !bound.contains(n)
-                && self.other_params.contains(n)
-                && self.scopes.iter().rposition(|s| s.contains_key(n)) == Some(0)
-        })
+        let mut direct = false;
+        let mut subs = Vec::new();
+        for (n, _) in &names {
+            if bound.contains(n) {
+                continue;
+            }
+            match self.lookup(n) {
+                Some(Bound::Closure(k)) if self.held_other.contains_key(&k) => subs.push(k),
+                _ => {
+                    direct |= self.other_params.contains(n)
+                        && self.scopes.iter().rposition(|s| s.contains_key(n)) == Some(0)
+                }
+            }
+        }
+        (direct || !subs.is_empty()).then_some(subs)
     }
 
     /// The non-escaping parameters the closure `e` names from outside
