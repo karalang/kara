@@ -24,8 +24,6 @@
 // `Location`, so a redirect (this program's whole point) is
 // unexpressible. A response without a `content-type` pair is sent as
 // `text/plain; charset=utf-8` (B-2026-11-16-275).
-// Deliberately takes a prelude type's name; see `prelude_shadow`.
-#[allow(prelude_shadow)]
 struct Response {
     status: i64,
     body: String,
