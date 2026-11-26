@@ -790,7 +790,18 @@ impl<'a> super::TypeChecker<'a> {
         if is_open_value(arg) && super::exprs::expectation_is_concrete(&slot) {
             return self.check_expr(arg, &slot);
         }
-        self.infer_needle(arg, &slot)
+        let ty = self.infer_needle(arg, &slot);
+        // A tuple literal's numbers are checked against the key's slots as
+        // a pushed tuple's are: `s.contains((city, next))` with `city: i64`
+        // on a `Set[(i32, i32)]` narrowed `city` unchecked, and the lookup
+        // read it as an `i32` (kata 1466, B-2026-11-26-85).
+        if matches!(arg.kind, ExprKind::Tuple(_)) {
+            let slot = self.resolve_deep(&slot);
+            if matches!(slot, Type::Tuple(_)) {
+                self.check_tuple_literal_element(arg, &slot, &ty);
+            }
+        }
+        ty
     }
 
     pub(super) fn infer_element_arg(&mut self, arg: &Expr, elem: &Type) -> Type {

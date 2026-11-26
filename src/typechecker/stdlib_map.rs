@@ -1487,7 +1487,7 @@ const ENTRY_DEFAULT_CONTAINERS: &[&str] = &[
 impl<'a> super::TypeChecker<'a> {
     /// `ty` with every variable the substitutions bind replaced, at every
     /// depth.
-    fn resolve_deep(&self, ty: &Type) -> Type {
+    pub(super) fn resolve_deep(&self, ty: &Type) -> Type {
         let no_names = std::collections::HashMap::new();
         let no_const_names = std::collections::HashMap::new();
         super::inference::resolve_type_vars(
