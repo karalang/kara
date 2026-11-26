@@ -681,6 +681,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   points at the free `max`), where it used to fail later as code not yet
   lowered (B-2026-11-26-4).
 
+- An `as` cast to a number type no longer settles an unsuffixed literal
+  binding early: `let mid = 5; let x = mid as f64; mid` in a `-> i32` body
+  makes `mid` an `i32`, as a later argument or return would, where it used to
+  be refused as a narrowing `i64` (B-2026-11-26-1).
+
 - `karac explain <file>.<fn>` on a function in a recursive group, or one
   that calls itself, adds a `Fixpoint:` section: the group, then the
   chain `φ0 = ∅`, `φ1`, … up to `φ*`, each step with the atoms it added

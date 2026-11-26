@@ -4025,6 +4025,11 @@ pub struct TypeChecker<'a> {
     /// Casts `redundant_cast` / `lossless_cast` already reported, for the
     /// same reason.
     pub(super) cast_lints_reported: FxHashSet<SpanKey>,
+    /// Casts whose operand was a literal no use had fixed yet when the cast
+    /// was checked, with their types and slot: `redundant_cast` and
+    /// `lossless_cast` judge them once the body's literals have their
+    /// types (B-2026-11-26-1).
+    pub(super) open_number_casts: Vec<(Expr, Type, Type, Option<Type>)>,
     /// The `x.clone()` arguments `redundant_clone` already reported, for the
     /// same reason (B-2026-11-14-3).
     pub(super) clone_lints_reported: FxHashSet<SpanKey>,
@@ -5251,6 +5256,7 @@ impl<'a> TypeChecker<'a> {
             option_result_predicates_reported: rustc_hash::FxHashSet::default(),
             string_slice_reported: rustc_hash::FxHashSet::default(),
             cast_lints_reported: FxHashSet::default(),
+            open_number_casts: Vec::new(),
             clone_lints_reported: FxHashSet::default(),
             call_receiver_roots: Vec::new(),
             pending_cast_expected: Vec::new(),
@@ -5682,6 +5688,7 @@ impl<'a> TypeChecker<'a> {
         self.check_implied_param_bounds();
         // Literals outside any function body (a `const`, a `static`).
         self.default_literal_vars(0);
+        self.lint_open_number_casts(0);
         self.check_wide_int_literals();
         self.check_narrow_float_literals();
         self.finalize_typevar_pattern_bindings();

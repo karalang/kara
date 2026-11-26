@@ -60,7 +60,7 @@ fn kata_1175_usize_cast_to_u64_survives_the_usize_fix() {
         "usize",
         r#"fn arrangements(n: i32) -> i64 {
     let n = n as usize;
-    let mut evens = 0;
+    let mut evens: i64 = 0;
     for i in 2..=n {
         if i % 2 == 0 {
             evens += 1;
@@ -88,6 +88,48 @@ fn main() {
         2,
         "{fixed}"
     );
+    assert_eq!(out.trim(), "144");
+}
+
+/// The kata's own arm, with `evens` unannotated: the count sits beside the
+/// `usize` `n` in `n - evens`, so its literal takes `usize` (design.md §8
+/// Literals) and nothing needs a fix. Before B-2026-11-26-1 the `i as u64`
+/// over `1..=evens` settled the count to `i64` early, and the arm needed
+/// the `usize` fix above; the test above annotates `evens: i64` to keep
+/// that path.
+#[test]
+fn kata_1175_unannotated_count_takes_usize_and_checks_clean() {
+    let dir = cell(
+        "usize-clean",
+        r#"fn arrangements(n: i32) -> i64 {
+    let n = n as usize;
+    let mut evens = 0;
+    for i in 2..=n {
+        if i % 2 == 0 {
+            evens += 1;
+        }
+    }
+    let m = 1_000_000_007u64;
+    let mut ans = 1u64;
+    for i in 1..=evens {
+        ans = ans * i as u64 % m;
+    }
+    for i in 1..=(n - evens) {
+        ans = ans * i as u64 % m;
+    }
+    ans as i64
+}
+
+fn main() {
+    println(f"{arrangements(7)}");
+}
+"#,
+    );
+    let (ok, out, _) = karac(&dir, &["check"]);
+    assert!(ok, "{out}");
+    let (ok, out, _) = karac(&dir, &["__mir-run"]);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(ok, "{out}");
     assert_eq!(out.trim(), "144");
 }
 

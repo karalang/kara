@@ -14127,6 +14127,22 @@ impl<'a> super::TypeChecker<'a> {
     /// the `as` and its type. Only integer and float widenings are flagged:
     /// an integer to `f64` needs its `as` as an operator's operand, and a
     /// literal takes its type from the cast.
+    /// `redundant_cast` and `lossless_cast` for the casts recorded since
+    /// `from` whose operand was an open literal when they were checked
+    /// (`open_number_casts`), now that the body's literals have their
+    /// types: `let m = 7; m as i64` with nothing else fixing `m` is
+    /// redundant, and with a later `take_i32(m)` it is not.
+    pub(super) fn lint_open_number_casts(&mut self, from: usize) {
+        let from = from.min(self.open_number_casts.len());
+        for (cast, from_ty, to_ty, expected) in self.open_number_casts.split_off(from) {
+            let ExprKind::Cast { expr: inner, ty } = &cast.kind else {
+                continue;
+            };
+            let from_ty = self.resolved_now(&from_ty);
+            self.lint_unneeded_cast(&cast, inner, ty, &from_ty, &to_ty, expected.as_ref());
+        }
+    }
+
     pub(super) fn lint_unneeded_cast(
         &mut self,
         expr: &Expr,
@@ -21390,8 +21406,28 @@ impl<'a> super::TypeChecker<'a> {
             }
 
             ExprKind::Cast { expr: inner, ty } => {
-                let from_ty = self.infer_expr(inner);
+                // A cast reads its operand's number without fixing its type
+                // (design.md §8 Literals): `let mid = 5; mid as f64` leaves
+                // `mid` open for a later use, such as a `-> i32` return, to
+                // fix, as `mid + 1` does (B-2026-11-26-1). Every number casts
+                // to every number, so the pair needs no settled type; any
+                // other target settles it to be judged. A literal operand
+                // itself (`5 as f64`) keeps its default, as it always has.
+                let literal_operand = Self::unsuffixed_int_literal_value(inner).is_some()
+                    || matches!(inner.kind, ExprKind::Float(..));
+                let mut from_ty = if literal_operand {
+                    self.infer_expr(inner)
+                } else {
+                    self.infer_expr_open(inner)
+                };
                 let to_ty = self.lower_type_expr(ty, &[]);
+                let mut open_number = self
+                    .unbound_literal_var(Self::peel_borrow(&from_ty))
+                    .is_some_and(|(id, _)| !self.literal_held_open(id));
+                if open_number && !super::is_numeric(&to_ty) {
+                    from_ty = self.settle_literals(&from_ty);
+                    open_number = false;
+                }
                 // A cast's `usize` has fixes of its own (drop `as usize`,
                 // B-2026-10-25-10), not the written-type one. Each is kept
                 // for `emit_written_pointer_int_fixes`, which retypes every
@@ -21488,7 +21524,9 @@ impl<'a> super::TypeChecker<'a> {
                                 }],
                             );
                         }
-                        self.check_cast_pair(&from_ty, &to_ty, &inner.span, fix_end)
+                        if !open_number {
+                            self.check_cast_pair(&from_ty, &to_ty, &inner.span, fix_end)
+                        }
                     }
                 }
                 let key = SpanKey::from_span(&expr.span);
@@ -21501,7 +21539,16 @@ impl<'a> super::TypeChecker<'a> {
                     self.operand_casts
                         .insert(expr.id, (from_ty.clone(), to_ty.clone()));
                 }
-                self.lint_unneeded_cast(expr, inner, ty, &from_ty, &to_ty, expected.as_ref());
+                if open_number {
+                    self.open_number_casts.push((
+                        expr.clone(),
+                        from_ty.clone(),
+                        to_ty.clone(),
+                        expected,
+                    ));
+                } else {
+                    self.lint_unneeded_cast(expr, inner, ty, &from_ty, &to_ty, expected.as_ref());
+                }
                 // B-2026-08-14-3 — record whether the SOURCE is unsigned, so
                 // codegen can pick zext over sext on the widening lane. It
                 // cannot read that off `expr_types`: the parser gives a `Cast`
