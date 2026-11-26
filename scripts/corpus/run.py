@@ -30,6 +30,11 @@ widen. --tag matches a tag only (`--tag par` without every path holding
                   `error:codegen` = any refusal)
     skip          not run
 
+An entry whose meta.toml sets `deferred = "<deferred.md section>"` uses a
+feature that is not in 0.8 (a post-v1 package, GPU compute, contracts, SIMD,
+layout, FFI unions): it is not run, and the summary counts it on its own
+`deferred=` (B-2026-11-25-70).
+
 On the mir-* backends the expectation is expected.out, then model.out (the
 drop model's output, held to `model_exit`; an ORDER-UNSPEC entry compares its
 lines as a set), then legacy.out. An entry the model rejects (model_verdict
@@ -72,6 +77,8 @@ def judge(entry: Path, corpus: Path, args) -> dict:
             "model": meta.get("model_verdict", "(none)")}
     # A sanitizer lane runs the same IR as mir-llvm, so it runs wherever mir-llvm does.
     listed = "mir-llvm" if backend == "mir-llvm-tsan" else backend
+    if meta.get("deferred"):
+        return {**base, "verdict": "SKIP", "why": f"deferred: {meta['deferred']}", "ran": False, "deferred": True}
     if expect == "skip" or (meta.get("backends") and listed not in meta["backends"]):
         return {**base, "verdict": "SKIP", "why": expect if expect == "skip" else "backend excluded", "ran": False}
     # TSan keeps its own call stack of 65,536 frames per thread, which does not
@@ -174,7 +181,11 @@ def check_codes(entry: Path, args) -> list:
     try:
         # A record's `parent_code` is the numeric code of its kind when `code`
         # is a more specific symbolic one; an entry may expect either.
-        diags = json.loads(r.stdout).get("diagnostics", [])
+        doc = json.loads(r.stdout)
+        # A program with `#[target(..)]` items is checked once per target, and
+        # its report lists each target's diagnostics under `targets`.
+        diags = doc.get("diagnostics", []) + [
+            d for t in doc.get("targets", []) for d in t.get("diagnostics", [])]
         return [d.get("code") or d.get("phase") for d in diags] + [
             d["parent_code"] for d in diags if d.get("parent_code")]
     except json.JSONDecodeError:
@@ -263,8 +274,10 @@ def main() -> int:
     fails = sum(r["verdict"] == "FAIL" for r in results)
     passes = sum(r["verdict"] == "PASS" for r in results)
     mrej = sum(r["verdict"] == "MREJ" for r in results)
+    deferred = sum(bool(r.get("deferred")) for r in results)
     print(f"corpus-run backend={args.backend} matched={len(results)} executed={ran} "
           f"pass={passes} fail={fails} skip={len(results) - passes - fails - mrej}"
+          + (f" deferred={deferred}" if deferred else "")
           + (f" model-reject-check-accepts={mrej}" if mrej else ""))
     # corpus/apps is reported on its own line with its own bar, never pooled with the katas
     # (PLAN_RECHECK_2026-10-07 §2: at M1, 95% of the apps programs that use no deferred
