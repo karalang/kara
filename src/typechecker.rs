@@ -168,6 +168,13 @@ use types::{
 /// Render one attribute to a flat string for comptime `Field.attrs` reflection:
 /// the `::`-joined path, plus any identifier/call-callee args in parentheses.
 /// `#[karac::proto(sint64)]` → `"karac::proto(sint64)"`; `#[foo]` → `"foo"`.
+/// Every native method of the built-in type `ty` (`i64`, `Vec`): the
+/// names a `ty.m` call or value can take without an impl declaring them
+/// (B-2026-11-26-17).
+pub fn builtin_type_methods(ty: &str) -> Vec<&'static str> {
+    method_ufcs::builtin_type_methods(ty)
+}
+
 pub(crate) fn render_attribute(attr: &Attribute) -> String {
     let path = attr.path.join("::");
     let mut arg_names: Vec<String> = Vec::new();

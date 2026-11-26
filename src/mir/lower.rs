@@ -33252,6 +33252,17 @@ pub fn library_source(src: &str) -> (String, usize) {
             }
         }
     }
+    // A built-in type's method the program names as a value
+    // (`i64.checked_add`) with no hand-written wrapper gets one generated
+    // from its family (B-2026-11-26-17).
+    let generated = crate::method_value_gen::wrappers_for(
+        &toks,
+        crate::prelude::LIBRARY_SOURCES
+            .iter()
+            .find(|(f, _)| *f == "source/method_values.kara")
+            .map_or("", |(_, t)| t),
+    );
+    lib.push_str(&generated);
     // The program's `#[panic_handler]` is called through a library function
     // the backends know by name, which builds its `PanicInfo`.
     if let Some(handler) = panic_handler_name(src) {

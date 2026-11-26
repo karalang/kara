@@ -658,6 +658,16 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   function value yet is refused with the closure to write, not as a missing
   constant (B-2026-11-25-40).
 
+- More of a built-in type's methods are function values: the checked,
+  overflowing, wrapping and saturating integer families
+  (`i64.checked_add`, `u8.overflowing_mul`), the bit, logarithm and byte
+  methods, the float functions, `Vec.windows` / `Vec.chunks`,
+  `SortedSet.range` / `SortedMap.range` and their `range_inclusive`, the
+  container reads and the building methods (`Vec.push` is
+  `Fn(mut ref Vec[T], own T)`). The wrapper each stands for is generated
+  from the method's family for the methods a program names that way
+  (B-2026-11-26-17).
+
 - `karac explain <file>.<fn>` on a function in a recursive group, or one
   that calls itself, adds a `Fixpoint:` section: the group, then the
   chain `φ0 = ∅`, `φ1`, … up to `φ*`, each step with the atoms it added

@@ -665,6 +665,91 @@ pub(super) fn builtin_type_has_method(name: &str, method: &str) -> bool {
     }
 }
 
+/// Every native method of the built-in type `name`: the names of the
+/// method tables [`builtin_type_has_method`] consults, filtered by it, less
+/// the names it lets through that are no method of `name`, which it leaves
+/// for the method checker to refuse with its own words (`Str.push`: "a
+/// `Str` is a read-only view"; B-2026-11-26-17).
+pub(super) fn builtin_type_methods(name: &str) -> Vec<&'static str> {
+    use super::expr_method_call::{
+        MAP_BUILTIN_METHODS, SET_BUILTIN_METHODS, SLICE_BUILTIN_METHODS, SLICE_MUTATING_METHODS,
+        SORTED_MAP_BUILTIN_METHODS, SORTED_SET_BUILTIN_METHODS, STRING_BUILTIN_METHODS,
+    };
+    use super::method_numeric::{
+        FLOAT_METHODS, INT_METHODS, SIGNED_INT_METHODS, UNSIGNED_INT_METHODS,
+    };
+    const SCALAR: &[&str] = &[
+        "to_string",
+        "clone",
+        "cmp",
+        "eq",
+        "hash",
+        "is_ascii",
+        "is_ascii_digit",
+        "is_ascii_alphabetic",
+        "is_ascii_alphanumeric",
+        "is_ascii_whitespace",
+        "is_ascii_uppercase",
+        "is_ascii_lowercase",
+        "is_ascii_punctuation",
+        "is_ascii_hexdigit",
+        "to_ascii_uppercase",
+        "to_ascii_lowercase",
+        "eq_ignore_ascii_case",
+        "is_alphabetic",
+        "is_numeric",
+        "is_alphanumeric",
+        "is_whitespace",
+        "is_uppercase",
+        "is_lowercase",
+        "is_digit",
+        "to_digit",
+        "to_uppercase",
+        "to_lowercase",
+        "len_utf8",
+    ];
+    let lists: &[&[&'static str]] = &[
+        SCALAR,
+        INT_METHODS,
+        SIGNED_INT_METHODS,
+        UNSIGNED_INT_METHODS,
+        FLOAT_METHODS,
+        STRING_BUILTIN_METHODS,
+        SLICE_BUILTIN_METHODS,
+        SLICE_MUTATING_METHODS,
+        super::method_user_impl::VEC_ONLY_METHODS,
+        super::method_vec_mutation::DEQUE_METHODS,
+        MAP_BUILTIN_METHODS,
+        SET_BUILTIN_METHODS,
+        SORTED_MAP_BUILTIN_METHODS,
+        SORTED_SET_BUILTIN_METHODS,
+    ];
+    let mut out: Vec<&'static str> = lists
+        .iter()
+        .flat_map(|l| l.iter().copied())
+        .filter(|m| builtin_type_has_method(name, m))
+        .filter(|m| !no_method_of(name, m))
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// A name [`builtin_type_has_method`] admits for `name` that the method
+/// checker has no method for.
+fn no_method_of(name: &str, method: &str) -> bool {
+    match name {
+        "f32" | "f64" | "f16" | "bf16" => matches!(method, "cmp" | "eq" | "hash"),
+        "Str" => matches!(
+            method,
+            "push" | "push_str" | "pop" | "clear" | "truncate" | "reserve"
+        ),
+        "u8" => method == "is_ascii",
+        "char" => method == "is_control",
+        _ => false,
+    }
+}
+
 /// The refusal for `ty.method` named as a value when the library has no
 /// function to stand for that method (runtime/stdlib/source/method_values.kara):
 /// the call form and a closure both work (B-2026-11-25-40).

@@ -87,6 +87,7 @@ pub mod log_calls;
 pub mod logical_lint;
 pub mod lowering;
 pub mod manifest;
+pub mod method_value_gen;
 pub mod mir;
 pub mod missing_must_use_lint;
 pub mod missing_track_caller_lint;
