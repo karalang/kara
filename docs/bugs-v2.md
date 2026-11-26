@@ -59,8 +59,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 780 |
-| false-positive | 393 |
-| missing-feature | 265 |
+| false-positive | 394 |
+| missing-feature | 266 |
 | perf | 205 |
 | other | 157 |
 | soundness | 135 |
@@ -76,13 +76,13 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 949 |
+| typecheck | 951 |
 | mir | 346 |
 | mir-llvm | 336 |
 | cli | 320 |
 | parser | 165 |
 | ownership | 140 |
-| runtime | 115 |
+| runtime | 116 |
 | interp | 114 |
 | effect | 70 |
 | resolver | 59 |
@@ -116,9 +116,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-25-19 | 2026-11-25 | typecheck+cli | low | `lossless_cast` misses a widening cast of a `ref` operand in a binary operation or compound assignment: `total += x as i64` and `total + x as i64`, with `x` the `ref i32` that `target.iter()` yields and `total: i64`, pass silently, while `total += n as i64` with `n: i32` and `let z: i64 = x as i64` are linted and `total += x` checks and runs | — |
 | B-2026-11-25-31 | 2026-11-25 | mir-llvm+runtime | low | Inserting 10^5 random `i64` keys into a compiled `SortedMap` still takes about 1.5x Rust's `BTreeMap` (100 rounds: 1.5 s against 1.0 s; `entry(k).or_insert(0) += 1` 1.6 s against 0.97 s), after B-2026-11-24-41 | — |
 | B-2026-11-25-48 | 2026-11-25 | typecheck | medium | `Vec.resize`, `Vec.filled` and `fill` do not enforce their `where T: Clone` bound: a struct with no Clone impl, a `Mutex[i64]`, and an unbounded generic `T` all pass `karac check` and get field-by-field copies, so `v.resize(2, Mutex.new(1))` makes two independent mutexes (and the interpreter stops with 'Mutex[i64] has no field 0') | — |
-| B-2026-11-25-49 | 2026-11-25 | typecheck | medium | `#[derive(Serialize, Deserialize)]` accepts an `i128`, `u128`, `Array[T, N]` or `Result[T, E]` field (and `Vec[i128]`, `Option[u128]`), which `karac check` passes and every backend refuses: interp, JIT and build stop at `error[mir]: typecheck: 3:1: no method 'serialize' on type 'i128'` | — |
-| B-2026-11-25-51 | 2026-11-25 | effect | medium | `.clone()` of a `Vec`, `String`, `Option[Vec[T]]` or a derived-Clone struct holding a `Vec` is not charged `allocates(Heap)`: `#[no_effect(allocates(Heap))]` accepts it, while a `Map`, `Set` or `SortedMap` clone is refused | — |
-| B-2026-11-25-52 | 2026-11-25 | effect | low | `karac check --output=json` lists the standard library's `next_u64` under `public_function_effects` for any program that calls `random.next_u64()`, though that key is only for the program's own pub fns under `public_effects = "inferred"` | — |
 | B-2026-11-25-56 | 2026-11-25 | interp | medium | `karac run --interp` stops with `error[mir]: run: in main#resume ...: _3: String still owns a value at return; a drop is missing` (exit 3) when a program waits (accept, recv) inside an endless loop after its last use of an owned local; `karac run` and `karac build` serve | — |
 | B-2026-11-25-57 | 2026-11-25 | other | low | The browser playground crate (`playground/`, karac-playground) no longer builds for `wasm32-unknown-unknown`: about 45 errors, so examples/cartographer's studio.sh (a wasm-pack build of it) fails | — |
 | B-2026-11-25-59 | 2026-11-25 | cli | low | `karac query effects` shows a private function's parameter-rooted effect as its class alone (`sends(Channel)` for `fn inner(tx: ref Sender[i64]) { tx.send(2) }`): `"roots"` comes only from a clause | — |
@@ -148,6 +145,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-16 | 2026-11-26 | resolver | medium | `karac fix` copies a std import's misspelled item into correct uses (`import std.time.{Duratoin}`), leaves a std module typo unfixed or rewrites its uses (`std.tiem`, `std.randmo` to `rand.`), and loses a method typo's edit before a `(` argument (`v.psuh((1))`) | — |
 | B-2026-11-26-17 | 2026-11-26 | typecheck | low | A built-in method with no library wrapper cannot be named as a value: `let f = i64.checked_add;` and `let g = Vec.windows;` are refused (E0200 / E0236, with the closure to write), though `i64.abs`, `i64.pow`, `Vec.len`, `Vec.first` are function values | — |
 | B-2026-11-26-67 | 2026-11-26 | interp+mir-llvm | medium | The deprecated `String.slice(a, b)` checks neither bounds nor code-point boundaries: `"héllo".slice(1, 2)` gives a `Str` holding half of `é` (invalid UTF-8), and `slice(2, 9)` past the end clamps, where `s[a..b]` panics on both | — |
+| B-2026-11-26-68 | 2026-11-26 | typecheck | medium | A trait impl on a const-generic `Array[T, N]` never resolves: `impl[T: Tally, const N: i64] Tally for Array[T, N]` then `a.tally()` on an `Array[i64, 3]` is refused E0236 "no method 'tally' on type 'Array'" | — |
+| B-2026-11-26-69 | 2026-11-26 | typecheck+runtime | low | `Array[T, N]` has no `Serialize` / `Deserialize`: the ruling is a JSON array of `N` elements, read back from exactly `N` with an error naming the expected and actual length, nested arrays alike; B-2026-11-25-49 refuses the field at the derive until then | — |
 
 ### Relocated
 
@@ -2349,7 +2348,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-25-45 | typecheck | medium | A partial move by a destructuring pattern (`let P { a, . | b59608d39d |
 | B-2026-11-25-46 | typecheck | medium | A closure that calls an `own self` trait method on a captured `dyn Trait` or generic `T: Trait` value (`\|\| a.w()`) captures it by reference, so the c… | 03ce7e7984 |
 | B-2026-11-25-47 | typecheck | low | The signed integer types have no abs family: `checked_abs`, `wrapping_abs`, `saturating_abs`, `overflowing_abs` and `unsigned_abs` are E0236 'no meth… | f57ac48760 |
+| B-2026-11-25-49 | typecheck | medium | `#[derive(Serialize, Deserialize)]` accepts an `i128`, `u128`, `Array[T, N]` or `Result[T, E]` field (and `Vec[i128]`, `Option[u128]`), which `karac… | 7a86bb6b07 |
 | B-2026-11-25-50 | mir | medium | A provider method that reaches a resource whose provider can reach it back passes `karac check` and is refused by every backend with an internal `bor… | 59fc93b496 |
+| B-2026-11-25-51 | effect | medium | `.clone()` of a `Vec`, `String`, `Option[Vec[T]]` or a derived-Clone struct holding a `Vec` is not charged `allocates(Heap)`: `#[no_effect(allocates(… | 38b579194c |
+| B-2026-11-25-52 | effect | low | `karac check --output=json`'s `public_function_effects` keys the wrong names: the standard library's `next_u64` for any program that calls `random.ne… | a7fe4ecdaa |
 | B-2026-11-25-53 | typecheck | medium | `karac check src/main.kara` inside a package refuses programs that `karac check` (no file), `karac run src/main.kara` and `karac build` all accept: a… | 292116b6d9 |
 | B-2026-11-25-54 | typecheck | medium | Method visibility is not enforced: a non-`pub` method of a dependency's type (`c.inner()`) and a `private fn` method from another directory or anothe… | 606ce3fc6e |
 | B-2026-11-25-55 | typecheck | low | A program's own `enum Ordering` cannot be used: `Ordering.Mine` is E0236 `no associated function 'Mine' on type 'Ordering'` and a match arm is E0273… | b8c09eb363 |
