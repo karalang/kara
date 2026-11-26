@@ -80,7 +80,8 @@ pub(super) fn cmd_query(kind: QueryKind, filename: &str, function: &str) {
             pipeline.typecheck();
             pipeline.lower();
             pipeline.effectcheck();
-            query_effects(&pipeline, function, filename);
+            let roots = mir_param_roots(&source);
+            query_effects(&pipeline, function, filename, &roots);
         }
         QueryKind::Ownership => {
             pipeline.typecheck();
@@ -684,14 +685,79 @@ pub(super) fn render_cost_summary_json(
     )
 }
 
-pub(super) fn query_effects(pipeline: &Pipeline, function: &str, filename: &str) {
+/// For each function the MIR program lowers, the parameters its effects
+/// act on, by `(verb, class)`: the effect pass's summary keys, kept when
+/// every key of that verb and class is a parameter (or a field of one), read
+/// back to the parameters' names. Empty when the program does not build to
+/// MIR, and a function no instance of which is reachable from `main` has no
+/// entry, so its effects show their class alone (B-2026-11-25-59).
+fn mir_param_roots(source: &str) -> crate::effect_graph::InferredRoots {
+    use crate::mir::effects::Key;
+    use crate::mir::syntax::LocalKind;
+    let mut out = crate::effect_graph::InferredRoots::default();
+    let Ok(lowered) = crate::mir::lower::build_source(source) else {
+        return out;
+    };
+    let report = crate::mir::effects::analyze(&lowered.program, &lowered.tys);
+    for (instance, set) in &report.summaries {
+        let Some(body) = lowered.program.bodies.get(instance) else {
+            continue;
+        };
+        let mut by_class: std::collections::BTreeMap<(String, String), Option<Vec<String>>> =
+            Default::default();
+        for e in &set.effects {
+            if e.class.is_empty() {
+                continue;
+            }
+            // The front end counts a `File`'s effects under the file
+            // system's class; every other value class has its own name.
+            let class = match e.class.as_str() {
+                "File" => "FileSystem",
+                c => c,
+            };
+            let slot = by_class
+                .entry((e.verb.name().to_string(), class.to_string()))
+                .or_insert_with(|| Some(Vec::new()));
+            let name = match &e.key {
+                Key::Param(p, _) => body.locals.get(*p as usize).and_then(|l| match &l.kind {
+                    LocalKind::Arg { name, .. } => Some(name.clone()),
+                    _ => None,
+                }),
+                _ => None,
+            };
+            match (name, slot.as_mut()) {
+                (Some(n), Some(names)) => {
+                    if !names.contains(&n) {
+                        names.push(n);
+                    }
+                }
+                _ => *slot = None,
+            }
+        }
+        let roots: std::collections::HashMap<(String, String), Vec<String>> = by_class
+            .into_iter()
+            .filter_map(|(k, v)| v.filter(|n| !n.is_empty()).map(|n| (k, n)))
+            .collect();
+        if !roots.is_empty() && !set.unknown {
+            out.insert(instance.clone(), roots);
+        }
+    }
+    out
+}
+
+pub(super) fn query_effects(
+    pipeline: &Pipeline,
+    function: &str,
+    filename: &str,
+    roots: &crate::effect_graph::InferredRoots,
+) {
     let effects = pipeline.effects.as_ref().unwrap();
 
     // Whole-program mode: an empty `function` (a bare `<file>.kara`
     // target) emits every function's effects plus the call-graph edges
     // — the effect-graph artifact Cartographer consumes.
     if function.is_empty() {
-        query_effects_whole_program(pipeline, effects, filename);
+        query_effects_whole_program(pipeline, effects, filename, roots);
         return;
     }
 
@@ -704,7 +770,7 @@ pub(super) fn query_effects(pipeline: &Pipeline, function: &str, filename: &str)
     }
 
     let (inferred_str, declared_str) =
-        crate::effect_graph::function_effects_json(effects, function);
+        crate::effect_graph::function_effects_json(effects, function, roots);
     // Why the function has each effect: the call chain to where it
     // happens, one chain per effect in inferred order (design.md § Compiler
     // query API: "each answer includes a derivation chain").
@@ -745,12 +811,13 @@ pub(super) fn query_effects_whole_program(
     pipeline: &Pipeline,
     effects: &EffectCheckResult,
     filename: &str,
+    roots: &crate::effect_graph::InferredRoots,
 ) {
     let is_test_file = filename.ends_with("_test.kara");
     let graph = crate::call_graph::build(&own_program(pipeline), filename, is_test_file);
     println!(
         "{}",
-        crate::effect_graph::build_effect_graph_json(effects, &graph, filename)
+        crate::effect_graph::build_effect_graph_json(effects, &graph, filename, roots)
     );
 }
 

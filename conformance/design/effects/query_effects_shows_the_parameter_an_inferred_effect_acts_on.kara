@@ -1,0 +1,3 @@
+// design.md § Value-rooted resources: a function with no clause shows the parameter its inferred effect acts on, as one with a clause does (B-2026-11-25-59).
+fn inner(tx: ref Sender[i64]) { let _ = tx.send(2); }
+fn main() { let (tx, rx) = Channel.new(); inner(tx); println(rx.recv().unwrap()); }

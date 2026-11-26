@@ -167,18 +167,41 @@ pub(crate) fn declared_roots_of(
         .unwrap_or_default()
 }
 
+/// The parameters each function's own body acts on for an effect, by
+/// function name and then by `(verb, resource)`: the MIR effect pass's
+/// summary keys read back to the parameters' names (`sends(Channel @ p1)`
+/// in `fn inner(tx: ref Sender[i64])` is `["tx"]`), present only when every
+/// key of that verb and class is a parameter. Plain data the CLI fills; a
+/// caller with no MIR passes an empty map (B-2026-11-25-59).
+pub(crate) type InferredRoots =
+    std::collections::HashMap<String, std::collections::HashMap<(String, String), Vec<String>>>;
+
 /// A function's inferred and declared effects as JSON, each effect a clause
-/// named through a parameter carrying its `"roots"`.
+/// named through a parameter carrying its `"roots"`. An inferred effect no
+/// clause roots takes the parameters `inferred_roots` names for it, so a
+/// function with no clause shows what one with a clause does.
 pub(crate) fn function_effects_json(
     effects: &EffectCheckResult,
     function: &str,
+    inferred_roots: &InferredRoots,
 ) -> (String, String) {
     let declared = effects.declared_effects.get(function);
     let roots_of = |e: &crate::effectchecker::Effect| declared_roots_of(effects, declared, e);
+    let inferred_roots_of = |e: &crate::effectchecker::Effect| {
+        let named = roots_of(e);
+        if !named.is_empty() {
+            return named;
+        }
+        inferred_roots
+            .get(function)
+            .and_then(|m| m.get(&(effect_verb_str(&e.verb).to_string(), e.resource.clone())))
+            .cloned()
+            .unwrap_or_default()
+    };
     let inferred = effects
         .inferred_effects
         .get(function)
-        .map(|set| effect_set_json_rooted(set, &roots_of))
+        .map(|set| effect_set_json_rooted(set, &inferred_roots_of))
         .unwrap_or_else(|| "[]".to_string());
     let declared_json = match declared {
         Some(DeclaredEffects::Explicit(set)) => effect_set_json_rooted(set, &roots_of),
@@ -910,12 +933,13 @@ pub(crate) fn build_effect_graph_json(
     effects: &EffectCheckResult,
     graph: &CallGraph,
     scope: &str,
+    inferred_roots: &InferredRoots,
 ) -> String {
     let fn_entries: Vec<String> = graph
         .nodes
         .iter()
         .map(|(key, node)| {
-            let (inferred_str, declared_str) = function_effects_json(effects, key);
+            let (inferred_str, declared_str) = function_effects_json(effects, key, inferred_roots);
             format!(
                 "{{\"function\":{},\"line\":{},\"is_test\":{},\"inferred_effects\":{},\"declared_effects\":{}}}",
                 json_string(key),
@@ -1437,7 +1461,7 @@ pub fn cartograph_json(source: &str, scope: &str) -> CartographResult {
 
     CartographResult {
         ok: true,
-        effects_json: build_effect_graph_json(&effects, &graph, scope),
+        effects_json: build_effect_graph_json(&effects, &graph, scope, &InferredRoots::default()),
         concurrency_json: with_auto_par(
             &build_concurrency_graph_json(&analysis, &graph, scope, Some(&parsed.program)),
             source,
