@@ -1,0 +1,120 @@
+// Every streaming hasher clones mid-stream into an independent copy: the
+// two are fed different suffixes and each finishes to the digest of its own
+// input (docs/library/crypto.md, "Cloning a running hash"). The expected
+// output is Python's hashlib and hmac. Clones dropped unfinished, a clone of
+// a clone, and a clone kept in a Vec free their state (the ASan lane reports
+// a leak otherwise).
+import std.crypto.sha2.{Sha256, Sha384, Sha512};
+import std.crypto.hmac.{HmacSha256, HmacSha384, HmacSha512};
+import std.crypto.legacy.{Sha1};
+import std.encoding.{hex_encode};
+
+// Hashes "prefix" once, then branches: the original takes "-left", the clone
+// "-right".
+fn branch_sha256() {
+    let mut a = Sha256.new();
+    a.update("prefix".bytes());
+    let mut b = a.clone();
+    a.update("-left".bytes());
+    b.update("-right".bytes());
+    println(f"sha256 {hex_encode(a.finish())} {hex_encode(b.finish())}");
+}
+
+fn branch_sha384() {
+    let mut a = Sha384.new();
+    a.update("prefix".bytes());
+    let mut b = a.clone();
+    a.update("-left".bytes());
+    b.update("-right".bytes());
+    println(f"sha384 {hex_encode(a.finish())} {hex_encode(b.finish())}");
+}
+
+fn branch_sha512() {
+    let mut a = Sha512.new();
+    a.update("prefix".bytes());
+    let mut b = a.clone();
+    a.update("-left".bytes());
+    b.update("-right".bytes());
+    println(f"sha512 {hex_encode(a.finish())} {hex_encode(b.finish())}");
+}
+
+fn branch_sha1() {
+    let mut a = Sha1.new();
+    a.update("prefix".bytes());
+    let mut b = a.clone();
+    a.update("-left".bytes());
+    b.update("-right".bytes());
+    println(f"sha1 {hex_encode(a.finish())} {hex_encode(b.finish())}");
+}
+
+// The clone carries the key: each finishes to the HMAC under "key" of its
+// own input.
+fn branch_hmac256() {
+    let mut a = HmacSha256.new("key".bytes());
+    a.update("prefix".bytes());
+    let mut b = a.clone();
+    a.update("-left".bytes());
+    b.update("-right".bytes());
+    println(f"hmac256 {hex_encode(a.finish())} {hex_encode(b.finish())}");
+}
+
+fn branch_hmac384() {
+    let mut a = HmacSha384.new("key".bytes());
+    a.update("prefix".bytes());
+    let mut b = a.clone();
+    a.update("-left".bytes());
+    b.update("-right".bytes());
+    println(f"hmac384 {hex_encode(a.finish())} {hex_encode(b.finish())}");
+}
+
+fn branch_hmac512() {
+    let mut a = HmacSha512.new("key".bytes());
+    a.update("prefix".bytes());
+    let mut b = a.clone();
+    a.update("-left".bytes());
+    b.update("-right".bytes());
+    println(f"hmac512 {hex_encode(a.finish())} {hex_encode(b.finish())}");
+}
+
+fn main() {
+    branch_sha256();
+    branch_sha384();
+    branch_sha512();
+    branch_sha1();
+    branch_hmac256();
+    branch_hmac384();
+    branch_hmac512();
+    // A clone finished first leaves the original running; the original
+    // then takes more data.
+    let mut a = Sha256.new();
+    a.update("ab".bytes());
+    let b = a.clone();
+    println(f"early {hex_encode(b.finish())}");
+    a.update("c".bytes());
+    println(f"later {hex_encode(a.finish())}");
+    // A clone of a fresh hasher, and a clone of a clone.
+    let fresh = Sha512.new();
+    let c1 = fresh.clone();
+    let mut c2 = c1.clone();
+    c2.update("x".bytes());
+    println(f"fresh {hex_encode(c1.finish())}");
+    println(f"twice {hex_encode(c2.finish())}");
+    // Original and clone both dropped unfinished, with data and keyed.
+    let mut m = HmacSha384.new("secret".bytes());
+    m.update("half".bytes());
+    let _m2 = m.clone();
+    let mut s = Sha1.new();
+    s.update("y".bytes());
+    let _s2 = s.clone();
+    // Clones kept in a Vec, one finished and the rest dropped with it.
+    let mut base = HmacSha256.new("k".bytes());
+    base.update("p".bytes());
+    let mut v: Vec[HmacSha256] = Vec.new();
+    for i in 0..4 {
+        let mut c = base.clone();
+        c.update(f"{i}".bytes());
+        v.push(c);
+    }
+    let two = v.remove(2);
+    println(f"vec {hex_encode(two.finish())} {v.len()}");
+}

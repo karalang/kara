@@ -1,0 +1,7 @@
+import std.crypto.hmac.{HmacSha256};
+fn main() {
+    let mut h = HmacSha256.new("k".bytes());
+    h.update("a".bytes());
+    let tag = h.finish();
+    let again = h.clone();
+}

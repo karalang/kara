@@ -33,11 +33,28 @@ Every function takes `Slice[u8]`. There is no `Str` overload, because a digest i
 | `sha256` | `fn sha256(data: Slice[u8]) -> Array[u8, 32]` | |
 | `sha384` | `fn sha384(data: Slice[u8]) -> Array[u8, 48]` | |
 | `sha512` | `fn sha512(data: Slice[u8]) -> Array[u8, 64]` | |
-| `Sha256` | `struct Sha256` | A digest over data given in parts: `Sha256.new()`, then `update(mut ref self, data: Slice[u8])` any number of times, then `finish(own self) -> Array[u8, 32]` |
+| `Sha256` | `struct Sha256` | A digest over data given in parts: `Sha256.new()`, then `update(mut ref self, data: Slice[u8])` any number of times, then `finish(own self) -> Array[u8, 32]`; `clone(ref self) -> Sha256` (`Clone`) |
 | `Sha384` | `struct Sha384` | As `Sha256`; `finish` returns `Array[u8, 48]` |
 | `Sha512` | `struct Sha512` | As `Sha256`; `finish` returns `Array[u8, 64]` |
 
 Feeding the same bytes in any split gives the same digest as the one-shot function. `finish` consumes the value, so a finished hash cannot be updated again. A hash dropped without `finish` frees its state.
+
+Every streaming hasher on this page implements `Clone`. A clone is an independent copy of the running state: feeding one does not change the other, and each finishes to the digest of its own input. That hashes a shared prefix once and branches from it. A finished hash cannot be cloned, because `finish` consumed it.
+
+```kara
+import std.crypto.sha2.{Sha256};
+import std.encoding.{hex_encode};
+
+fn main() {
+    let mut a = Sha256.new();
+    a.update("prefix".bytes());
+    let mut b = a.clone();
+    a.update("-left".bytes());
+    b.update("-right".bytes());
+    println(hex_encode(a.finish()));   // sha256("prefix-left")
+    println(hex_encode(b.finish()));   // sha256("prefix-right")
+}
+```
 
 ## `std.crypto.hmac`
 
@@ -49,6 +66,8 @@ Feeding the same bytes in any split gives the same digest as the one-shot functi
 | `HmacSha256` | `struct HmacSha256` | `HmacSha256.new(key: Slice[u8])`, then `update` and `finish` as for `Sha256` |
 | `HmacSha384` | `struct HmacSha384` | As `HmacSha256`; `finish` returns `Array[u8, 48]` |
 | `HmacSha512` | `struct HmacSha512` | As `HmacSha256`; `finish` returns `Array[u8, 64]` |
+
+The MAC types clone as the hashes do. A clone copies the keyed state, so it holds the key as the original does, and each copy is freed (not wiped) when dropped, like the original.
 
 ## `std.crypto`
 
@@ -63,7 +82,7 @@ Check a received MAC with `constant_time_eq`, never with `==`. An ordinary compa
 | Item | Signature | Notes |
 |---|---|---|
 | `sha1` | `fn sha1(data: Slice[u8]) -> Array[u8, 20]` | |
-| `Sha1` | `struct Sha1` | `Sha1.new()`, `update`, and `finish(own self) -> Array[u8, 20]` |
+| `Sha1` | `struct Sha1` | `Sha1.new()`, `update`, `finish(own self) -> Array[u8, 20]`, and `clone` as for `Sha256` |
 
 SHA-1 is broken for collision resistance: two different inputs with the same SHA-1 digest can be computed, so it must not be used for signatures, certificates, or any check against a chosen input. It ships only in `std.crypto.legacy`, so every use is a visible import in review ([deferred.md § Security-related conventions](../deferred.md)). It is still the correct choice where a protocol fixes it and does not rely on collision resistance. The WebSocket handshake (RFC 6455 §1.3) is one:
 

@@ -10388,6 +10388,16 @@ impl<'a> Interp<'a> {
                 self.crypto.live.remove(&int(0)?);
                 Ok(unit)
             }
+            "copy" => {
+                let h = int(0)?;
+                let Some(st) = self.crypto.live.get(&h).cloned() else {
+                    return err(format!("{name}: no running hash {h}"));
+                };
+                self.crypto.next += 1;
+                let copy = self.crypto.next;
+                self.crypto.live.insert(copy, st);
+                Ok(Value::Int(i128::from(copy)))
+            }
             _ => err(format!("call of unknown function {name}")),
         }
     }
@@ -22910,7 +22920,9 @@ struct CryptoStates {
 }
 
 /// One running hash or MAC. runtime/src/mir_crypto.rs has the same type.
+/// `Clone` is the hashers' `clone()` (the `copy` native).
 #[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone)]
 enum CryptoState {
     Digest(ring::digest::Context),
     Mac(ring::hmac::Context),

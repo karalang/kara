@@ -5616,6 +5616,13 @@ impl<'a> super::TypeChecker<'a> {
                             &|e| matches!(e.kind, ExprKind::SelfValue),
                             &mut_self_methods,
                         );
+                    // A library module is not D5-migrated: its bare `self`
+                    // is still owned, so the borrow is spelled `ref self`.
+                    let tw = if method.stdlib_origin && tw == "self" {
+                        "ref self"
+                    } else {
+                        tw
+                    };
                     let fix = method.self_span.filter(|_| !writes).map(|span| FixIt {
                         span,
                         replacement: tw.to_string(),

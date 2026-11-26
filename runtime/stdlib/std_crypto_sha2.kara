@@ -23,6 +23,10 @@ impl CryptoSha2 {
 
     #[compiler_builtin]
     fn free(h: i64) { }
+
+    // A new handle running on from a copy of `h`'s state.
+    #[compiler_builtin]
+    fn copy(h: i64) -> i64 { 0 }
 }
 
 /// The SHA-256 digest of `data` (FIPS 180-4).
@@ -84,6 +88,14 @@ impl Drop for Sha256 {
     }
 }
 
+/// An independent copy of the running state: feeding one does not change
+/// the other, and each finishes to the digest of its own input.
+impl Clone for Sha256 {
+    fn clone(ref self) -> Sha256 {
+        Sha256 { h: CryptoSha2.copy(self.h) }
+    }
+}
+
 /// A SHA-384 digest computed over data given in parts.
 pub struct Sha384 {
     h: i64,
@@ -122,6 +134,14 @@ impl Drop for Sha384 {
     }
 }
 
+/// An independent copy of the running state: feeding one does not change
+/// the other, and each finishes to the digest of its own input.
+impl Clone for Sha384 {
+    fn clone(ref self) -> Sha384 {
+        Sha384 { h: CryptoSha2.copy(self.h) }
+    }
+}
+
 /// A SHA-512 digest computed over data given in parts.
 pub struct Sha512 {
     h: i64,
@@ -157,5 +177,13 @@ impl Drop for Sha512 {
         if self.h != 0 {
             CryptoSha2.free(self.h);
         }
+    }
+}
+
+/// An independent copy of the running state: feeding one does not change
+/// the other, and each finishes to the digest of its own input.
+impl Clone for Sha512 {
+    fn clone(ref self) -> Sha512 {
+        Sha512 { h: CryptoSha2.copy(self.h) }
     }
 }

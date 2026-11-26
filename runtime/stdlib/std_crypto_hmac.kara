@@ -22,6 +22,10 @@ impl CryptoHmac {
 
     #[compiler_builtin]
     fn free(h: i64) { }
+
+    // A new handle running on from a copy of `h`'s state.
+    #[compiler_builtin]
+    fn copy(h: i64) -> i64 { 0 }
 }
 
 /// The HMAC-SHA-256 of `data` under `key` (RFC 2104). A key of any length
@@ -86,6 +90,15 @@ impl Drop for HmacSha256 {
     }
 }
 
+/// An independent copy of the running state: feeding one does not change
+/// the other, and each finishes to the MAC of its own input. The keyed
+/// state is copied with it, so the clone holds the key too.
+impl Clone for HmacSha256 {
+    fn clone(ref self) -> HmacSha256 {
+        HmacSha256 { h: CryptoHmac.copy(self.h) }
+    }
+}
+
 /// An HMAC-SHA-384 computed over data given in parts.
 pub struct HmacSha384 {
     h: i64,
@@ -124,6 +137,15 @@ impl Drop for HmacSha384 {
     }
 }
 
+/// An independent copy of the running state: feeding one does not change
+/// the other, and each finishes to the MAC of its own input. The keyed
+/// state is copied with it, so the clone holds the key too.
+impl Clone for HmacSha384 {
+    fn clone(ref self) -> HmacSha384 {
+        HmacSha384 { h: CryptoHmac.copy(self.h) }
+    }
+}
+
 /// An HMAC-SHA-512 computed over data given in parts.
 pub struct HmacSha512 {
     h: i64,
@@ -159,5 +181,14 @@ impl Drop for HmacSha512 {
         if self.h != 0 {
             CryptoHmac.free(self.h);
         }
+    }
+}
+
+/// An independent copy of the running state: feeding one does not change
+/// the other, and each finishes to the MAC of its own input. The keyed
+/// state is copied with it, so the clone holds the key too.
+impl Clone for HmacSha512 {
+    fn clone(ref self) -> HmacSha512 {
+        HmacSha512 { h: CryptoHmac.copy(self.h) }
     }
 }

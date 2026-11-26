@@ -2327,6 +2327,7 @@ impl<'ctx> Cx<'ctx, '_> {
             "finish" => 5,
             "free" => 6,
             "eq" => 7,
+            "copy" => 8,
             _ => return Ok(None),
         };
         let null = self.ptr_ty().const_null();
@@ -2362,7 +2363,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 h = int(self, 0)?;
                 (out, out_len) = self.view_of(&args[1])?;
             }
-            6 => h = int(self, 0)?,
+            6 | 8 => h = int(self, 0)?,
             _ => {
                 (a, a_len) = self.view_of(&args[0])?;
                 (b, b_len) = self.view_of(&args[1])?;
@@ -2387,7 +2388,7 @@ impl<'ctx> Cx<'ctx, '_> {
         self.drop_moved(args)?;
         let d = self.place_ptr(dest)?;
         match op {
-            2 | 3 => self.store(d, v.into())?,
+            2 | 3 | 8 => self.store(d, v.into())?,
             7 => {
                 let eq = self
                     .builder

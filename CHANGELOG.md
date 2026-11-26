@@ -618,6 +618,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   (docs/library/json.md, B-2026-11-26-69). `Array.from_fn(N, f)` builds
   an array whose length is a `const` parameter, which it refused.
 
+- Every streaming hasher in `std.crypto` (`Sha256`, `Sha384`, `Sha512`,
+  `HmacSha256`, `HmacSha384`, `HmacSha512`, `Sha1`) implements `Clone`:
+  an independent copy of the running state, so a shared prefix is hashed
+  once and branched from (docs/library/crypto.md). An HMAC's clone copies
+  its keyed state. Same bytes on the interpreter and compiled programs;
+  conformance/crypto/hashers_cloned_mid_stream checks each against Python's
+  hashlib and hmac, ASan included.
 - A `par` nested in a `par` branch can use the fields of an outer local
   the branch captured (core-semantics §11.1, §9.1): each nested branch
   reads, writes or lends the field path it names, at any depth, tuples
@@ -2904,6 +2911,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- A use after move of a type whose `.clone()` is its own `impl Clone`
+  suggests cloning at the move site, and `karac fix` writes it. It said
+  "add `#[derive(Clone)]`" for a program's type that already had the impl,
+  and "has no `.clone()`" for a library one.
 - E0200 on an untyped `.try_into()` suggests an annotation that parses:
   `let r: Result[Target, String] = v.try_into();` for an integer, whose
   narrowing `try_from` fails with a `String`, and `Result[Target, E]` with

@@ -5869,7 +5869,16 @@ impl<'a> TypeChecker<'a> {
                 // the elements clone too; a fix that writes it on a `Vec` of
                 // a type with no `.clone()` starts a cascade of derives where
                 // the right repair is elsewhere (B-2026-11-04-2).
-                _ => self.clone_receiver_self_type(ty).is_some() && self.type_supports_clone(ty),
+                // A type whose `.clone()` is its own `impl Clone` (a
+                // library hasher's, or a program's) resolves through impl
+                // dispatch, so `clone_receiver_self_type` answers None for
+                // it; the impl still makes `.clone()` the fix to suggest.
+                _ => {
+                    let own_impl = matches!(ty, Type::Named { name, args }
+                        if self.env.has_applicable_impl("Clone", name, args));
+                    (own_impl || self.clone_receiver_self_type(ty).is_some())
+                        && self.type_supports_clone(ty)
+                }
             })
             .map(|(key, _)| *key)
             .collect();

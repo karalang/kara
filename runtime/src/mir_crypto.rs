@@ -9,7 +9,10 @@
 //! A running hash or MAC is a box whose address is its handle; `finish`
 //! and `free` both end it.
 
-/// One running hash or MAC. src/mir/interp.rs has the same type.
+/// One running hash or MAC. src/mir/interp.rs has the same type. `Clone`
+/// is the hashers' `clone()`: an independent copy of the running state,
+/// keyed state included for a MAC.
+#[derive(Clone)]
 enum CryptoState {
     Digest(ring::digest::Context),
     Mac(ring::hmac::Context),
@@ -94,7 +97,8 @@ unsafe fn write(out: *mut u8, out_len: usize, digest: &[u8]) {
 /// `b` under key `a` into `out`; 2 start a hash, 3 start a MAC under key
 /// `a` (each returns its handle, 0 for an unknown `alg`); 4 add `a` to
 /// handle `h`; 5 finish `h` into `out`; 6 free `h`; 7 whether `a` equals
-/// `b` in constant time (1 or 0).
+/// `b` in constant time (1 or 0); 8 copy `h` into a new handle that runs
+/// on independently (0 for `h` 0).
 ///
 /// # Safety
 ///
@@ -152,6 +156,13 @@ pub unsafe extern "C" fn karac_crypto_mir(
             0
         }
         7 => i64::from(crypto_ct_eq(a, b)),
+        8 => {
+            if h == 0 {
+                return 0;
+            }
+            let copy = unsafe { (*state(h)).clone() };
+            Box::into_raw(Box::new(copy)) as i64
+        }
         _ => 0,
     }
 }
