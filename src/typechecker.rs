@@ -101,6 +101,7 @@ pub(crate) use method_numeric::{
     FLOAT_METHODS, INT_METHODS, SIGNED_INT_METHODS, UNSIGNED_INT_METHODS,
 };
 mod fold_seed_widen;
+mod item_literal_params;
 mod method_optres_combinator;
 mod method_pointer;
 mod method_sequence_mutation;

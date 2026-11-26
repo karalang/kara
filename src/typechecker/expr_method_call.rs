@@ -2146,6 +2146,7 @@ impl<'a> super::TypeChecker<'a> {
             .push(super::exprs::clone_place_root(object).map(str::to_string));
         let fold = self.enter_fold_seed(method, args);
         let ranges = self.enter_range_closures(object, method, args);
+        let item_params = self.enter_item_literal_params(object, method, args);
         if method == "collect" && args.is_empty() {
             // Before the call is checked: its `FromIterator` bound is
             // refused inside.
@@ -2161,6 +2162,7 @@ impl<'a> super::TypeChecker<'a> {
             self.refuse_ct_eq_payload(object, span);
         }
         self.range_param_sources.truncate(ranges);
+        self.leave_item_literal_params(item_params);
         self.leave_fold_seed(fold);
         self.note_open_receiver_call(object, method, &ty, errors_before);
         self.call_receiver_roots.pop();
