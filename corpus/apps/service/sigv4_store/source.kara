@@ -8,8 +8,8 @@ import std.sync.{Mutex};
 import std.time.sleep;
 import std.time.Duration;
 
-const HOST: Str = "127.0.0.1:47786";
-const ADDR: Str = "127.0.0.1:47786";
+const HOST: Str = "127.0.0.1:23786";
+const ADDR: Str = "127.0.0.1:23786";
 const REGION: Str = "kara-local-1";
 const SERVICE: Str = "s3";
 const ALGORITHM: Str = "AWS4-HMAC-SHA256";

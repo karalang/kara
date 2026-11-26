@@ -10,7 +10,7 @@
 // reads to end of input, answers every command, and closes; the client
 // decodes the replies and prints them the way redis-cli does.
 
-const ADDR: Str = "127.0.0.1:47732";
+const ADDR: Str = "127.0.0.1:23732";
 const AOF: Str = "store.aof";
 const CLOCK: Str = "store.clock";
 

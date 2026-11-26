@@ -1,8 +1,8 @@
 # http_cache
 
 A caching reverse proxy in the shape of Varnish or nginx's `proxy_cache`,
-between a client and an origin on loopback (`127.0.0.1:47754` in front of
-`127.0.0.1:47753`). It keeps what an origin's `Cache-Control` lets a shared
+between a client and an origin on loopback (`127.0.0.1:23754` in front of
+`127.0.0.1:23753`). It keeps what an origin's `Cache-Control` lets a shared
 cache keep and answers each request with an `X-Cache` label:
 
 - **HIT**: a fresh entry, with its `Age` (an origin's own `Age` plus the

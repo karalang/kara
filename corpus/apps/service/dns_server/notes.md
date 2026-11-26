@@ -1,6 +1,6 @@
 # dns_server: an authoritative DNS server
 
-An authoritative DNS server for `example.test.` on `127.0.0.1:47743`, using
+An authoritative DNS server for `example.test.` on `127.0.0.1:23743`, using
 DNS over TCP (RFC 1035 §4.2.2, RFC 7766): each message carries a 2-byte
 length prefix, and several queries are pipelined on one connection.
 

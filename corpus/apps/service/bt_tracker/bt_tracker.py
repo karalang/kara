@@ -10,7 +10,7 @@ import time
 import urllib.error
 import urllib.request
 
-ADDR = ("127.0.0.1", 47784)
+ADDR = ("127.0.0.1", 23784)
 BASE = f"http://{ADDR[0]}:{ADDR[1]}"
 INTERVAL = 1800
 MIN_INTERVAL = 900

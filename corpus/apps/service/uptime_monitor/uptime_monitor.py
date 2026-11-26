@@ -1,7 +1,7 @@
 """Mirror of uptime_monitor.kara: an endpoint monitor in the shape of Gatus,
 tested first against fake network, clock and file-system objects (the Kara
 program installs them as providers), then run against real servers on
-loopback (HTTP on 47751, a line-protocol cache on 47752)."""
+loopback (HTTP on 23751, a line-protocol cache on 23752)."""
 
 import json
 import os
@@ -14,48 +14,48 @@ import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-HTTP_ADDR = ("127.0.0.1", 47751)
-TCP_ADDR = ("127.0.0.1", 47752)
+HTTP_ADDR = ("127.0.0.1", 23751)
+TCP_ADDR = ("127.0.0.1", 23752)
 ROOT = "uptime_data"
 
 CONFIG = """# endpoints watched by the uptime monitor
 [endpoint api-health]
-url = http://127.0.0.1:47751/health
+url = http://127.0.0.1:23751/health
 condition = [STATUS] == 200
 condition = [BODY].status == UP
 condition = [RESPONSE_TIME] < 1000
 failure-threshold = 2
 
 [endpoint orders]
-url = http://127.0.0.1:47751/orders
+url = http://127.0.0.1:23751/orders
 condition = [STATUS] == 200
 condition = len([BODY].items) >= 2
 condition = [BODY].items[0].state != failed
 
 [endpoint flaky]
-url = http://127.0.0.1:47751/flaky
+url = http://127.0.0.1:23751/flaky
 condition = [STATUS] == 200
 failure-threshold = 3
 success-threshold = 2
 
 [endpoint slow]
-url = http://127.0.0.1:47751/slow
+url = http://127.0.0.1:23751/slow
 condition = [STATUS] == 200
 condition = [RESPONSE_TIME] < 800
 
 [endpoint hang]
-url = http://127.0.0.1:47751/hang
+url = http://127.0.0.1:23751/hang
 timeout = 300ms
 condition = [CONNECTED] == true
 failure-threshold = 2
 
 [endpoint login]
-url = http://127.0.0.1:47751/login
+url = http://127.0.0.1:23751/login
 condition = [STATUS] == 200
 condition = [BODY] == pat(*Sign in*)
 
 [endpoint cache]
-url = tcp://127.0.0.1:47752
+url = tcp://127.0.0.1:23752
 send = PING
 timeout = 300ms
 condition = [CONNECTED] == true
@@ -63,7 +63,7 @@ condition = [BODY] == +PONG
 failure-threshold = 2
 
 [endpoint docs]
-url = http://127.0.0.1:47751/docs
+url = http://127.0.0.1:23751/docs
 enabled = false
 condition = [STATUS] == 200
 """
@@ -603,8 +603,8 @@ def self_test(eps):
     print("== self-test: http checks against a fake network and clock")
     health = eps[0].copy()
     net = FakeNet([
-        ("http://127.0.0.1:47751/health", 200, '{"status":"UP"}'),
-        ("http://127.0.0.1:47751/flaky", 503, "upstream unavailable"),
+        ("http://127.0.0.1:23751/health", 200, '{"status":"UP"}'),
+        ("http://127.0.0.1:23751/flaky", 503, "upstream unavailable"),
     ])
     show_check("health", health, check(net, health))
     strict = health.copy()

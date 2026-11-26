@@ -9,7 +9,7 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-const ADDR: &str = "127.0.0.1:47787";
+const ADDR: &str = "127.0.0.1:23787";
 const SESSIONS: usize = 6;
 const BASE: &str = "dc=kara,dc=test";
 const ADMIN: &str = "cn=admin,dc=kara,dc=test";

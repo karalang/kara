@@ -8,10 +8,10 @@ it, so the output does not depend on scheduling.
 import socket
 import threading
 
-PROXY = ("127.0.0.1", 47761)
-ECHO = ("127.0.0.1", 47762)
-CLOSED_PORT = 47763
-ALLOWED_PORTS = (47762, 47763)
+PROXY = ("127.0.0.1", 23761)
+ECHO = ("127.0.0.1", 23762)
+CLOSED_PORT = 23763
+ALLOWED_PORTS = (23762, 23763)
 USERS = {"alice": "wonderland", "bob": "builder"}
 CONNECTIONS = 10
 RELAYED = 2

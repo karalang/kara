@@ -8,8 +8,8 @@ import std.encoding.{base64_encode, base64_decode, hex_encode};
 import std.crypto.sha2.{sha256};
 import std.crypto.legacy.{sha1};
 
-const ADDR: Str = "127.0.0.1:47748";
-const BASE: Str = "http://127.0.0.1:47748";
+const ADDR: Str = "127.0.0.1:23748";
+const BASE: Str = "http://127.0.0.1:23748";
 const ROOT: Str = "tus_data";
 const MAX_SIZE: i64 = 1048576;
 const EXTENSIONS: Str = "creation,termination,checksum";

@@ -5,7 +5,7 @@
 import socket
 import threading
 
-ADDR = ("127.0.0.1", 47780)
+ADDR = ("127.0.0.1", 23780)
 SESSIONS = 3
 
 USERS = {"dev": "s3cret"}

@@ -541,7 +541,7 @@ fn origin(name: Str, port: i64) -> Origin {
 }
 
 fn main() {
-    let addr = "127.0.0.1:47737".to_string();
+    let addr = "127.0.0.1:23737".to_string();
     let listener = match TcpListener.bind(addr.clone()) {
         Ok(l) => l,
         Err(_) => {
@@ -550,7 +550,7 @@ fn main() {
         }
     };
     // b4 and s1 are in the pools but nothing ever listens on their ports.
-    let mut origins = vec![origin("b1", 47738), origin("b2", 47739)];
+    let mut origins = vec![origin("b1", 23738), origin("b2", 23739)];
     let mut proxy = Proxy {
         listener: listener,
         addr: addr,
@@ -560,7 +560,7 @@ fn main() {
             Route { prefix: "/static/".to_string(), pool: 1, strip: false },
         ],
         pools: vec![
-            Cluster { name: "api".to_string(), members: vec![upstream("b1", 47738), upstream("b2", 47739), upstream("b4", 47740)], next: 0 },
+            Cluster { name: "api".to_string(), members: vec![upstream("b1", 23738), upstream("b2", 23739), upstream("b4", 47740)], next: 0 },
             Cluster { name: "static".to_string(), members: vec![upstream("s1", 47741)], next: 0 },
         ],
         log: Vec.new(),

@@ -67,9 +67,9 @@
   PUT /o/logs/2025-01-01.log -> 200 "ff450a5aa7e775c724cb42b9afd65b82" - 
   GET /o/site/index.html -> 200 "b5f4ea2e4df5ee6b81b35f2fffa96056" - <h1>home</h1>
   GET /o/site/index.html Range: bytes=4-7 -> 206 "b5f4ea2e4df5ee6b81b35f2fffa96056" bytes 4-7/13 home
-  GET /o/site/index.html Range: bytes=50- -> error: http://127.0.0.1:47755/o/site/index.html: status code 416
+  GET /o/site/index.html Range: bytes=50- -> error: http://127.0.0.1:23755/o/site/index.html: status code 416
   GET /o/site/index.html If-None-Match: "b5f4ea2e4df5ee6b81b35f2fffa96056" -> 304 "b5f4ea2e4df5ee6b81b35f2fffa96056" - 
-  PUT /o/site/index.html If-Match: "old" -> error: http://127.0.0.1:47755/o/site/index.html: status code 412
+  PUT /o/site/index.html If-Match: "old" -> error: http://127.0.0.1:23755/o/site/index.html: status code 412
   PUT /o/site/index.html If-Match: "b5f4ea2e4df5ee6b81b35f2fffa96056" Content-Type: text/html -> 200 "35dd43e6cff0327fb20ec73d04eb732b" - 
   GET /o/?prefix=site/&delimiter=/ -> 200 - - key site/about.html 14 "7c9da8d6c5f3e6bf79711c98fa424d39" | prefix site/css/ | key site/index.html 16 "35dd43e6cff0327fb20ec73d04eb732b"
   GET /o/?max-keys=2 -> 200 - - key logs/2025-01-01.log 14 "ff450a5aa7e775c724cb42b9afd65b82" | key site/about.html 14 "7c9da8d6c5f3e6bf79711c98fa424d39" | truncated next=site/about.html
@@ -79,7 +79,7 @@
   POST /o/backup.tar?uploadId=u1 -> 200 "489533e9a8cd889481411d7738d63cf5-2" - "489533e9a8cd889481411d7738d63cf5-2"
   GET /o/backup.tar Range: bytes=-6 -> 206 "489533e9a8cd889481411d7738d63cf5-2" bytes 6-11/12 aabbbb
   DELETE /o/logs/2025-01-01.log -> 204 - - 
-  GET /o/logs/2025-01-01.log -> error: http://127.0.0.1:47755/o/logs/2025-01-01.log: status code 404
+  GET /o/logs/2025-01-01.log -> error: http://127.0.0.1:23755/o/logs/2025-01-01.log: status code 404
 == live: on disk
   4 object files
   backup.tar "489533e9a8cd889481411d7738d63cf5-2" application/octet-stream 

@@ -11,7 +11,7 @@
 import std::sync::{TaskGroup, Mutex};
 import std::io::{BufReader, BufWriter};
 
-const ADDR: &str = "127.0.0.1:47780";
+const ADDR: &str = "127.0.0.1:23780";
 const SESSIONS: usize = 3;
 
 fn users() -> SortedMap<String, String> {

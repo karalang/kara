@@ -1,7 +1,7 @@
 # Mirror of source.kara: same commands, same logical clock, same AOF.
 import socket
 
-ADDR = ("127.0.0.1", 47732)
+ADDR = ("127.0.0.1", 23732)
 AOF = "store.aof"
 CLOCK = "store.clock"
 I64 = (-(1 << 63), (1 << 63) - 1)

@@ -15,7 +15,7 @@
 
 import std.sync.{TaskGroup, Mutex};
 
-const ADDR: Str = "127.0.0.1:47764";
+const ADDR: Str = "127.0.0.1:23764";
 const CONNECTIONS: i64 = 6;
 
 fn packet_name(kind: u8) -> String {

@@ -11,7 +11,7 @@
 import std.sync.{TaskGroup, Mutex};
 import std.io.{BufReader, BufWriter};
 
-const ADDR: Str = "127.0.0.1:47760";
+const ADDR: Str = "127.0.0.1:23760";
 const SERVER: Str = "kara.irc";
 const MAX_LINE: i64 = 510;
 const CLIENTS: i64 = 3;

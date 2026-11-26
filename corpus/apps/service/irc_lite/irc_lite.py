@@ -8,7 +8,7 @@ reading exactly the lines the server owes it.
 import socket
 import threading
 
-ADDR = ("127.0.0.1", 47760)
+ADDR = ("127.0.0.1", 23760)
 SERVER = "kara.irc"
 MAX_LINE = 510
 CLIENTS = 3

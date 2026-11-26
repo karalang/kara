@@ -320,7 +320,7 @@ fn put(key: Str, value: Str, tags: Vec[String]) -> String {
 }
 
 fn main() {
-    let addr = "127.0.0.1:47731";
+    let addr = "127.0.0.1:23731";
     let listener = match TcpListener.bind(addr) {
         Ok(l) => l,
         Err(_) => {

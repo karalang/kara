@@ -29,7 +29,7 @@ gone     IN CNAME old.elsewhere.test.
 TYPES = {"A": 1, "NS": 2, "CNAME": 5, "SOA": 6, "MX": 15, "TXT": 16, "AAAA": 28, "ANY": 255}
 NAMES = {v: k for k, v in TYPES.items()}
 RCODES = {0: "NOERROR", 1: "FORMERR", 3: "NXDOMAIN", 4: "NOTIMP", 5: "REFUSED"}
-PORT = 47743
+PORT = 23743
 
 
 def type_name(t):

@@ -25,9 +25,9 @@ every reading is 120 ms after the last (so `[RESPONSE_TIME]` is exactly
 120), and an in-memory `FileSystem` provider, one of whose copies fails
 every write as a full disk does (the old state file must survive).
 
-**Live run.** An HTTP server on `127.0.0.1:47751` (a `sync` hit counter
+**Live run.** An HTTP server on `127.0.0.1:23751` (a `sync` hit counter
 behind a `Mutex`, shared by the handler's connection tasks) and a
-line-protocol cache on `127.0.0.1:47752` misbehave on chosen hits: a 503
+line-protocol cache on `127.0.0.1:23752` misbehave on chosen hits: a 503
 three times, a slow answer twice, a hang past the client's timeout twice,
 a 500, a body that fails a JSON-path condition, a silent cache that trips
 a socket read timeout, and a cache still loading. Eight rounds run, then a

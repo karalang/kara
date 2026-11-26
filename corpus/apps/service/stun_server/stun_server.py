@@ -8,7 +8,7 @@ import socket
 import threading
 import zlib
 
-ADDR = ("127.0.0.1", 47766)
+ADDR = ("127.0.0.1", 23766)
 DATAGRAMS = 13
 COOKIE = 0x2112A442
 SOFTWARE_NAME = "kara-stun 1.0"

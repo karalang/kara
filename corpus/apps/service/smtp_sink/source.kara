@@ -19,7 +19,7 @@
 //   B-2026-10-12-7   split / lines are eager Vec[String]: no collect, and
 //                    `ref lines[i]` where a Str would be Copy
 
-const ADDR: Str = "127.0.0.1:47734";
+const ADDR: Str = "127.0.0.1:23734";
 const DOMAIN: Str = "example.test";
 const MAILDIR: Str = "maildir";
 const MAX_RCPT: i64 = 3;

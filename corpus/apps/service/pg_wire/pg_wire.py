@@ -7,7 +7,7 @@ import socket
 import struct
 import threading
 
-ADDR = ("127.0.0.1", 47781)
+ADDR = ("127.0.0.1", 23781)
 SESSIONS = 4
 PASSWORDS = {"alice": "wonder", "bob": "builder"}
 INT4, TEXT = 23, 25

@@ -10,10 +10,10 @@ import std.crypto.hmac.{hmac_sha256};
 import std.crypto.{constant_time_eq};
 import std.encoding.{hex_encode};
 
-const IN_ADDR: Str = "127.0.0.1:47749";
-const DOWN_ADDR: Str = "127.0.0.1:47750";
-const IN_URL: Str = "http://127.0.0.1:47749";
-const DOWN_URL: Str = "http://127.0.0.1:47750";
+const IN_ADDR: Str = "127.0.0.1:23749";
+const DOWN_ADDR: Str = "127.0.0.1:23750";
+const IN_URL: Str = "http://127.0.0.1:23749";
+const DOWN_URL: Str = "http://127.0.0.1:23750";
 const RELAY: Str = "relay";
 const DOWN: Str = "down";
 const MAX_ATTEMPTS: i64 = 3;

@@ -6,7 +6,7 @@ Written with socket and threading only; the BER codec is our own."""
 import socket
 import threading
 
-ADDR = ("127.0.0.1", 47787)
+ADDR = ("127.0.0.1", 23787)
 SESSIONS = 6
 BASE = "dc=kara,dc=test"
 ADMIN = "cn=admin,dc=kara,dc=test"

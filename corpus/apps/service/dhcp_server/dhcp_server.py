@@ -8,7 +8,7 @@ and print what comes back; then the server prints its log and leases."""
 import socket
 import threading
 
-ADDR = ("127.0.0.1", 47769)
+ADDR = ("127.0.0.1", 23769)
 DATAGRAMS = 25
 QUIET = 0.3
 COOKIE = bytes([99, 130, 83, 99])

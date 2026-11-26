@@ -172,7 +172,7 @@ def put(key, value, tags):
     return request("PUT", f"/kv/{key}", dumps({"value": value, "tags": tags}))
 
 def main():
-    addr = ("127.0.0.1", 47731)
+    addr = ("127.0.0.1", 23731)
     listener = socket.socket()
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     listener.bind(addr)

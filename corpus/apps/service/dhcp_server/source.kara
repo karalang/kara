@@ -7,7 +7,7 @@
 
 import std.sync.{TaskGroup, Mutex};
 
-const ADDR: Str = "127.0.0.1:47769";
+const ADDR: Str = "127.0.0.1:23769";
 const DATAGRAMS: i64 = 25;
 const QUIET_MS: i64 = 300;
 const COOKIE: Array[u8, 4] = [99, 130, 83, 99];

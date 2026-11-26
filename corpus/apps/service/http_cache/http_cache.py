@@ -15,8 +15,8 @@ import sys
 import threading
 import time
 
-ORIGIN_ADDR = ("127.0.0.1", 47753)
-CACHE_ADDR = ("127.0.0.1", 47754)
+ORIGIN_ADDR = ("127.0.0.1", 23753)
+CACHE_ADDR = ("127.0.0.1", 23754)
 PURGE_TOKEN = "test-purge-token"
 
 

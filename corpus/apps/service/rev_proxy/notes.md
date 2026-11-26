@@ -1,7 +1,7 @@
 # rev_proxy: a reverse proxy over real sockets
 
-A reverse proxy on `127.0.0.1:47737` in front of origin servers on 47738 and
-47739. Two more upstreams, on 127.0.0.2:27740 and 27741, are in the pools but
+A reverse proxy on `127.0.0.1:23737` in front of origin servers on 23738 and
+23739. Two more upstreams, on 127.0.0.2:27740 and 27741, are in the pools but
 nothing ever listens on them. A connect to a dead port on the proxy's own
 address can pick that same port as its source and connect to itself, which
 `apps/loadtest` saw a few times in 100k proxied requests; a connect to

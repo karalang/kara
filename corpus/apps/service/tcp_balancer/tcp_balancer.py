@@ -12,10 +12,10 @@ import sys
 import threading
 import time
 
-FRONT = ("127.0.0.1", 47756)
-ALPHA = ("127.0.0.1", 47757)
-BETA = ("127.0.0.1", 47758)
-GAMMA = ("127.0.0.1", 47759)
+FRONT = ("127.0.0.1", 23756)
+ALPHA = ("127.0.0.1", 23757)
+BETA = ("127.0.0.1", 23758)
+GAMMA = ("127.0.0.1", 23759)
 RISE = 2
 FALL = 2
 CHECK_TIMEOUT_MS = 500

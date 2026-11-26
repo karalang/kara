@@ -10,13 +10,13 @@
 9 refused: method 05 02; login 01 00; reply 05 05 00 01 00 00 00 00 00 00
 10 socks4: closed (0 bytes)
 == proxy log
-1: alice: 127.0.0.1:47762 relayed 12 up, 24 down
+1: alice: 127.0.0.1:23762 relayed 12 up, 24 down
 2: no acceptable method
 3: login failed for alice
 4: bob: command 2 not supported
 5: alice: IPv6 not supported
-6: bob: 127.0.0.1:47762 relayed 9 up, 15 down
+6: bob: 127.0.0.1:23762 relayed 9 up, 15 down
 7: alice: cannot resolve example.invalid
 8: alice: port 22 not allowed
-9: alice: 127.0.0.1:47763 refused
+9: alice: 127.0.0.1:23763 refused
 10: version 4: closed

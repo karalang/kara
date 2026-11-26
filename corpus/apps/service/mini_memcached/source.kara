@@ -11,7 +11,7 @@
 // - memcached's ERROR, CLIENT_ERROR and SERVER_ERROR replies, what it
 //   does with the bytes that follow them, quit, version and stats.
 //
-// Each session is one client connection on 127.0.0.1:47747: the client
+// Each session is one client connection on 127.0.0.1:23747: the client
 // writes its commands, the server reads them, answers, and closes, and
 // the client reads the reply. The clock is virtual and moves between
 // sessions. expected.out is the output of mini_memcached.py, the same
@@ -30,7 +30,7 @@ const REALTIME_MAXDELTA: i64 = 60 * 60 * 24 * 30;
 const LIMIT: i64 = 2048;
 const OVERHEAD: i64 = 48;
 const KEY_MAX: i64 = 250;
-const ADDR: Str = "127.0.0.1:47747";
+const ADDR: Str = "127.0.0.1:23747";
 
 fn from_bytes(v: ref Vec[u8]) -> String {
     String.from_utf8(v.clone()).unwrap_or("?".to_string())

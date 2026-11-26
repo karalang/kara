@@ -1,7 +1,7 @@
 # irc_lite
 
 An IRC-style chat server, a subset of RFC 1459/2812, on loopback
-(`127.0.0.1:47760`). Each connection is a task that reads CRLF lines through
+(`127.0.0.1:23760`). Each connection is a task that reads CRLF lines through
 a `BufReader` over its `TcpStream`; the server state (clients, nicknames,
 channels, command counts) is one `Mutex` in a `sync struct`, and every line
 a command produces is written to its recipients' sockets under that lock,

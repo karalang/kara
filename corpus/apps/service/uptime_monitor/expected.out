@@ -40,7 +40,7 @@ config: 8 endpoints, 0 errors
   health under 100ms: fail: [RESPONSE_TIME] (120) < 100
   flaky: fail: [STATUS] (503) == 200
   login (no page): fail: [STATUS] (0) == 200; [BODY] () == pat(*Sign in*)
-    error: http://127.0.0.1:47751/login: connection refused
+    error: http://127.0.0.1:23751/login: connection refused
   cache: pass
 == self-test: state files against a fake file system
   missing config: not found
@@ -71,7 +71,7 @@ servers up: true
   api-health ok
   orders     ok
   flaky      FAIL [STATUS] (0) == 200
-             error: http://127.0.0.1:47751/flaky: status code 503
+             error: http://127.0.0.1:23751/flaky: status code 503
   slow       FAIL [RESPONSE_TIME] (~1s) < 800
   hang       ok
   login      ok
@@ -80,7 +80,7 @@ servers up: true
   api-health ok
   orders     ok
   flaky      FAIL [STATUS] (0) == 200
-             error: http://127.0.0.1:47751/flaky: status code 503
+             error: http://127.0.0.1:23751/flaky: status code 503
   slow       FAIL [RESPONSE_TIME] (~1s) < 800
   hang       ok
   login      ok
@@ -90,11 +90,11 @@ servers up: true
   api-health ok
   orders     ok
   flaky      FAIL [STATUS] (0) == 200
-             error: http://127.0.0.1:47751/flaky: status code 503
+             error: http://127.0.0.1:23751/flaky: status code 503
   ** TRIGGERED flaky after 3 failures: [STATUS] (0) == 200
   slow       ok
   hang       FAIL [CONNECTED] (false) == true
-             error: http://127.0.0.1:47751/hang: request timed out after 300 ms
+             error: http://127.0.0.1:23751/hang: request timed out after 300 ms
   login      ok
   cache      FAIL [CONNECTED] (false) == true; [BODY] () == +PONG
              error: read: timed out
@@ -105,7 +105,7 @@ servers up: true
   flaky      ok
   slow       ok
   hang       FAIL [CONNECTED] (false) == true
-             error: http://127.0.0.1:47751/hang: request timed out after 300 ms
+             error: http://127.0.0.1:23751/hang: request timed out after 300 ms
   ** TRIGGERED hang after 2 failures: [CONNECTED] (false) == true
   login      ok
   cache      ok
@@ -117,7 +117,7 @@ servers up: true
   slow       ok
   hang       ok
   login      FAIL [STATUS] (0) == 200; [BODY] () == pat(*Sign in*)
-             error: http://127.0.0.1:47751/login: status code 500
+             error: http://127.0.0.1:23751/login: status code 500
   cache      ok
   ** RESOLVED cache after 2 successes
 == round 8

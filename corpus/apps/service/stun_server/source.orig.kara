@@ -9,7 +9,7 @@
 
 import std::sync::{TaskGroup, Mutex};
 
-const ADDR: &str = "127.0.0.1:47766";
+const ADDR: &str = "127.0.0.1:23766";
 const DATAGRAMS: i64 = 13;
 const COOKIE: u32 = 0x2112A442;
 const SOFTWARE_NAME: &str = "kara-stun 1.0";

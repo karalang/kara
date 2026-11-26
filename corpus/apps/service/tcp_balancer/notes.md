@@ -1,8 +1,8 @@
 # tcp_balancer
 
 A layer-4 load balancer in the shape of HAProxy's TCP mode, on loopback.
-Clients connect to the front (`127.0.0.1:47756`); each connection goes to a
-healthy backend (`47757` alpha, `47758` beta, `47759` gamma), and the
+Clients connect to the front (`127.0.0.1:23756`); each connection goes to a
+healthy backend (`23757` alpha, `23758` beta, `23759` gamma), and the
 balancer copies bytes both ways until each side has finished, passing a
 half-close through (`shutdown(Write)` on the other side once one direction
 ends). One direction runs as a task, the other on the connection's own task.

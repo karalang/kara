@@ -1,7 +1,7 @@
 # static_files
 
 A static file server in the shape of nginx's or Caddy's file handler. It
-uses real files and a real loopback socket (port 47745).
+uses real files and a real loopback socket (port 23745).
 
 The program writes a small site to `www/`. The site has HTML, CSS, JS,
 JSON, a 7.8 KB access log, a directory without an index, file names that

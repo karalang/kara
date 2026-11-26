@@ -1,7 +1,7 @@
 # socks5_proxy
 
 A SOCKS5 proxy (RFC 1928) with username/password login (RFC 1929) on
-loopback (`127.0.0.1:47761`), in front of an echo service (`47762`) that
+loopback (`127.0.0.1:23761`), in front of an echo service (`23762`) that
 answers each line in capitals. Each client connection is a task.
 
 - **Greeting.** Version 5 and a list of methods; the proxy picks the

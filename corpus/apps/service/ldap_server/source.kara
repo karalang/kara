@@ -8,7 +8,7 @@ import std.net.{TcpListener, TcpStream};
 import std.sync.{Mutex};
 import std.time.Duration;
 
-const ADDR: Str = "127.0.0.1:47787";
+const ADDR: Str = "127.0.0.1:23787";
 const SESSIONS: i64 = 6;
 const BASE: Str = "dc=kara,dc=test";
 const ADMIN: Str = "cn=admin,dc=kara,dc=test";

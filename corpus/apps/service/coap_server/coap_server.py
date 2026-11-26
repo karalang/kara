@@ -7,7 +7,7 @@ what comes back."""
 import socket
 import threading
 
-ADDR = ("127.0.0.1", 47783)
+ADDR = ("127.0.0.1", 23783)
 QUIET = 0.3
 
 CON, NON, ACK, RST = 0, 1, 2, 3

@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-const HOST: &str = "127.0.0.1:47786";
-const ADDR: &str = "127.0.0.1:47786";
+const HOST: &str = "127.0.0.1:23786";
+const ADDR: &str = "127.0.0.1:23786";
 const REGION: &str = "kara-local-1";
 const SERVICE: &str = "s3";
 const ALGORITHM: &str = "AWS4-HMAC-SHA256";

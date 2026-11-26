@@ -8,8 +8,8 @@ senders on the main thread, then the collector prints what it kept."""
 import socket
 import threading
 
-UDP_ADDR = ("127.0.0.1", 47767)
-TCP_ADDR = ("127.0.0.1", 47768)
+UDP_ADDR = ("127.0.0.1", 23767)
+TCP_ADDR = ("127.0.0.1", 23768)
 DATAGRAMS = 4
 CONNECTIONS = 3
 MAX_FRAME = 8192

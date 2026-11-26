@@ -10,7 +10,7 @@
 // accepts, reads to end of input, answers each request in order, and
 // closes; the client splits the responses by Content-Length.
 
-const ADDR: Str = "127.0.0.1:47733";
+const ADDR: Str = "127.0.0.1:23733";
 const TOKEN: Str = "s3cret";
 
 // ---- JSON -------------------------------------------------------------

@@ -1,7 +1,7 @@
 # stun_server
 
 A STUN server (RFC 5389, the Binding method) on loopback UDP
-(`127.0.0.1:47766`). One reader takes datagrams off the server's socket and
+(`127.0.0.1:23766`). One reader takes datagrams off the server's socket and
 hands each to a task of its own, which checks the message and answers on the
 shared socket. The log and the counts live behind one `Mutex` in a
 `sync struct`.

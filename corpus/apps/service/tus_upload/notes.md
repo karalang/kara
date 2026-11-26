@@ -2,7 +2,7 @@
 
 A resumable-upload server speaking [tus 1.0.0](https://tus.io/protocols/resumable-upload),
 the protocol behind Uppy, tusd and Vimeo's uploads, with a client that drives
-it through `std.http` over a real loopback socket (port 47748). Uploads live
+it through `std.http` over a real loopback socket (port 23748). Uploads live
 on disk under `tus_data/`: `<id>.bin` holds the bytes received so far, so its
 size is the upload's offset, and `<id>.info` the declared length and the raw
 `Upload-Metadata`.

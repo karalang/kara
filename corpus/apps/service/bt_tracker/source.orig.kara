@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::thread;
 
-const ADDR: &str = "127.0.0.1:47784";
+const ADDR: &str = "127.0.0.1:23784";
 const INTERVAL: i64 = 1800;
 const MIN_INTERVAL: i64 = 900;
 const DEFAULT_NUMWANT: usize = 50;

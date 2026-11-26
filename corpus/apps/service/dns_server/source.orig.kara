@@ -870,7 +870,7 @@ fn unframe(bytes: Slice[u8]) -> (Vec[Vec[u8]], i64) {
 
 fn session(listener: ref TcpListener, zone: ref Zone, label: Str, msgs: ref Vec[Vec[u8]]) {
     println(f"== {label}");
-    let client = match TcpStream.connect("127.0.0.1:47743".to_string()) {
+    let client = match TcpStream.connect("127.0.0.1:23743".to_string()) {
         Ok(c) => c,
         Err(_) => {
             println("connect failed");
@@ -942,7 +942,7 @@ fn main() {
         Err(e) => println(f"bad zone refused: {e}"),
     }
 
-    let listener = match TcpListener.bind("127.0.0.1:47743".to_string()) {
+    let listener = match TcpListener.bind("127.0.0.1:23743".to_string()) {
         Ok(l) => l,
         Err(_) => {
             println("bind failed");

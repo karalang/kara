@@ -1,6 +1,6 @@
 # ws_chat: a WebSocket chat server
 
-A WebSocket chat server (RFC 6455) on `127.0.0.1:47742`. The server:
+A WebSocket chat server (RFC 6455) on `127.0.0.1:23742`. The server:
 
 - does the opening handshake, with `Sec-WebSocket-Accept` computed with
   `std.crypto.legacy.sha1` and `std.encoding.base64_encode`. It reproduces the RFC's sample key

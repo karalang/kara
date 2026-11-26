@@ -1,4 +1,4 @@
-mini_memcached: listening on 127.0.0.1:47747, 2048 bytes of memory
+mini_memcached: listening on 127.0.0.1:23747, 2048 bytes of memory
 === basics (t+0)
 > version
 < VERSION 1.6.21

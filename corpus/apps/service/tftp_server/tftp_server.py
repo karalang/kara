@@ -5,7 +5,7 @@ the main thread."""
 import socket
 import threading
 
-ADDR = ("127.0.0.1", 47765)
+ADDR = ("127.0.0.1", 23765)
 REQUESTS = 10
 BLOCK = 512
 RESEND_MS = 500

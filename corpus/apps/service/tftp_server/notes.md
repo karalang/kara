@@ -1,6 +1,6 @@
 # tftp_server
 
-A TFTP server (RFC 1350) on loopback UDP (`127.0.0.1:47765`). The server
+A TFTP server (RFC 1350) on loopback UDP (`127.0.0.1:23765`). The server
 reads requests on its well-known port. Each read (RRQ) or write (WRQ) runs
 in a task with a UDP socket of its own, whose port is the transfer ID, and
 moves the file in 512-byte blocks, each acknowledged before the next; a

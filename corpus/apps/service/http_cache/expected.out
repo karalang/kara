@@ -91,14 +91,14 @@
   GET /report -> 200 PASS xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
   GET /archive -> 200 MISS the archive
   GET /archive -> 200 REVALIDATED the archive
-  GET /missing -> error: http://127.0.0.1:47754/missing: status code 502
+  GET /missing -> error: http://127.0.0.1:23754/missing: status code 502
 == live: a second later
   GET /static/app.js -> 200 REVALIDATED console.log('app v1');
   GET /news -> 200 UPDATED headline 2
   GET /flaky -> 200 STALE flaky ok
-  GET /strict -> error: http://127.0.0.1:47754/strict: status code 504
+  GET /strict -> error: http://127.0.0.1:23754/strict: status code 504
   GET /items Cache-Control: no-cache -> 200 UPDATED items after 1 posts
-  PURGE /static/app.js -> error: http://127.0.0.1:47754/static/app.js: status code 403
+  PURGE /static/app.js -> error: http://127.0.0.1:23754/static/app.js: status code 403
   PURGE /static/app.js X-Purge-Token: test-purge-token -> 200 PURGE purged 1
   GET /static/app.js -> 200 MISS console.log('app v1');
 == live: cache

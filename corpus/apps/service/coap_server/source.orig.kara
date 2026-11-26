@@ -5,7 +5,7 @@ use std::net::UdpSocket;
 use std::thread;
 use std::time::Duration;
 
-const ADDR: &str = "127.0.0.1:47783";
+const ADDR: &str = "127.0.0.1:23783";
 const QUIET_MS: u64 = 300;
 
 const CON: u8 = 0;

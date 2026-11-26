@@ -1,7 +1,7 @@
 # service/kv_http
 
 A key-value store served over HTTP/1.1 on a real loopback TCP socket
-(`127.0.0.1:47731`), JSON bodies through `#[derive(Serialize, Deserialize)]`.
+(`127.0.0.1:23731`), JSON bodies through `#[derive(Serialize, Deserialize)]`.
 Server and client share one thread: the client writes a whole batch and shuts
 its write half, the kernel buffers it, the server accepts, reads to end of
 input, parses every pipelined request by `Content-Length`, answers, and

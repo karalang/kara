@@ -1,7 +1,7 @@
 # object_store
 
 A small object store in the shape of S3, served on loopback
-(`127.0.0.1:47755`). Objects live under `/o/<key>` (the key is
+(`127.0.0.1:23755`). Objects live under `/o/<key>` (the key is
 percent-decoded, so `a%20b%2Fc.txt` is `a b/c.txt`). Each object keeps
 its bytes, a content type, `x-meta-*` metadata and an `ETag`: the first
 32 hex digits of its SHA-256, quoted.

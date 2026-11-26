@@ -4,7 +4,7 @@ A webhook relay in the shape of the ones that sit in front of GitHub or
 Stripe webhooks: an ingress that verifies signatures and spools each accepted
 delivery to disk, a forwarder that relays the spool to a downstream service
 with retries and a dead-letter directory, and the downstream itself. Both
-servers run in the program on loopback (ports 47749 and 47750), and the
+servers run in the program on loopback (ports 23749 and 23750), and the
 spool lives under `relay/`, the downstream's state under `down/`.
 
 - **Ingress** (`POST /hooks/<source>`). Each source has its own secret

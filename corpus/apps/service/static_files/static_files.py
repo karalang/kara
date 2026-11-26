@@ -2,7 +2,7 @@
 # or Caddy's file handler, over real files and a real loopback socket.
 import os, socket
 
-PORT = 47745
+PORT = 23745
 ROOT = "www"
 BOUNDARY = "KARA_BYTERANGES"
 

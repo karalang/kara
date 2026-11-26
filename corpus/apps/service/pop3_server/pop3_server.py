@@ -4,7 +4,7 @@
 import socket
 import threading
 
-ADDR = ("127.0.0.1", 47770)
+ADDR = ("127.0.0.1", 23770)
 MAX_LINE = 255
 MAX_FAILS = 3
 SESSIONS = 6

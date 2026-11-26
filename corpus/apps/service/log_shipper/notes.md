@@ -2,7 +2,7 @@
 
 A log shipper in the shape of Vector or Fluent Bit. It tails real log
 files and posts NDJSON batches to an HTTP collector on a real loopback
-socket (port 47746).
+socket (port 23746).
 
 **Inputs and checkpoints.** A file is identified the way Vector's
 checksum strategy does it: by the CRC-32 of its first line, not by its

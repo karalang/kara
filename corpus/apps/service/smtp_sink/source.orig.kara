@@ -13,7 +13,7 @@
 // accepts, reads to EOF, answers every command, and the client reads the
 // replies and pairs them with what it sent.
 
-const ADDR: Str = "127.0.0.1:47734";
+const ADDR: Str = "127.0.0.1:23734";
 const DOMAIN: Str = "example.test";
 const MAILDIR: Str = "maildir";
 const MAX_RCPT: i64 = 3;

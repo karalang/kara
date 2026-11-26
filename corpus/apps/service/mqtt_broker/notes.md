@@ -1,6 +1,6 @@
 # mqtt_broker
 
-An MQTT 3.1.1 broker, a subset, on loopback (`127.0.0.1:47764`). Each
+An MQTT 3.1.1 broker, a subset, on loopback (`127.0.0.1:23764`). Each
 connection is a task that reads packets (a type byte, the variable-length
 remaining length, a body); the broker state (sessions, subscriptions,
 retained messages, packet counts) is one `Mutex` in a `sync struct`, and

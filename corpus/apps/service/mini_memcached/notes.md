@@ -3,7 +3,7 @@
 memcached is the cache in front of a great many databases. Clients
 speak its text protocol over TCP. The program is a memcached server
 that answers that protocol as memcached 1.6 does, over a real socket
-on 127.0.0.1:47747, with a small memory limit so that eviction shows.
+on 127.0.0.1:23747, with a small memory limit so that eviction shows.
 `mini_memcached.py` is the mirror. It is the same server fed the same
 bytes, and its output is `expected.out`.
 

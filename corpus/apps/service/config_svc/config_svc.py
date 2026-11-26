@@ -6,7 +6,7 @@
 import os
 import socket
 
-ADDR = ("127.0.0.1", 47736)
+ADDR = ("127.0.0.1", 23736)
 FILE = "config.json"
 
 DEFAULTS = '{"server": {"host": "0.0.0.0", "port": 8080, "tls": false}, "log": {"level": "info", "targets": ["stdout"]}, "limits": {"max_conn": 100, "timeout_ms": 30000}, "features": {"beta": false, "regions": ["eu"]}}'

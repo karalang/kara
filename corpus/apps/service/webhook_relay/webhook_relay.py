@@ -14,10 +14,10 @@ import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-INGRESS = ("127.0.0.1", 47749)
-DOWNSTREAM = ("127.0.0.1", 47750)
-IN_URL = "http://127.0.0.1:47749"
-DOWN_URL = "http://127.0.0.1:47750"
+INGRESS = ("127.0.0.1", 23749)
+DOWNSTREAM = ("127.0.0.1", 23750)
+IN_URL = "http://127.0.0.1:23749"
+DOWN_URL = "http://127.0.0.1:23750"
 RELAY = "relay"
 DOWN = "down"
 MAX_ATTEMPTS = 3

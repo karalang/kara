@@ -1,7 +1,7 @@
 # syslog_collector
 
-A syslog collector on loopback: datagrams on UDP (`127.0.0.1:47767`) and
-connections on TCP (`127.0.0.1:47768`). One task reads the UDP socket, and
+A syslog collector on loopback: datagrams on UDP (`127.0.0.1:23767`) and
+connections on TCP (`127.0.0.1:23768`). One task reads the UDP socket, and
 each TCP connection gets a task of its own; the records, the rejects and a
 count of kept frames per transport live behind one `Mutex` in a
 `sync struct`.

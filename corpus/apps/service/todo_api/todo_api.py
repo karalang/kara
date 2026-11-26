@@ -1,7 +1,7 @@
 # Mirror of source.kara: same JSON library, router, middleware and output.
 import socket
 
-ADDR = ("127.0.0.1", 47733)
+ADDR = ("127.0.0.1", 23733)
 TOKEN = "s3cret"
 
 class JErr(Exception):

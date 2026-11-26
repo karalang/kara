@@ -8,7 +8,7 @@ import hmac
 import json
 import socket
 
-PORT = 47744
+PORT = 23744
 NOW = 1760000000
 LEEWAY = 30
 TTL = 900

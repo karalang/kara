@@ -6,7 +6,7 @@ import shutil
 import socket
 import subprocess
 
-ADDR = ("127.0.0.1", 47735)
+ADDR = ("127.0.0.1", 23735)
 DOMAIN = "example.test"
 MAILDIR = "maildir"
 MAX_RCPT = 3

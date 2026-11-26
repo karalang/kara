@@ -10,7 +10,7 @@
 
 import std.sync.{TaskGroup, Mutex};
 
-const ADDR: &str = "127.0.0.1:47765";
+const ADDR: &str = "127.0.0.1:23765";
 const REQUESTS: i64 = 10;
 const BLOCK: usize = 512;
 const RESEND_MS: i64 = 500;

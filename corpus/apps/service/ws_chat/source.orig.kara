@@ -487,7 +487,7 @@ fn describe(f: ref Frame) -> String {
 fn round(listener: ref TcpListener, room: mut ref Room, clients: mut ref Vec[Peer], label: Str) {
     println(f"== {label}");
     for c in clients.iter_mut() {
-        match TcpStream.connect("127.0.0.1:47742".to_string()) {
+        match TcpStream.connect("127.0.0.1:23742".to_string()) {
             Ok(s) => {
                 let ok = s.write_all(c.wire).is_ok() and s.shutdown_write().is_ok();
                 if not ok {
@@ -593,7 +593,7 @@ fn round(listener: ref TcpListener, room: mut ref Room, clients: mut ref Vec[Pee
 
 fn main() {
     println(f"RFC 6455 sample key: {accept_key("dGhlIHNhbXBsZSBub25jZQ==")}");
-    let listener = match TcpListener.bind("127.0.0.1:47742".to_string()) {
+    let listener = match TcpListener.bind("127.0.0.1:23742".to_string()) {
         Ok(l) => l,
         Err(_) => {
             println("bind failed");

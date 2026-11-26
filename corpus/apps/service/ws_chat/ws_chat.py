@@ -9,7 +9,7 @@ import socket
 
 GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 MAX_MESSAGE = 200
-PORT = 47742
+PORT = 23742
 
 
 def accept_key(key):

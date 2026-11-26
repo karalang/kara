@@ -22,7 +22,7 @@
 // splits a 413 batch in half until the bad record is alone, and sends
 // anything it gives up on to a dead-letter file.
 
-const PORT_ADDR: Str = "127.0.0.1:47746";
+const PORT_ADDR: Str = "127.0.0.1:23746";
 const BATCH: i64 = 4;
 const MAX_ATTEMPTS: i64 = 4;
 const MAX_MSG: i64 = 80;

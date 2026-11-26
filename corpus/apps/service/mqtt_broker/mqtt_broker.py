@@ -5,7 +5,7 @@ clients on the main thread."""
 import socket
 import threading
 
-ADDR = ("127.0.0.1", 47764)
+ADDR = ("127.0.0.1", 23764)
 CONNECTIONS = 6
 
 NAMES = {

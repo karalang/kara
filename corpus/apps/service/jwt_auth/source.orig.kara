@@ -13,7 +13,7 @@
 // constant time, the issuer, `exp` and `nbf` with 30 s of leeway. The
 // clock is a fixed instant, because the library has no clock yet.
 
-const PORT_ADDR: Str = "127.0.0.1:47744";
+const PORT_ADDR: Str = "127.0.0.1:23744";
 const NOW: i64 = 1760000000;
 const LEEWAY: i64 = 30;
 const TTL: i64 = 900;

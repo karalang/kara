@@ -11,48 +11,48 @@ import std.sync.{TaskGroup, Atomic, Mutex};
 import std.time.{Duration, Instant, sleep};
 import std.json.{Json};
 
-const HTTP_ADDR: Str = "127.0.0.1:47751";
-const TCP_ADDR: Str = "127.0.0.1:47752";
+const HTTP_ADDR: Str = "127.0.0.1:23751";
+const TCP_ADDR: Str = "127.0.0.1:23752";
 const ROOT: Str = "uptime_data";
 
 const CONFIG: Str = "# endpoints watched by the uptime monitor
 [endpoint api-health]
-url = http://127.0.0.1:47751/health
+url = http://127.0.0.1:23751/health
 condition = [STATUS] == 200
 condition = [BODY].status == UP
 condition = [RESPONSE_TIME] < 1000
 failure-threshold = 2
 
 [endpoint orders]
-url = http://127.0.0.1:47751/orders
+url = http://127.0.0.1:23751/orders
 condition = [STATUS] == 200
 condition = len([BODY].items) >= 2
 condition = [BODY].items[0].state != failed
 
 [endpoint flaky]
-url = http://127.0.0.1:47751/flaky
+url = http://127.0.0.1:23751/flaky
 condition = [STATUS] == 200
 failure-threshold = 3
 success-threshold = 2
 
 [endpoint slow]
-url = http://127.0.0.1:47751/slow
+url = http://127.0.0.1:23751/slow
 condition = [STATUS] == 200
 condition = [RESPONSE_TIME] < 800
 
 [endpoint hang]
-url = http://127.0.0.1:47751/hang
+url = http://127.0.0.1:23751/hang
 timeout = 300ms
 condition = [CONNECTED] == true
 failure-threshold = 2
 
 [endpoint login]
-url = http://127.0.0.1:47751/login
+url = http://127.0.0.1:23751/login
 condition = [STATUS] == 200
 condition = [BODY] == pat(*Sign in*)
 
 [endpoint cache]
-url = tcp://127.0.0.1:47752
+url = tcp://127.0.0.1:23752
 send = PING
 timeout = 300ms
 condition = [CONNECTED] == true
@@ -60,7 +60,7 @@ condition = [BODY] == +PONG
 failure-threshold = 2
 
 [endpoint docs]
-url = http://127.0.0.1:47751/docs
+url = http://127.0.0.1:23751/docs
 enabled = false
 condition = [STATUS] == 200
 ";
@@ -705,8 +705,8 @@ fn self_test(eps: ref Vec[Endpoint]) {
     let health = eps[0].clone();
     let fake = FakeNet {
         pages: [
-            ("http://127.0.0.1:47751/health", 200, "{\"status\":\"UP\"}"),
-            ("http://127.0.0.1:47751/flaky", 503, "upstream unavailable"),
+            ("http://127.0.0.1:23751/health", 200, "{\"status\":\"UP\"}"),
+            ("http://127.0.0.1:23751/flaky", 503, "upstream unavailable"),
         ].to_vec(),
         reply: "+PONG\r\n".to_string(),
         next: 0,

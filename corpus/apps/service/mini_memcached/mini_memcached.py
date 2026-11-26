@@ -359,7 +359,7 @@ def main():
         elif line or sessions[-1][2]:
             sessions[-1][2].append(line)
     cache = Cache()
-    print("mini_memcached: listening on 127.0.0.1:47747, %d bytes of memory" % LIMIT)
+    print("mini_memcached: listening on 127.0.0.1:23747, %d bytes of memory" % LIMIT)
     for name, advance, lines in sessions:
         while lines and lines[-1] == "":
             lines.pop()

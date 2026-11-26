@@ -13,10 +13,10 @@ import std.sync.{TaskGroup, Mutex, Atomic};
 import std.time.{Duration, sleep};
 import std.io.{BufReader};
 
-const FRONT: Str = "127.0.0.1:47756";
-const ALPHA: Str = "127.0.0.1:47757";
-const BETA: Str = "127.0.0.1:47758";
-const GAMMA: Str = "127.0.0.1:47759";
+const FRONT: Str = "127.0.0.1:23756";
+const ALPHA: Str = "127.0.0.1:23757";
+const BETA: Str = "127.0.0.1:23758";
+const GAMMA: Str = "127.0.0.1:23759";
 const RISE: i64 = 2;
 const FALL: i64 = 2;
 const CHECK_TIMEOUT_MS: i64 = 500;

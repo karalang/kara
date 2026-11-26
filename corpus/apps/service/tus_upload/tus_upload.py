@@ -12,8 +12,8 @@ import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-ADDR = ("127.0.0.1", 47748)
-BASE = "http://127.0.0.1:47748"
+ADDR = ("127.0.0.1", 23748)
+BASE = "http://127.0.0.1:23748"
 ROOT = "tus_data"
 MAX_SIZE = 1048576
 EXTENSIONS = "creation,termination,checksum"

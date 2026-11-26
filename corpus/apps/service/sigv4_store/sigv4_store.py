@@ -10,7 +10,7 @@ import time
 import urllib.error
 import urllib.request
 
-ADDR = ("127.0.0.1", 47786)
+ADDR = ("127.0.0.1", 23786)
 HOST = f"{ADDR[0]}:{ADDR[1]}"
 BASE = f"http://{HOST}"
 REGION = "kara-local-1"

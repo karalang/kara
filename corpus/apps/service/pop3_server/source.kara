@@ -11,7 +11,7 @@
 import std.sync.{TaskGroup, Mutex};
 import std.io.{BufReader, BufWriter};
 
-const ADDR: Str = "127.0.0.1:47770";
+const ADDR: Str = "127.0.0.1:23770";
 const MAX_LINE: i64 = 255;
 const MAX_FAILS: i64 = 3;
 const SESSIONS: i64 = 6;

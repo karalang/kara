@@ -11,10 +11,10 @@
 import std.sync.{TaskGroup, Mutex};
 import std.io.{BufReader};
 
-const PROXY: Str = "127.0.0.1:47761";
-const ECHO: Str = "127.0.0.1:47762";
-const ECHO_PORT: u16 = 47762;
-const CLOSED_PORT: u16 = 47763;
+const PROXY: Str = "127.0.0.1:23761";
+const ECHO: Str = "127.0.0.1:23762";
+const ECHO_PORT: u16 = 23762;
+const CLOSED_PORT: u16 = 23763;
 const CONNECTIONS: i64 = 10;
 const RELAYED: i64 = 2;
 

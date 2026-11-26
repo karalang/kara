@@ -19,7 +19,7 @@ import threading
 import time
 import urllib.parse
 
-ADDR = ("127.0.0.1", 47755)
+ADDR = ("127.0.0.1", 23755)
 MIN_PART = 5
 MAX_KEYS = 1000
 

@@ -10,8 +10,8 @@
 
 import std.sync.{TaskGroup, Mutex};
 
-const UDP_ADDR: Str = "127.0.0.1:47767";
-const TCP_ADDR: Str = "127.0.0.1:47768";
+const UDP_ADDR: Str = "127.0.0.1:23767";
+const TCP_ADDR: Str = "127.0.0.1:23768";
 const DATAGRAMS: i64 = 4;
 const CONNECTIONS: i64 = 3;
 const MAX_FRAME: i64 = 8192;

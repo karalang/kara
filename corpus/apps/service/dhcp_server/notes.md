@@ -1,7 +1,7 @@
 # dhcp_server
 
 A DHCP server (RFC 2131, with the options of RFC 2132) on loopback UDP
-(`127.0.0.1:47769`). One server task reads each datagram in turn. It answers
+(`127.0.0.1:23769`). One server task reads each datagram in turn. It answers
 from a pool of five addresses, `10.0.0.100` to `10.0.0.104`. The log, the
 counts and the lease table are behind one `Mutex` in a `sync struct`.
 

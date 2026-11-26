@@ -2,7 +2,7 @@
 # Fluent Bit, tailing real files and posting batches to a real socket.
 import os, socket
 
-PORT = 47746
+PORT = 23746
 BATCH = 4
 MAX_ATTEMPTS = 4
 MAX_MSG = 80

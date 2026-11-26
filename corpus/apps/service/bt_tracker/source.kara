@@ -9,7 +9,7 @@ import std.time.Duration;
 import std.time.sleep;
 import std.crypto.legacy.{Sha1};
 
-const ADDR: Str = "127.0.0.1:47784";
+const ADDR: Str = "127.0.0.1:23784";
 const INTERVAL: i64 = 1800;
 const MIN_INTERVAL: i64 = 900;
 const DEFAULT_NUMWANT: i64 = 50;
