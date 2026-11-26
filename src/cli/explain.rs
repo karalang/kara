@@ -4869,34 +4869,6 @@ const DEFERRED_CODES: &[(&str, &str)] = &[
          Mutable State); a module `let mut` is E_MODULE_LET.",
     ),
     (
-        "E_CODEGEN_HINT_INVALID_POSITION",
-        "The codegen hints `#[inline]`, `#[inline(always)]`, `#[inline(never)]` and `#[cold]` are parsed and checked for placement and conflicts, but not yet lowered to code generation (docs/deferred.md § Codegen Hint Attributes); they do not change what is emitted.",
-    ),
-    (
-        "E_CODEGEN_HINT_ON_CLOSURE",
-        "The codegen hints `#[inline]`, `#[inline(always)]`, `#[inline(never)]` and `#[cold]` are parsed and checked for placement and conflicts, but not yet lowered to code generation (docs/deferred.md § Codegen Hint Attributes); they do not change what is emitted.",
-    ),
-    (
-        "E_CODEGEN_HINT_ON_EXTERN_DECL",
-        "The codegen hints `#[inline]`, `#[inline(always)]`, `#[inline(never)]` and `#[cold]` are parsed and checked for placement and conflicts, but not yet lowered to code generation (docs/deferred.md § Codegen Hint Attributes); they do not change what is emitted.",
-    ),
-    (
-        "E_COLD_INLINE_ALWAYS_CONFLICT",
-        "The codegen hints `#[inline]`, `#[inline(always)]`, `#[inline(never)]` and `#[cold]` are parsed and checked for placement and conflicts, but not yet lowered to code generation (docs/deferred.md § Codegen Hint Attributes); they do not change what is emitted.",
-    ),
-    (
-        "E_INLINE_HINT_CONFLICT",
-        "The codegen hints `#[inline]`, `#[inline(always)]`, `#[inline(never)]` and `#[cold]` are parsed and checked for placement and conflicts, but not yet lowered to code generation (docs/deferred.md § Codegen Hint Attributes); they do not change what is emitted.",
-    ),
-    (
-        "E_MULTIVERSION_EMPTY",
-        "`#[multiversion]` is deferred (docs/deferred.md § Multiversioning: `cpu-baseline` and `#[multiversion]`); the attribute is parsed and checked but no per-CPU variants are built.",
-    ),
-    (
-        "E_MULTIVERSION_ON_ASSOC",
-        "`#[multiversion]` is deferred (docs/deferred.md § Multiversioning: `cpu-baseline` and `#[multiversion]`); the attribute is parsed and checked but no per-CPU variants are built.",
-    ),
-    (
         "E_ATTRIBUTE_DEFERRED",
         "The attribute is specified in docs/deferred.md and is not in 0.8; the message names its section. It is refused rather than ignored, so a program never relies on behaviour 0.8 does not have. design.md § Attributes lists the attributes 0.8 accepts, the experimental ones marked.",
     ),
@@ -4959,11 +4931,32 @@ const DEFERRED_FAMILIES: &[CodeFamily] = &[
         codes: &["E_VARIANCE_DECLARATION_INCONSISTENT"],
         pointer: "Declared variance is deferred (docs/deferred.md § Declared Variance Markers).",
     },
+    CodeFamily {
+        prefixes: &["E_OFFSET_OF_"],
+        codes: &[],
+        pointer: "`offset_of` is deferred: it is checked but no lane lowers it in 0.8 \
+                  (docs/deferred.md § Field Offsets: `offset_of[T](field)`).",
+    },
+    CodeFamily {
+        prefixes: &["E_ONCE_CELL_"],
+        codes: &["E_LAZYLOCK_RUNTIME_CAPTURE"],
+        pointer: "Module-level cells (`LazyLock`, `OnceLock`, `OnceCell`) are deferred: a \
+                  module-level binding is E_MODULE_LET in 0.8 (docs/deferred.md § \
+                  Module-Level Mutable State).",
+    },
+    CodeFamily {
+        prefixes: &["E_GPU_"],
+        codes: &["E0800"],
+        pointer: "GPU compute is deferred: `gpu.*` is E_ARCHIVED in 0.8 and a `#[gpu]` \
+                  function runs on the CPU (docs/deferred.md § GPU).",
+    },
 ];
 
-/// Features deferred.md specifies that the compiler implements and corpus
-/// programs run: experimental in 0.8 (Gowtham's decision on contracts
-/// 2026-11-17, applied by family). Each deferred.md section says so.
+/// Features deferred.md specifies that `karac check` accepts and that run:
+/// experimental in 0.8 (Gowtham's decision on contracts 2026-11-17, applied
+/// by family; the review ruling of 2026-11-26 makes acceptance by `karac
+/// check` the test, so a refused feature is deferred above). Each
+/// deferred.md section says so.
 const EXPERIMENTAL_FAMILIES: &[CodeFamily] = &[
     CodeFamily {
         prefixes: &[],
@@ -4983,22 +4976,6 @@ const EXPERIMENTAL_FAMILIES: &[CodeFamily] = &[
         pointer: "Comptime (`comptime fn`, `comptime` parameters); docs/deferred.md § Comptime",
     },
     CodeFamily {
-        prefixes: &["E_OFFSET_OF_"],
-        codes: &[],
-        pointer: "`offset_of`; docs/deferred.md § Field Offsets: `offset_of[T](field)`",
-    },
-    CodeFamily {
-        prefixes: &["E_ONCE_CELL_"],
-        codes: &["E_LAZYLOCK_RUNTIME_CAPTURE"],
-        pointer: "Module-level cells (`LazyLock`, `OnceLock`, `OnceCell`); docs/deferred.md \
-                  § Module-Level Mutable State",
-    },
-    CodeFamily {
-        prefixes: &["E_GPU_"],
-        codes: &["E0800"],
-        pointer: "GPU kernels (`#[gpu]`, `gpu.upload`); docs/deferred.md § GPU",
-    },
-    CodeFamily {
         prefixes: &["E_REFINEMENT_"],
         codes: &["E_INVALID_REFINEMENT_PREDICATE"],
         pointer: "Refinement types (`type Even = i64 where self % 2 == 0`); docs/deferred.md \
@@ -5014,6 +4991,20 @@ const EXPERIMENTAL_FAMILIES: &[CodeFamily] = &[
         codes: &[],
         pointer: "`#[target_feature]`; docs/deferred.md § Multiversioning: `cpu-baseline` and \
                   `#[multiversion]`",
+    },
+    CodeFamily {
+        prefixes: &["E_MULTIVERSION_"],
+        codes: &[],
+        pointer: "`#[multiversion]`, which builds a variant per feature set and a dispatcher; \
+                  docs/deferred.md § Multiversioning: `cpu-baseline` and `#[multiversion]`",
+    },
+    CodeFamily {
+        prefixes: &["E_CODEGEN_HINT_"],
+        codes: &["E_COLD_INLINE_ALWAYS_CONFLICT", "E_INLINE_HINT_CONFLICT"],
+        pointer: "the codegen hints `#[inline]`, `#[inline(always)]`, `#[inline(never)]` and \
+                  `#[cold]`, checked for placement and conflicts but not yet lowered to LLVM \
+                  attributes, so they change nothing emitted; docs/deferred.md § Codegen Hint \
+                  Attributes (`#[inline]`, `#[cold]`)",
     },
 ];
 

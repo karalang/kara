@@ -1667,7 +1667,9 @@ A dynamic-axis variant (`sum_dyn(axis: i64) -> Tensor[T, [?]]`) is not planned. 
 <a id="f16--bf16-implementation"></a>
 ### Reduced-Precision Floats (`f16`, `bf16`)
 
-**Decision:** `f16` (IEEE 754-2008 half-precision) and `bf16` (bfloat16) are first-class numeric primitives for mixed-precision ML workloads. They are primitives, not library types, and follow the same rules as `f32`/`f64`. They come with this track. Until then `f16` and `bf16` are ordinary identifiers, not reserved words, and the literal suffixes `1.0f16` and `1.0bf16` are not valid.
+**Decision:** `f16` (IEEE 754-2008 half-precision) and `bf16` (bfloat16) are first-class numeric primitives for mixed-precision ML workloads. They are primitives, not library types, and follow the same rules as `f32`/`f64`. They come with this track.
+
+**Status: experimental in 0.8** (review ruling, 2026-11-26: a feature is experimental only when `karac check` accepts it and it runs). 0.8 already has them: `f16` and `bf16` are primitive type names (so `let f16 = 3` is refused, E0102), the suffixes `1.5f16` and `1.5bf16` are literals, and their arithmetic checks and runs on every lane. They are not part of the v1 language and may change until this track lands.
 
 - **`f16`** — IEEE 754-2008 half-precision (1 sign, 5 exponent, 10 mantissa bits). Range: ±65504. Native on ARM (FP16 extension), x86 (AVX-512FP16), and all modern ML accelerators.
 - **`bf16`** — bfloat16 (1 sign, 8 exponent, 7 mantissa bits). Same exponent range as `f32` — tolerant of gradient underflow, easy conversion. Native on Google TPU, NVIDIA A100+, Intel AMX, Apple Silicon (ANE).
@@ -2603,7 +2605,7 @@ v1 has no feature flags, in `kara.toml` or as `#[cfg(feature: ...)]`, and a cons
 <a id="atomic-operations-and-memory-ordering-phase-10--partial"></a>
 ### Atomic Operations and Memory Ordering
 
-v1 has `Atomic[T]` with sequentially consistent `load`, `store`, `swap`, `compare_exchange`, `fetch_add` and `fetch_sub`, and no ordering argument ([library/concurrency.md](library/concurrency.md#atomics)). This entry adds the rest: weaker memory orderings, `fetch_and` and `fetch_or`, fences, and atomics under the embedded profile.
+v1 has `Atomic[T]` with sequentially consistent `load`, `store`, `swap`, `compare_exchange`, `fetch_add`, `fetch_sub`, `fetch_and`, `fetch_or` and `fetch_xor`, and no ordering argument ([library/concurrency.md](library/concurrency.md#atomics); the three bitwise methods moved there by the review ruling of 2026-11-26, B-2026-11-25-67). This entry adds the rest: weaker memory orderings, fences, and atomics under the embedded profile.
 
 **Why deferred:** The weaker orderings and the bitwise read-modify-write operations need more careful memory-model reasoning, and their main users are embedded and kernel code, which arrive with this track.
 
@@ -2627,7 +2629,7 @@ while not flag.load(Acquire) { /* spin */ }
 
 #### Methods
 
-The v1 methods gain an ordering, and two bitwise methods are added:
+The v1 methods gain an ordering, the bitwise ones included:
 
 | Method | Signature |
 |---|---|
@@ -2672,7 +2674,7 @@ unsafe {
 
 #### Effect Model
 
-v1 atomics are effect-free ([library/concurrency.md](library/concurrency.md#atomics)); `fetch_and`, `fetch_or` and the fences are too. The reasoning:
+v1 atomics, `fetch_and` and `fetch_or` among them, are effect-free ([library/concurrency.md](library/concurrency.md#atomics)); the fences are too. The reasoning:
 
 **Why effect-free.** Atomic operations are linearizable by construction — any interleaving of concurrent atomic ops on the same atomic is a valid execution. Tracking atomic ops as `writes(...)` would force auto-concurrency to serialize them, discarding the entire point of lock-free concurrent access. Tracking them as `reads(...)` would misrepresent `fetch_add`/`store` as pure. The only consistent choice is to leave atomics outside the effect system's resource-access model: hardware atomicity ensures memory safety at the language level, and the programmer's ordering reasoning happens one layer lower via the memory-ordering arguments.
 
@@ -2688,7 +2690,7 @@ Atomics and fences are available in the `embedded` profile. The `embedded` profi
 
 ### Module-Level Mutable State
 
-**Status: experimental in 0.8** (Gowtham's decision on contracts, 2026-11-17, applied by family). The module-level cells `LazyLock`, `OnceLock` and `OnceCell`: the compiler implements this and corpus programs run it, but it is not part of the v1 language and may change until this track lands. Its diagnostic codes say so in `karac explain`.
+**Status: deferred in 0.8** (review ruling, 2026-11-26: a feature is experimental only when `karac check` accepts it and it runs). A module-level `let`, `let mut` or cell (`LazyLock`, `OnceLock`, `OnceCell`) is refused with E_MODULE_LET, as [design.md § Constants](design.md#constants) says ("No mutable globals"). `karac explain` lists the cells' codes as deferred.
 
 v1 allows only `const` at module scope ([design.md §4](design.md#constants)). This entry brings back module-level `let` and `let mut`, mainly for embedded and bare-metal code, together with the lazy-initialization family.
 
@@ -2863,7 +2865,7 @@ struct PageTableEntry {
 
 #### Field Offsets: `offset_of[T](field)`
 
-**Status: experimental in 0.8** (Gowtham's decision on contracts, 2026-11-17, applied by family). `offset_of`: the compiler implements this and corpus programs run it, but it is not part of the v1 language and may change until this track lands. Its diagnostic codes say so in `karac explain`.
+**Status: deferred in 0.8** (review ruling, 2026-11-26: a feature is experimental only when `karac check` accepts it and it runs). The typechecker checks `offset_of[T](field)` and refuses a bad field (E_OFFSET_OF_*), but no lane lowers it yet: a program that uses it stops at E0516. `karac explain` lists its codes as deferred.
 
 `offset_of[T](field)` returns the byte offset of `field` from the start of a value of type `T`. The form sits beside `T.size_of()` / `T.align_of()` ([design.md §15](design.md#intrinsics)) — type lives in the bracket slot, field is a special-form positional argument. The result is `i64`, the value is computed at compile time, and the operation contributes no effects.
 
@@ -3258,7 +3260,7 @@ from the platform package's `Interrupt` enum.
 
 #### Codegen Hint Attributes (`#[inline]`, `#[cold]`)
 
-**Status (0.8, B-2026-11-25-61):** `#[inline]` and `#[cold]` are experimental: `karac check` accepts them and codegen lowers them to LLVM function attributes ([design.md § Attributes](design.md#attributes)). `#[likely]` and `#[unlikely]` are not in 0.8 and are refused with `E_ATTRIBUTE_DEFERRED`.
+**Status (0.8, B-2026-11-25-61):** `#[inline]` and `#[cold]` are experimental: `karac check` accepts them and checks their placement and conflicts, and the program runs, but 0.8 does not yet lower them to LLVM function attributes, so they change nothing emitted ([design.md § Attributes](design.md#attributes)). `#[likely]` and `#[unlikely]` are not in 0.8 and are refused with `E_ATTRIBUTE_DEFERRED`.
 
 Four attributes hint at code-generation choices the optimizer would otherwise make on its own. None of them changes program semantics — every program compiles to functionally identical output regardless of which subset is present. They influence performance characteristics only: code placement, call-site lowering, and inlining decisions. The hints are recorded on the function symbol and lowered to the corresponding LLVM function attribute (`alwaysinline`, `noinline`, `inlinehint`, `cold`).
 
@@ -3619,6 +3621,8 @@ The `[lib]` table is the symmetric addition to the existing `[link]` table (whic
 
 ### Portable SIMD — `Vector[T, N]`
 
+**Status: experimental in 0.8** (review ruling, 2026-11-26: a feature is experimental only when `karac check` accepts it and it runs). `Vector[T, N]` (`splat`, lane arithmetic, `reduce_sum` and the lane operations below) checks and runs on every lane, and about 200 corpus programs use it, but it is not part of the v1 language and may change until this track lands.
+
 **Decision:** `Vector[T: Numeric, const N: i64]` is the single portable-SIMD type — the same type used for CPU SIMD, GPU vectors, and any future accelerator. Element-wise arithmetic, dot product, cross product (`N == 3`), and shuffle / lane-access operations are part of the type's surface. Codegen lowers to the widest available primitive on the target; when no native vector unit covers `N` lanes, the compiler emits a scalar fallback. The user's source program is identical across targets — performance, not correctness, is what varies.
 
 **Integer lane arithmetic WRAPS.** `+`, `-`, `*`, `/` and `%` on an integer-lane `Vector[T, N]` truncate to the lane width in two's complement. `Vector[u8, 4]` lanes of `200` added to themselves give `144`, not a trap: `Vector[i8, 4]` lanes of `100` doubled give `-56`.
@@ -3709,7 +3713,7 @@ fn store_simd[T, const N: i64](t: mut ref Tensor[T, [?]], offset: i64, mask: Mas
 
 ### Multiversioning: `cpu-baseline` and `#[multiversion]`
 
-**Status: experimental in 0.8** (Gowtham's decision on contracts, 2026-11-17, applied by family). `#[target_feature]` (not `#[multiversion]`, which is parsed and checked but builds no variants): the compiler implements this and corpus programs run it, but it is not part of the v1 language and may change until this track lands. Its diagnostic codes say so in `karac explain`.
+**Status: experimental in 0.8** (Gowtham's decision on contracts, 2026-11-17, applied by family). `#[target_feature]` and `#[multiversion]`: `karac check` accepts both and they run; `#[multiversion(baseline, "avx2")]` builds a variant per feature set and a dispatcher (`test_ir_multiversion_emits_variants_and_dispatch`). They are not part of the v1 language and may change until this track lands. Their diagnostic codes say so in `karac explain`.
 
 > v1 sets the CPU baseline per target with `--target-cpu` and a per-target table ([design.md §16](design.md#cpu-baseline)). The `cpu-baseline` manifest knob below is this track's proposal and must be reconciled with that table when it returns. Reconciled for v1 by the review-thread ruling 2026-11-16 (B-2026-11-16-201): the knob's levels are accepted, but with no level the table is the default, `x86-64-v2` on x86_64, so the "Default: `v3`" below is not v1's.
 
@@ -5471,7 +5475,7 @@ This entry is the canonical tracker for a Kāra frontend UI framework.
 
 ## GPU
 
-**Status: experimental in 0.8** (Gowtham's decision on contracts, 2026-11-17, applied by family). GPU kernels (`#[gpu]`, `gpu.upload`, `gpu.dispatch`): the compiler implements this and corpus programs run it, but it is not part of the v1 language and may change until this track lands. Its diagnostic codes say so in `karac explain`.
+**Status: deferred in 0.8** (review ruling, 2026-11-26: a feature is experimental only when `karac check` accepts it and it runs). `gpu.*` is refused with E_ARCHIVED, `--target=gpu` is refused, and a `#[gpu]` function draws a later-track note and runs on the CPU as an ordinary function. `karac explain` lists the GPU codes as deferred.
 
 GPU compute: the `#[gpu]` kernel subset, `gpu.dispatch` and the device backends.
 

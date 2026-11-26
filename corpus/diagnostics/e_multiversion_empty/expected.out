@@ -1,0 +1,1 @@
+ERROR at line 1: `#[multiversion(...)]` needs at least one feature variant — e.g. `#[multiversion(baseline, "avx2")]`

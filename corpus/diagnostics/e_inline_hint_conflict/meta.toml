@@ -1,0 +1,9 @@
+source = "B-2026-11-25-68"
+dedup_of = []
+expect = "error:E_INLINE_HINT_CONFLICT"
+exit = 1
+tags = ["diagnostics"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "B-2026-11-25-68: the smallest program that produces E_INLINE_HINT_CONFLICT, the example behind `karac explain E_INLINE_HINT_CONFLICT`, an experimental feature's code since the 2026-11-26 review ruling (check accepts it and it runs). tests/diagnostics_corpus.rs checks the code is still produced and explained. The expected.out wording of an error pin is guidance, not a byte oracle."

@@ -1,0 +1,4 @@
+fn main() {
+    let f = #[inline] || 1;
+    println(f"{f()}");
+}

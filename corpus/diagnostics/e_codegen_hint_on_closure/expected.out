@@ -1,0 +1,1 @@
+ERROR at line 2: `#[inline]` cannot apply to a closure; codegen hints attach to named functions. Closures are inlined by the dispatch lowering when they cross a closure-typed parameter — move the hint onto a named `fn` if you need it.

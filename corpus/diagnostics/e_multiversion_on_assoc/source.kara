@@ -1,0 +1,6 @@
+struct A {}
+impl A {
+    #[multiversion(baseline, "avx2")]
+    fn new() -> A { A {} }
+}
+fn main() { let _a = A.new(); }

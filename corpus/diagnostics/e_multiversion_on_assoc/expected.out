@@ -1,0 +1,1 @@
+ERROR at line 3: `#[multiversion]` on an impl item is supported only on a method with a `self` receiver, not an associated function

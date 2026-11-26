@@ -116,7 +116,9 @@ const RECOGNIZED_BARE_ATTRIBUTES: &[&str] = &[
     "no_rc",
     "prefer_rc",
     "fork_at",
-    // Experimental codegen hints, lowered to LLVM function attributes.
+    // Experimental codegen hints: checked for placement and conflicts, not
+    // yet lowered to LLVM function attributes (deferred.md § Codegen Hint
+    // Attributes).
     "inline",
     "cold",
     // Experimental: a function's CPU features above the baseline, and the

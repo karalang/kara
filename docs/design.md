@@ -7685,7 +7685,7 @@ Tests are `test "name" { }` blocks, not an attribute ([§14](#14-testing)); `#[t
 
 | Attribute | Purpose | Section |
 |---|---|---|
-| `#[inline]`, `#[inline(always)]`, `#[inline(never)]`, `#[cold]` | Codegen hints, lowered to LLVM function attributes; a conflicting pair is `E_INLINE_HINT_CONFLICT`. | [deferred.md](deferred.md#codegen-hint-attributes-inline-cold) |
+| `#[inline]`, `#[inline(always)]`, `#[inline(never)]`, `#[cold]` | Codegen hints, checked for placement and conflicts (a conflicting pair is `E_INLINE_HINT_CONFLICT`); 0.8 does not yet lower them to LLVM function attributes, so they change nothing emitted. | [deferred.md](deferred.md#codegen-hint-attributes-inline-cold) |
 | `#[target_feature(enable: "...")]`, `#[multiversion(baseline, "...")]` | CPU features above the baseline for one `unsafe fn`, and per-feature variants with a runtime dispatch. | [deferred.md](deferred.md#multiversioning-cpu-baseline-and-multiversion) |
 | `#[require_simd]` | A scalar fallback of a `Vector[T, N]` operation in the function is a build error. | [deferred.md](deferred.md#portable-simd--vectort-n) |
 | `#[specialize(T: i64)]`, `#[no_rc]`, `#[prefer_rc]`, `#[fork_at(n)]` | Answer a compiler query (specialization, RC fallback, fork threshold), which then draws no note; `#[no_rc]` with `#[prefer_rc]` on one item is `E_QUERY_RESOLUTION_CONFLICT`. | [§2](#compiler-queries) |

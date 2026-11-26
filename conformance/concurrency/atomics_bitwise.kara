@@ -1,0 +1,11 @@
+import std.sync.{Atomic};
+fn main() {
+    let a = Atomic.new(12);
+    let p = a.fetch_and(10);
+    let q = a.fetch_or(1);
+    let r = a.fetch_xor(3);
+    println(f"{p} {q} {r} {a.load()}");
+    let b = Atomic.new(true);
+    let s = b.fetch_xor(true);
+    println(f"{s} {b.load()}");
+}

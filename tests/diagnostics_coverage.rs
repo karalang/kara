@@ -33,54 +33,6 @@ const NO_PIN: &[(&str, &str)] = &[
         "checks the std library's own parametric types, never a user type",
     ),
     (
-        "E_GPU_DISPATCH_ARITY",
-        "gpu.* calls are E_ARCHIVED in 0.8, so the CLI stops before the op check; tests/typechecker.rs gpu_* tests produce it",
-    ),
-    (
-        "E_GPU_DISPATCH_BUFFER",
-        "gpu.* calls are E_ARCHIVED in 0.8, so the CLI stops before the op check; tests/typechecker.rs gpu_* tests produce it",
-    ),
-    (
-        "E_GPU_DISPATCH_KERNEL",
-        "gpu.* calls are E_ARCHIVED in 0.8, so the CLI stops before the op check; tests/typechecker.rs gpu_* tests produce it",
-    ),
-    (
-        "E_GPU_DISPATCH_UNIFORM",
-        "gpu.* calls are E_ARCHIVED in 0.8, so the CLI stops before the op check; tests/typechecker.rs gpu_* tests produce it",
-    ),
-    (
-        "E_GPU_DOWNLOAD_ARITY",
-        "gpu.* calls are E_ARCHIVED in 0.8, so the CLI stops before the op check; tests/typechecker.rs gpu_* tests produce it",
-    ),
-    (
-        "E_GPU_DOWNLOAD_BUFFER",
-        "gpu.* calls are E_ARCHIVED in 0.8, so the CLI stops before the op check; tests/typechecker.rs gpu_* tests produce it",
-    ),
-    (
-        "E_GPU_REDUCE_ARITY",
-        "gpu.* calls are E_ARCHIVED in 0.8, so the CLI stops before the op check; tests/typechecker.rs gpu_* tests produce it",
-    ),
-    (
-        "E_GPU_REDUCE_BUFFER",
-        "gpu.* calls are E_ARCHIVED in 0.8, so the CLI stops before the op check; tests/typechecker.rs gpu_* tests produce it",
-    ),
-    (
-        "E_GPU_REDUCE_FIELD",
-        "gpu.* calls are E_ARCHIVED in 0.8, so the CLI stops before the op check; tests/typechecker.rs gpu_* tests produce it",
-    ),
-    (
-        "E_GPU_REDUCE_KERNEL",
-        "gpu.* calls are E_ARCHIVED in 0.8, so the CLI stops before the op check; tests/typechecker.rs gpu_* tests produce it",
-    ),
-    (
-        "E_GPU_UPLOAD_ARITY",
-        "gpu.* calls are E_ARCHIVED in 0.8, so the CLI stops before the op check; tests/typechecker.rs gpu_* tests produce it",
-    ),
-    (
-        "E_GPU_UPLOAD_BUFFER",
-        "gpu.* calls are E_ARCHIVED in 0.8, so the CLI stops before the op check; tests/typechecker.rs gpu_* tests produce it",
-    ),
-    (
         "E_INSTALL_BUILD_SPAWN_FAILED",
         "needs the current executable to be unspawnable mid-install",
     ),

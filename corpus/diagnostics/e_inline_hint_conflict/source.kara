@@ -1,0 +1,4 @@
+#[inline]
+#[inline(never)]
+fn f() -> i64 { 1 }
+fn main() { println(f"{f()}"); }

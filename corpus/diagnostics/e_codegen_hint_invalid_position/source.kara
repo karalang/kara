@@ -1,0 +1,3 @@
+#[inline]
+struct S {}
+fn main() {}
