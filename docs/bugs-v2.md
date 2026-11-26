@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 772 |
+| diagnostics | 773 |
 | false-positive | 390 |
 | missing-feature | 263 |
 | perf | 205 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 938 |
+| typecheck | 939 |
 | mir | 344 |
 | mir-llvm | 334 |
 | cli | 318 |
@@ -146,6 +146,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-10 | 2026-11-26 | effect | medium | Three disjoint `par` shapes are refused E0418/E0517: a branch that writes one field turns its method read of another field of the same root into a mutable borrow; tuple items `p.0` / `p.1` conflict; a `let mut` closure called in ONE branch is E0517 | — |
 | B-2026-11-26-11 | 2026-11-26 | mir | medium | A nested `par` that reads a field of an outer local is refused by `karac check` with the internal E0516 "the capture of `t` is not lowered yet" | — |
 | B-2026-11-26-12 | 2026-11-26 | typecheck | low | `SortedSet` has no `clear`, though Vec, VecDeque, Map, Set, SortedMap and PriorityQueue all have one | — |
+| B-2026-11-26-13 | 2026-11-26 | typecheck | low | Remainder of B-2026-11-21-63: `(0..250).map(|i| f"{i % 10}q").collect()` into a `String` gets no fix, because the rewrite's span starts inside the `(` that opens the receiver chain, so the edit would leave a stray `(` and `karac fix`'s parse guard refuses it | — |
 
 ### Relocated
 
