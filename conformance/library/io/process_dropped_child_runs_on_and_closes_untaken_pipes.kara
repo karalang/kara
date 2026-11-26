@@ -1,0 +1,56 @@
+// io.md, Running programs: "Dropping a `Child` neither kills nor waits for
+// it: the process keeps running, and on Unix it stays in the process table
+// until the parent exits. ... The pipes that were not taken close when the
+// `Child` is dropped." Linux: the zombie is read from /proc.
+import std.process.{Command, Stdio};
+import std.time.{Duration, sleep};
+
+fn state(id: i64) -> String {
+    match fs.read_to_string(f"/proc/{id}/stat") {
+        // `pid (comm) S ...`: the state letter follows the `)`.
+        Ok(s) => match s.rfind(")") {
+            Some(i) => s[i + 2..i + 3].to_string(),
+            None => "?".to_string(),
+        },
+        Err(_) => "gone".to_string(),
+    }
+}
+
+fn wait_for(path: Str) -> bool {
+    let mut n = 0;
+    while n < 100 {
+        if fs.exists(path) {
+            return true;
+        }
+        sleep(Duration.ms(50));
+        n += 1;
+    }
+    false
+}
+
+fn main() {
+    // Not killed: the child finishes its work after the drop.
+    let id = {
+        let c = Command.new("sh").arg("-c").arg("sleep 0.3; echo done > ran").spawn().unwrap();
+        c.id()
+    };
+    println(f"ran after drop {wait_for("ran")}");
+    sleep(Duration.ms(200));
+    // Not waited for: it stays in the process table as a zombie.
+    println(f"state after it ended {state(id)}");
+    // An untaken piped stdin closes on the drop, so `cat` sees end of file.
+    {
+        let _c = Command.new("sh").arg("-c").arg("cat > /dev/null; echo eof > saw_eof")
+            .stdin(Stdio.piped()).spawn().unwrap();
+    }
+    println(f"stdin closed {wait_for("saw_eof")}");
+    // An untaken piped stdout closes on the drop: the child's write fails.
+    {
+        let _c = Command.new("sh").arg("-c")
+            .arg("trap '' PIPE; sleep 0.3; echo x 2>/dev/null; echo $? > wrote")
+            .stdout(Stdio.piped()).spawn().unwrap();
+    }
+    wait_for("wrote");
+    sleep(Duration.ms(50));
+    println(f"stdout write status {fs.read_to_string("wrote").unwrap().trim()}");
+}

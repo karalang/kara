@@ -1,0 +1,13 @@
+// io.md, Files: "Across file systems it fails with an `IoError` (`Other`)."
+// /dev/shm is a tmpfs, apart from the working directory's file system.
+fn main() {
+    let far = "/dev/shm/kara-conf-rename-across";
+    fs.write("here", "data").unwrap();
+    match fs.rename("here", far) {
+        Ok(_) => println("renamed"),
+        Err(IoError.Other(m)) => println(f"Other {m.len() > 0}"),
+        Err(e) => println(f"other kind {e}"),
+    }
+    println(f"{fs.read_to_string("here").unwrap()} {fs.exists(far)}");
+    let _ = fs.remove_file(far);
+}
