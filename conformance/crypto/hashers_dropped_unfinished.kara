@@ -1,0 +1,59 @@
+// Every hasher dropped without `finish`, with and without data, in a struct
+// and in a Vec, frees its state (the ASan lane reports a leak otherwise), and
+// every digest has the documented Array length (docs/library/crypto.md).
+import std.crypto.sha2.{sha256, sha384, sha512, Sha256, Sha384, Sha512};
+import std.crypto.hmac.{hmac_sha256, hmac_sha384, hmac_sha512, HmacSha256, HmacSha384, HmacSha512};
+import std.crypto.legacy.{sha1, Sha1};
+import std.crypto.{constant_time_eq};
+import std.encoding.{hex_encode};
+
+struct Pair {
+    a: Sha256,
+    b: HmacSha512,
+}
+
+fn main() {
+    let a: Array[u8, 32] = sha256("x".bytes());
+    let b: Array[u8, 48] = sha384("x".bytes());
+    let c: Array[u8, 64] = sha512("x".bytes());
+    let d: Array[u8, 20] = sha1("x".bytes());
+    let e: Array[u8, 32] = hmac_sha256("k".bytes(), "x".bytes());
+    let f: Array[u8, 48] = hmac_sha384("k".bytes(), "x".bytes());
+    let g: Array[u8, 64] = hmac_sha512("k".bytes(), "x".bytes());
+    println(f"{a.len()} {b.len()} {c.len()} {d.len()} {e.len()} {f.len()} {g.len()}");
+    // Dropped without finish, with and without data.
+    let _h1 = Sha256.new();
+    let mut h2 = Sha384.new();
+    h2.update("some data".bytes());
+    let mut h3 = Sha512.new();
+    h3.update([1u8, 2u8, 3u8].as_slice());
+    let mut h4 = Sha1.new();
+    h4.update("".bytes());
+    let long_key: Vec[u8] = Vec.filled(200, 7u8);
+    let mut m1 = HmacSha256.new(long_key.as_slice());
+    m1.update("x".bytes());
+    let _m2 = HmacSha384.new("k".bytes());
+    let mut m3 = HmacSha512.new(long_key.as_slice());
+    m3.update("y".bytes());
+    let p = Pair { a: Sha256.new(), b: HmacSha512.new("k".bytes()) };
+    let mut v: Vec[Sha256] = Vec.new();
+    for i in 0..5 {
+        let mut h = Sha256.new();
+        h.update(f"{i}".bytes());
+        v.push(h);
+    }
+    let first = v.remove(0);
+    let x = first.finish();
+    println(hex_encode(x) == hex_encode(sha256("0".bytes())));
+    // Finished from a struct field moved out.
+    let tag = p.b.finish();
+    println(constant_time_eq(tag.as_slice(), hmac_sha512("k".bytes(), "".bytes()).as_slice()));
+    // Long key streaming equals one-shot.
+    let mut s = HmacSha512.new(long_key.as_slice());
+    s.update("ab".bytes());
+    s.update("".bytes());
+    s.update("c".bytes());
+    println(hex_encode(s.finish()) == hex_encode(hmac_sha512(long_key.as_slice(), "abc".bytes())));
+    println(constant_time_eq("".bytes(), "".bytes()));
+    println(constant_time_eq("ab".bytes(), "abc".bytes()));
+}

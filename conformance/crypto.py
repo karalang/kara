@@ -67,6 +67,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--cases", type=int, default=60)
+    # `--lanes interp,build,asan` adds the AddressSanitizer build: a leak or
+    # bad access in a hasher's state fails the run.
+    ap.add_argument("--lanes", default="interp,build")
     args = ap.parse_args()
     rng = random.Random(args.seed)
     rep = Report("crypto")
@@ -155,7 +158,7 @@ def main():
         "}\n\n"
         "fn main() {\n" + "\n".join(lines) + "\n}\n"
     )
-    rep.check_runs(run(src), labels, want)
+    rep.check_runs(run(src, backends=tuple(args.lanes.split(","))), labels, want)
     rep.finish()
 
 

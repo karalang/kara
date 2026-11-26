@@ -146,7 +146,9 @@ class Report:
         if results["check"][0] != 0:
             self.failed.append("check refused the program:\n" + results["check"][1] + results["check"][2])
             return
-        for backend in ("interp", "build"):
+        # Every lane the run asked for: a sanitizer lane left out here would
+        # report nothing and read as a pass.
+        for backend in ("interp", "build", "asan", "tsan"):
             for code, stdout, stderr in results.get(backend, []):
                 if code != 0:
                     self.failed.append(f"[{backend}] exit {code}: {stderr[-2000:]}")

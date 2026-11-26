@@ -121,6 +121,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--cases", type=int, default=300)
+    # `--lanes interp,build,asan` adds the AddressSanitizer build.
+    ap.add_argument("--lanes", default="interp,build")
     args = ap.parse_args()
     rng = random.Random(args.seed)
     rep = Report("encoding")
@@ -196,7 +198,7 @@ def main():
         "}\n\n"
         "fn main() {\n" + "\n".join(lines) + "\n}\n"
     )
-    rep.check_runs(run(src), labels, want)
+    rep.check_runs(run(src, backends=tuple(args.lanes.split(","))), labels, want)
     rep.finish()
 
 
