@@ -260,6 +260,7 @@ A B-tree set, `T: Ord`. Every operation is O(log n), and iteration is in ascendi
 | `max` | `fn max(self) -> Option[ref T]` | Largest element |
 | `pop_first` | `fn pop_first(mut ref self) -> Option[T]` | Removes and returns the smallest element |
 | `pop_last` | `fn pop_last(mut ref self) -> Option[T]` | Removes and returns the largest element |
+| `clear` | `fn clear(mut ref self)` | Drops every element in ascending order, as `SortedMap.clear` drops its entries in key order (B-2026-11-26-12) |
 | `retain` | `fn retain(mut ref self, pred: own MutFn(T) -> bool)` | Keeps the elements satisfying `pred`, in ascending order |
 | `range` | `fn range(self, from: T, to: T) -> impl Iterator[Item = ref T]` | Elements in `[from, to)`, ascending, half-open like `from..to`. Empty if `from >= to` |
 | `range_inclusive` | `fn range_inclusive(self, from: T, to: T) -> impl Iterator[Item = ref T]` | Elements in `[from, to]`, ascending, like `from..=to`. Empty if `from > to` |

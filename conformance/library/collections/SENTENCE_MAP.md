@@ -211,6 +211,7 @@ One row per normative unit of docs/library/collections.md (each prose sentence, 
 | col.205 | `SortedSet[T]` | row: `max` / `fn max(self) -> Option[ref T]` / Largest element | sorted_set_methods; col2 |
 | col.206 | `SortedSet[T]` | row: `pop_first` / `fn pop_first(mut ref self) -> Option[T]` / Removes and returns the smallest element | sorted_set_methods; col2 |
 | col.207 | `SortedSet[T]` | row: `pop_last` / `fn pop_last(mut ref self) -> Option[T]` / Removes and returns the largest element | sorted_set_methods; col2 |
+| col.207a | `SortedSet[T]` | row: `clear` / `fn clear(mut ref self)` / Drops every element in ascending order, as `SortedMap.clear` drops its entries in key order (B-2026-11-26-12) | sorted_set_clear_drops_in_order (drop 1, 2, 3, then the set is empty and reusable) |
 | col.208 | `SortedSet[T]` | row: `retain` / `fn retain(mut ref self, pred: own MutFn(T) -> bool)` / Keeps the elements satisfying `pred`, in ascending order | sorted_set_methods; col2 |
 | col.209 | `SortedSet[T]` | row: `range` / `fn range(self, from: T, to: T) -> impl Iterator[Item = ref T]` / Elements in `[from, to)`, ascending, half-open like `from.. | sorted_set_methods; col2 |
 | col.210 | `SortedSet[T]` | row: `range_inclusive` / `fn range_inclusive(self, from: T, to: T) -> impl Iterator[Item = ref T]` / Elements in `[from, to]`, ascending, li | sorted_set_methods; col2 |

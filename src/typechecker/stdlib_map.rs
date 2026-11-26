@@ -806,6 +806,18 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 Type::Int(IntSize::I64)
             }
+            // As every other collection's, dropping the elements in key
+            // order, as SortedMap.clear does (B-2026-11-26-12).
+            "clear" => {
+                if !args.is_empty() {
+                    self.type_error(
+                        "SortedSet.clear() takes no arguments".to_string(),
+                        *span,
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                }
+                Type::Unit
+            }
             "is_empty" => {
                 if !args.is_empty() {
                     self.type_error(

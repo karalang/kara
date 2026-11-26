@@ -1,0 +1,21 @@
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct Tag { n: i64 }
+
+impl Drop for Tag {
+    fn drop(mut ref self) {
+        println("drop " + self.n.to_string());
+    }
+}
+
+fn main() {
+    let mut s: SortedSet[Tag] = SortedSet.new();
+    s.insert(Tag { n: 3 });
+    s.insert(Tag { n: 1 });
+    s.insert(Tag { n: 2 });
+    println(s.len());
+    s.clear();
+    println(s.len());
+    println(s.is_empty());
+    s.insert(Tag { n: 9 });
+    println("end");
+}
