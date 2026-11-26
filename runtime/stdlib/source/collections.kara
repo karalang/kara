@@ -272,6 +272,16 @@ impl[T] Slice[T] {
         if mid < 0 or mid > n {
             panic("rotate_left: mid out of bounds");
         }
+        self.__rotate_left_elems(mid);
+    }
+
+    /// The elements turned `mid` places toward the front, `mid` in
+    /// `0..=len`, which `rotate_left` checks: three reversals here, which
+    /// the interpreter runs, and in compiled code one runtime call that
+    /// moves the short side through a buffer and the rest with a
+    /// `memmove`, as Rust's `ptr_rotate` does (B-2026-11-26-7).
+    fn __rotate_left_elems(mut ref self, mid: i64) {
+        let n = self.len();
         let mut i = 0;
         let mut j = mid - 1;
         while i < j {
@@ -538,6 +548,16 @@ impl[T] Vec[T] {
         if mid < 0 or mid > n {
             panic("rotate_left: mid out of bounds");
         }
+        self.__rotate_left_elems(mid);
+    }
+
+    /// The elements turned `mid` places toward the front, `mid` in
+    /// `0..=len`, which `rotate_left` checks: three reversals here, which
+    /// the interpreter runs, and in compiled code one runtime call that
+    /// moves the short side through a buffer and the rest with a
+    /// `memmove`, as Rust's `ptr_rotate` does (B-2026-11-26-7).
+    fn __rotate_left_elems(mut ref self, mid: i64) {
+        let n = self.len();
         let mut i = 0;
         let mut j = mid - 1;
         while i < j {

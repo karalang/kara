@@ -1,0 +1,53 @@
+// `rotate_left` / `rotate_right` on a `Vec`, a part of one and an array
+// turn the elements in place, each moved once and none cloned or dropped
+// (library/collections.md): short turns, long ones where both sides are
+// large, `String` elements that own heap text, and a three-field struct.
+struct P { a: i64, b: String, c: bool }
+
+fn digest(v: ref Vec[i64]) -> i64 {
+    let mut h = 0;
+    for x in v.iter() {
+        h = (h * 31 + x) % 1000000007;
+    }
+    h
+}
+
+fn main() {
+    let mut v: Vec[i64] = (0..1000).collect();
+    v.rotate_left(1);
+    println(f"left 1: {v[0]} {v[998]} {v[999]} {digest(v)}");
+    v.rotate_right(1);
+    println(f"back: {v[0]} {v[999]} {digest(v)}");
+    v.rotate_left(400);
+    println(f"left 400: {v[0]} {v[599]} {v[600]} {digest(v)}");
+    v.rotate_right(333);
+    println(f"right 333: {v[0]} {v[332]} {v[333]} {digest(v)}");
+    v[100..=700].rotate_right(1);
+    println(f"part right 1: {v[99]} {v[100]} {v[101]} {v[700]} {digest(v)}");
+    v[10..990].rotate_left(490);
+    println(f"part left 490: {v[10]} {v[989]} {digest(v)}");
+    v.rotate_left(0);
+    v.rotate_right(1000);
+    println(f"no turn: {digest(v)}");
+
+    let mut words: Vec[String] = Vec.new();
+    for i in 0..300 {
+        words.push(f"w{i}");
+    }
+    words.rotate_left(150);
+    words[0..=200].rotate_right(1);
+    words.rotate_right(7);
+    println(f"words: {words[0]} {words[7]} {words[8]} {words[299]} {words.len()}");
+
+    let mut ps: Vec[P] = Vec.new();
+    for i in 0..50 {
+        ps.push(P { a: i, b: f"p{i}", c: i % 2 == 0 });
+    }
+    ps.rotate_left(17);
+    ps[5..45].rotate_right(3);
+    println(f"structs: {ps[0].a} {ps[0].b} {ps[5].a} {ps[5].b} {ps[5].c} {ps[49].a}");
+
+    let mut a: Array[i64, 6] = [1, 2, 3, 4, 5, 6];
+    a.rotate_right(2);
+    println(f"array: {a}");
+}

@@ -2552,6 +2552,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Performance
 
+- A compiled `rotate_left` / `rotate_right` on a `Vec`, a part of one or
+  an array moves each element once: the short side goes through a buffer
+  and the rest moves with one `memmove`, as Rust's rotate does, where the
+  library's three reversals of bounds-checked swaps moved each element
+  about four times. Kata 1409's bench (`p[..=at].rotate_right(1)` per
+  query) runs in 0.055 s, down from 0.124 s, against Rust's 0.038 s
+  (B-2026-11-26-7).
 - A compiled `SortedMap` or `SortedSet` past 16 KiB of entries inserts a
   key about 1.7 times as fast. An insert of a key a lookup has just
   missed (`m.insert(k, v)`, `*m.entry(k).or_insert(0) += 1`) takes the

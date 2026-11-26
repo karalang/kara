@@ -110,6 +110,8 @@ impl<'ctx> Cx<'ctx, '_> {
                     return Err("MIR to LLVM: a call to a constant that is not a function".into());
                 };
                 if is_select_unpredictable(&inst.name) && self.select_unpredictable(args, dest)? {
+                } else if is_rotate_left(&inst.name) {
+                    self.rotate_left(args)?;
                 } else if program.bodies.contains_key(&inst.name) {
                     self.call_body(&inst.name, args, dest)?;
                 } else if let Some(sig) = program.externs.get(&inst.name) {
@@ -170,6 +172,24 @@ impl<'ctx> Cx<'ctx, '_> {
     pub(super) fn temp(&self, ty: Ty, name: &str) -> R<PointerValue<'ctx>> {
         let size = self.layout(ty)?.size;
         self.entry_slot(size.max(1) as u32, name)
+    }
+
+    /// The library's `__rotate_left_elems(mid)` on a `Vec` or slice:
+    /// the elements moved as bytes by the runtime, the short side through a
+    /// buffer and the rest with a `memmove`, rather than the body's three
+    /// reversals of bounds-checked swaps (B-2026-11-26-7). The caller has
+    /// checked `0 <= mid <= len`.
+    fn rotate_left(&mut self, args: &[Operand]) -> R<()> {
+        let [s, mid] = args else {
+            return Err("MIR to LLVM: a rotate of other than a sequence and a count".into());
+        };
+        let (p, n, el) = self.view_parts(s)?;
+        let size = self.layout(el)?.size;
+        let mid = self.int_arg(mid)?;
+        self.rt(
+            "rotate_left",
+            &[p.into(), n.into(), mid.into(), self.i64(size).into()],
+        )
     }
 
     /// The library's `__select_unpredictable(c, a, b)` on a scalar `T`: a
@@ -2800,6 +2820,19 @@ fn only_borrowed(body: &crate::mir::Body, l: crate::mir::Local) -> bool {
         }
     }
     defs == 1
+}
+
+/// `Slice[T].__rotate_left_elems` or `Vec[T].__rotate_left_elems`, the
+/// library's rotate step.
+fn is_rotate_left(name: &str) -> bool {
+    name.rsplit_once('.').is_some_and(|(owner, m)| {
+        m == "__rotate_left_elems"
+            && ["Slice", "Vec"].iter().any(|t| {
+                owner
+                    .strip_prefix(t)
+                    .is_some_and(|r| r.is_empty() || r.starts_with('['))
+            })
+    })
 }
 
 /// The library's `__select_unpredictable` or an instance of it.

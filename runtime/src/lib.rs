@@ -95,6 +95,7 @@ pub mod event_loop;
 mod fatal;
 mod int_sort;
 mod lean_vec;
+mod rotate;
 // IEEE-754 half-precision conversion builtins (`__truncsfhf2` /
 // `__extendhfsf2`). LLVM legalizes every `half` op on wasm32 into these
 // two libcalls and neither Rust's `compiler_builtins` for
@@ -334,6 +335,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir::karac_mir_sort,
         mir::karac_mir_sort_ctx,
         mir::karac_mir_sort_int,
+        rotate::karac_mir_rotate_left,
         mir::karac_mir_deque_alloc,
         mir::karac_mir_fs,
         mir_log::karac_mir_log_enabled,

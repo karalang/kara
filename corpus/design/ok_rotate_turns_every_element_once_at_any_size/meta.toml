@@ -1,0 +1,9 @@
+source = "B-2026-11-26-7"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "library", "collections", "perf"]
+expected_from = "oracle"
+backends = []
+env = {}
+note = "library/collections.md rotate_left / rotate_right, with a Python mirror as the oracle: in compiled code the elements are now moved as bytes by one runtime call (a buffer for the short side and a memmove, or block swaps when both sides are long), where the library body's three reversals moved each about four times. Covers turns of one place, long turns with both sides over the buffer, parts of a Vec, String and struct elements (each moved once, none cloned or dropped; the ASan lane checks) and an array."

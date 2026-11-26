@@ -152,6 +152,9 @@ const ALWAYS_KEPT: &[&str] = &[
     // these with `Vec.rotate_left` / `rotate_right` (B-2026-11-06-35).
     "rotate_left",
     "rotate_right",
+    // The rotate step compiled code replaces with a runtime call
+    // (`src/backend/mir/call.rs`, B-2026-11-26-7).
+    "__rotate_left_elems",
     "split",
     // The interpreter and backend answer `Vec.split_at` by name; the name
     // is `Str.split_at`'s too (kata 2023).
