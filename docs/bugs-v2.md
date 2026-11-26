@@ -59,8 +59,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 772 |
-| false-positive | 389 |
-| missing-feature | 261 |
+| false-positive | 390 |
+| missing-feature | 263 |
 | perf | 205 |
 | other | 153 |
 | soundness | 134 |
@@ -76,15 +76,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 937 |
-| mir | 343 |
+| typecheck | 938 |
+| mir | 344 |
 | mir-llvm | 334 |
 | cli | 318 |
 | parser | 162 |
 | ownership | 138 |
 | runtime | 114 |
 | interp | 112 |
-| effect | 69 |
+| effect | 70 |
 | resolver | 57 |
 | other | 54 |
 | codegen | 22 |
@@ -143,6 +143,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-7 | 2026-11-26 | mir-llvm | low | `s.rotate_right(k)` and `rotate_left` turn a slice by three reversals of element swaps, where Rust's `rotate_right(1)` moves the elements once with a `memmove`: kata 1409's bench, `p[..=at].rotate_right(1)` once a query, runs in 0.17-0.18 s against Rust's 0.046-0.058 s with overflow checks on and C's 0.071 s | — |
 | B-2026-11-26-8 | 2026-11-26 | typecheck | low | `.map(|x| { sum += x; sum }).fold(0, |low, s| low.min(s))`, with `let mut sum = 0` summing `i32`s, is fixed by suffixing the seed `0i32`, after which `low.min(s)` is refused as `i64` with no fix: the refusal does not trace `s` back through the closure to `sum`, which the same refusal on `sum` itself declares `sum: i32` | — |
 | B-2026-11-26-9 | 2026-11-26 | typecheck | low | `v.push(((0..3).map(|_| 1).collect(), 5))` with `v: Vec[(Vec[i32], i32)]` is refused, "expected '(Vec[i32], i32)', found '(C, i64)'", with no fix: the element type does not reach a `collect` inside a tuple argument, though it reaches a bare `v.push(it.collect())` and a `let p: (Vec[i32], i32) = (it.collect(), 5)` | — |
+| B-2026-11-26-10 | 2026-11-26 | effect | medium | Three disjoint `par` shapes are refused E0418/E0517: a branch that writes one field turns its method read of another field of the same root into a mutable borrow; tuple items `p.0` / `p.1` conflict; a `let mut` closure called in ONE branch is E0517 | — |
+| B-2026-11-26-11 | 2026-11-26 | mir | medium | A nested `par` that reads a field of an outer local is refused by `karac check` with the internal E0516 "the capture of `t` is not lowered yet" | — |
+| B-2026-11-26-12 | 2026-11-26 | typecheck | low | `SortedSet` has no `clear`, though Vec, VecDeque, Map, Set, SortedMap and PriorityQueue all have one | — |
 
 ### Relocated
 
