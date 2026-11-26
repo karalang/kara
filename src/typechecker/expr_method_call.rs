@@ -3904,10 +3904,48 @@ impl<'a> super::TypeChecker<'a> {
                             .join(", ")
                     ),
                 };
-                let annotate = if method == "into" {
-                    "`let x: Target = v.into();`, or call `Target.from(v)`"
+                // A `try_into` annotation writes the error type out: a type
+                // has no `_` placeholder (B-2026-11-26-72). The candidates'
+                // one error type when they agree (the integers' `String`),
+                // and a named placeholder when they do not.
+                let errors: Vec<String> = if method == "try_into" {
+                    let mut errs: Vec<String> = self
+                        .env
+                        .impls_by_trait
+                        .get(trait_name)
+                        .into_iter()
+                        .flatten()
+                        .map(|&i| &self.env.impls[i])
+                        .filter_map(|imp| imp.methods.get(assoc))
+                        .filter(|sig| {
+                            sig.params.first().is_some_and(|p| {
+                                super::env::conversion_param_takes(p, &obj_ty_for_named)
+                            })
+                        })
+                        .map(|sig| match &sig.return_type {
+                            Type::Named { name, args } if name == "Result" && args.len() == 2 => {
+                                type_display(&args[1])
+                            }
+                            _ => String::new(),
+                        })
+                        .collect();
+                    errs.sort();
+                    errs.dedup();
+                    errs
                 } else {
-                    "`let r: Result[Target, _] = v.try_into();`, or call `Target.try_from(v)`"
+                    Vec::new()
+                };
+                let annotate = match (method, errors.as_slice()) {
+                    ("into", _) => {
+                        "`let x: Target = v.into();`, or call `Target.from(v)`".to_string()
+                    }
+                    (_, [err]) if !err.is_empty() && !err.contains("Self") => format!(
+                        "`let r: Result[Target, {err}] = v.try_into();`, or call \
+                         `Target.try_from(v)`"
+                    ),
+                    _ => "`let r: Result[Target, E] = v.try_into();` with `E` the impl's \
+                          error type, or call `Target.try_from(v)`"
+                        .to_string(),
                 };
                 self.type_error(
                     format!(

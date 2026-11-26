@@ -2863,6 +2863,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Diagnostics
 
+- E0200 on an untyped `.try_into()` suggests an annotation that parses:
+  `let r: Result[Target, String] = v.try_into();` for an integer, whose
+  narrowing `try_from` fails with a `String`, and `Result[Target, E]` with
+  `E` named as the impl's error type when the candidates disagree. It
+  wrote `Result[Target, _]`, which is refused E0001 once copied, since a
+  type has no `_` placeholder (B-2026-11-26-72).
 - E0400 for a call through a `dyn` value whose type writes no `with`
   clause no longer names the internal `__dyn_every.T.t`: its `blocks`
   finding is the call's every-effect finding like the others, so one
