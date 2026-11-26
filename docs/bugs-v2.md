@@ -63,7 +63,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | missing-feature | 267 |
 | perf | 206 |
 | other | 157 |
-| soundness | 135 |
+| soundness | 137 |
 | miscompile | 111 |
 | run-vs-build | 79 |
 | crash | 71 |
@@ -81,7 +81,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | mir-llvm | 338 |
 | cli | 321 |
 | parser | 165 |
-| ownership | 144 |
+| ownership | 146 |
 | runtime | 116 |
 | interp | 115 |
 | effect | 70 |
@@ -130,6 +130,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-84 | 2026-11-26 | typecheck | low | E0208 "'+' on 'String' requires a 'String' right operand, found 'Str'" puts its caret under the LEFT operand: `a + s[1..]` underlines `a`, and `s[..k].to_string() + "1" + s[k + 1..]` underlines `s[..k].to_string() + "1"`, while the fault and the fix are on the right | — |
 | B-2026-11-26-86 | 2026-11-26 | typecheck | low | `f = g` with `f: Vec[i32]` and `g = Vec.filled(n, f[0] + size)`, `size` a bare `let size = 0` literal, is refused "expected 'Vec[i32]', found 'Vec[i64]'" with no fix, where annotating `g` makes check trace the fill to `size` and offer the machine fix `size: i32` | — |
 | B-2026-11-26-87 | 2026-11-26 | mir-llvm | medium | Compiled `Vector[i8, N]` lane division `MIN / -1` and `MIN % -1` print garbage (`karac run` 784 and 1, `karac build` 0 and 0) where the spec's wrap gives -128 and 0, which the interpreter prints: the lanes lower to a plain `sdiv` / `srem`, whose overflow LLVM leaves undefined | — |
+| B-2026-11-26-88 | 2026-11-26 | ownership | high | A method with a `self` receiver that returns a closure over another bare parameter (`fn mk(self, pre: String) -> Fn(String) -> String { |s| f"{pre}{s}" }`) is accepted since B-2026-11-26-74, and a caller passing a temporary reads freed memory | — |
+| B-2026-11-26-89 | 2026-11-26 | ownership | high | A method with a `self` receiver that returns a closure holding a local closure over another bare parameter (`fn mk(self, pre: String) -> Fn(String) -> String { let c = || pre.clone(); |s| f"{c()}{s}" }`) is accepted, and a caller passing a temporary reads freed memory | — |
 
 ### Relocated
 
