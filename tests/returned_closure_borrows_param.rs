@@ -184,3 +184,47 @@ fn an_owned_parameter_moves_in_as_before() {
         "<a\n",
     );
 }
+
+/// A returned function value hides its captures, so its caller counts on
+/// its drop reading them: the argument stays borrowed until the value drops
+/// at its scope's end, as an `impl Trait` result does (core-semantics §9.4,
+/// review ruling 2026-11-26; §5.4: no body-dependent precision). A `Str`
+/// view result has no drop and ends at its last use.
+#[test]
+fn a_returned_closure_borrows_until_it_drops() {
+    refused(
+        "fn main() { let mut name = \"<\".to_string(); let f = mk(name); println(f(\"a\")); \
+         name.push_str(\"!\"); println(name); }\n",
+        "E0516",
+        "while `f` still holds a borrow of it",
+    );
+    refused(
+        "fn take(s: own String) -> i64 { s.len() }\n\
+         fn main() { let name = \"<\".to_string(); let f = mk(name); println(f(\"a\")); \
+         println(take(name)); }\n",
+        "E0516",
+        "cannot move `name` while `f` still holds a borrow of it",
+    );
+    runs_everywhere(
+        "fn first(p: String) -> Str { p[0..1] }\n\
+         fn main() { let mut name = \"<>\".to_string(); let v = first(name); println(v); \
+         name.push_str(\"!\"); println(name); }\n",
+        "<\n<>!\n",
+    );
+}
+
+/// Moving the value out (`drop(f)`) or ending its scope sooner ends the
+/// borrow there.
+#[test]
+fn a_returned_closure_moved_or_scoped_ends_its_borrow() {
+    runs_everywhere(
+        "fn main() { let mut name = \"<\".to_string(); let f = mk(name); println(f(\"a\")); \
+         drop(f); name.push_str(\"!\"); println(name); }\n",
+        "<a\n<!\n",
+    );
+    runs_everywhere(
+        "fn main() { let mut name = \"<\".to_string(); { let f = mk(name); println(f(\"a\")); } \
+         name.push_str(\"!\"); println(name); }\n",
+        "<a\n<!\n",
+    );
+}
