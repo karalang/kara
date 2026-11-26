@@ -6843,6 +6843,14 @@ impl<'a> super::TypeChecker<'a> {
             let Some((from, to)) = self.operand_casts.get(&side.id).cloned() else {
                 continue;
             };
+            // `total += x as i64` with `x` the `ref i32` that `v.iter()`
+            // yields: the cast reads through the reference, and the
+            // operation does too, as `lint_unneeded_cast` peels it
+            // (B-2026-11-25-19).
+            let from = match resolve_type_var_top(&from, &self.env.substitutions) {
+                Type::Ref(inner) => *inner,
+                t => t,
+            };
             if &to != other_ty {
                 continue;
             }
