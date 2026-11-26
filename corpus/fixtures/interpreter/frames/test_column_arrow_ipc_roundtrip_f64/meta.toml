@@ -1,17 +1,19 @@
 source = "tests/interpreter/frames.rs::test_column_arrow_ipc_roundtrip_f64"
 dedup_of = []
-expect = "stdout"
-exit = 0
+expect = "error:E0520"
+exit = 1
 tags = ["deferred:dataframe", "src:legacy-tests"]
 class = "d"
-expected_from = "oracle"
+expected_from = "spec"
 legacy_backend = "legacy-interp"
 legacy_exit = 0
 rules = []
 backends = []
 env = {}
-bucket = "d"
+note = "B-2026-11-25-70 triage (probe wk49g): was expect = stdout; not in 0.8: deferred.md § M4c data (docs/library/data.md: the kara-data package is not in 0.8)"
+bucket = "a:refused"
 classified_with = "9913c6855"
+deferred = "deferred.md § M4c data (docs/library/data.md: the kara-data package is not in 0.8)"
 extracted_src = "3ebc34fb"
 model_rev = "3acf4472"
 model_src = "3ebc34fb"

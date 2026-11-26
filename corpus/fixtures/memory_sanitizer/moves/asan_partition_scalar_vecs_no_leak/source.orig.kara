@@ -1,0 +1,17 @@
+
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 50 {
+        let v = [1, 2, 3, 4, 5, 6, 7, 8];
+        let (evens, odds): (Vec[i64], Vec[i64]) = v.iter().partition(|x| x % 2 == 0);
+        for e in evens { acc = acc + e; }
+        for o in odds { acc = acc + o; }
+        // A partition whose halves are only measured (never iterated) — both
+        // Vec buffers must be freed at scope exit.
+        let (big, small): (Vec[i64], Vec[i64]) = v.iter().partition(|x| x > 4);
+        acc = acc + big.len() + small.len();
+        i = i + 1;
+    }
+    println(acc);
+}

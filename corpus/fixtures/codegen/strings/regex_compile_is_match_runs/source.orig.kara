@@ -1,0 +1,7 @@
+fn main() {
+let re = Regex.compile("^a.c$").unwrap();
+let a = re.is_match("abc");
+let b = re.is_match("abcd");
+let c = re.is_match("a-c");
+println(f"{a} {b} {c}");
+}

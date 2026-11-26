@@ -1,18 +1,19 @@
 source = "tests/interpreter/enums.rs::test_impl_invariant_holds_runs"
 dedup_of = []
-expect = "stdout"
-exit = 0
+expect = "error:E_DEFERRED_TRACK"
+exit = 1
 tags = ["literal-unmatched", "src:legacy-tests", "post-m1:contract"]
 class = "e"
-expected_from = "legacy-run"
+expected_from = "spec"
 legacy_backend = "legacy-interp"
 legacy_exit = 0
 rules = []
 backends = []
 env = {}
-note = "first literal of the holding test: 'a satisfied impl invariant must not fault, got: {errors:?}'"
-bucket = "mir-gap:build"
+note = "first literal of the holding test: 'a satisfied impl invariant must not fault, got: {errors:?}' | B-2026-11-25-70 triage (probe wk49g): was expect = stdout; not in 0.8: deferred.md § Contracts (requires / ensures / invariant)"
+bucket = "a:refused"
 classified_with = "9913c6855"
+deferred = "deferred.md § Contracts (requires / ensures / invariant)"
 extracted_src = "0fc96447"
 model_rev = "3acf4472"
 model_src = "0fc96447"

@@ -1,17 +1,19 @@
 source = "tests/codegen/gpu_tensor.rs::test_e2e_float_tensor_minmax_bit_identical"
 dedup_of = []
-expect = "stdout"
-exit = 0
+expect = "error:E0520"
+exit = 1
 tags = ["deferred:tensor", "src:legacy-tests"]
 class = "d"
-expected_from = "oracle"
+expected_from = "spec"
 legacy_backend = "legacy-build"
 legacy_exit = 0
 rules = []
 backends = []
 env = {}
-bucket = "d"
+note = "B-2026-11-25-70 triage (probe wk49g): was expect = stdout; not in 0.8: deferred.md § Numerical Types (Tensor, Column, DataFrame)"
+bucket = "a:refused"
 classified_with = "9913c6855"
+deferred = "deferred.md § Numerical Types (Tensor, Column, DataFrame)"
 extracted_src = "12c5036f"
 model_rev = "3acf4472"
 model_src = "12c5036f"

@@ -1,0 +1,10 @@
+pub type PositiveQty = i64 where self > 0;
+pub struct Person { name: String, age: i64 }
+pub type Adult = Person where self.age > 17;
+pub fn label(p: Adult) -> String { p.name }
+pub fn half(q: PositiveQty) -> f64 { (q as f64) / 2.0 }
+fn main() {
+let p = Person { name: "ada", age: 36 };
+println(label(p as Adult));
+println(half(9 as PositiveQty));
+}

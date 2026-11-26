@@ -1,17 +1,17 @@
 source = "tests/cli.rs::std_web_single_file_run_executes_gated_imports"
 dedup_of = []
-expect = "stdout"
-exit = 0
+expect = "error:E0411"
+exit = 1
 tags = ["literal-unmatched", "post-m1:wasm"]
 class = "e"
-expected_from = "legacy-run"
+expected_from = "spec"
 legacy_backend = "legacy-build"
 legacy_exit = 0
 rules = []
 backends = []
 env = {}
-note = "first literal of the holding test: 'karac-cli-std-web-{}-{}'"
-bucket = "check-refuses:E0411"
+note = "first literal of the holding test: 'karac-cli-std-web-{}-{}' | B-2026-11-25-70 triage (probe wk49g): was expect = stdout; design.md § Targets: a resource the target does not provide is refused at check"
+bucket = "a:refused"
 classified_with = "9913c6855"
 extracted_src = "aae21505"
 model_rev = "3acf4472"

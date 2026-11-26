@@ -1,17 +1,17 @@
 source = "tests/call_site_type_args.rs::check_names_the_spelling_that_replaces_each_call_site_form"
 dedup_of = []
-expect = "stdout"
-exit = 0
+expect = "error:E0200"
+exit = 1
 tags = ["literal-unmatched"]
 class = "e"
-expected_from = "legacy-run"
+expected_from = "spec"
 legacy_backend = "legacy-build"
 legacy_exit = 0
 rules = []
 backends = []
 env = {}
-note = "first literal of the holding test: 'forms'"
-bucket = "check-refuses:E0200"
+note = "first literal of the holding test: 'forms' | B-2026-11-25-70 triage (probe wk49g): was expect = stdout; the entry is itself a refusal test (its name says so); karac check refuses it"
+bucket = "a:refused"
 classified_with = "9913c6855"
 extracted_src = "254290a3"
 model_rev = "3acf4472"

@@ -1,17 +1,19 @@
 source = "tests/interpreter/option_result.rs::gpu_min_max_return_option_and_ignore_nan"
 dedup_of = []
-expect = "stdout"
-exit = 0
+expect = "error:E_ARCHIVED"
+exit = 1
 tags = ["deferred:gpu", "src:legacy-tests"]
 class = "d"
-expected_from = "oracle"
+expected_from = "spec"
 legacy_backend = "legacy-interp"
 legacy_exit = 0
 rules = []
 backends = []
 env = {}
-bucket = "d"
+note = "B-2026-11-25-70 triage (probe wk49g): was expect = stdout; not in 0.8: deferred.md § GPU Backend (future direction): GPU compute is archived, not in 0.8"
+bucket = "a:refused"
 classified_with = "9913c6855"
+deferred = "deferred.md § GPU Backend (future direction): GPU compute is archived, not in 0.8"
 extracted_src = "a81f3e03"
 model_rev = "3acf4472"
 model_src = "a81f3e03"

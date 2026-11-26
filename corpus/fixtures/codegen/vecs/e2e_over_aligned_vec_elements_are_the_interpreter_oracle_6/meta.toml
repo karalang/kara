@@ -1,17 +1,19 @@
 source = "tests/codegen/vecs.rs::e2e_over_aligned_vec_elements_are_the_interpreter_oracle"
 dedup_of = []
-expect = "stdout"
-exit = 0
+expect = "error"
+exit = 1
 tags = ["src:legacy-tests", "post-m1:simd"]
 class = "e"
-expected_from = "oracle"
+expected_from = "spec"
 legacy_backend = "legacy-build"
 legacy_exit = 0
 rules = []
 backends = []
 env = {}
-bucket = "mir-gap:a type that failed to check"
+note = "B-2026-11-25-70 triage (probe wk49g): was expect = stdout; not in 0.8: deferred.md § Portable SIMD — Vector[T, N]"
+bucket = "a:refused"
 classified_with = "9913c6855"
+deferred = "deferred.md § Portable SIMD — Vector[T, N]"
 extracted_src = "11d0968d"
 model_rev = "3acf4472"
 model_src = "11d0968d"

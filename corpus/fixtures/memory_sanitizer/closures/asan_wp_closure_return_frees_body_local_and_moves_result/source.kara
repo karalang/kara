@@ -7,19 +7,19 @@ fn read() -> i64 with reads(Ctr) { Ctr.get() }
 fn local(n: i64) -> i64 with reads(Ctr) {
     let x = with_provider[Ctr](InMem { n: n }, || {
         let pad = f"pad-{read()}";
-        if read() == 9i64 { return pad.len() * 100i64; }
+        if read() == 9 { return pad.len() * 100; }
         read()
     });
-    x + 1i64
+    x + 1
 }
 fn heap() -> String with reads(Ctr) {
-    with_provider[Ctr](InMem { n: 42i64 }, || { return f"v-{read()}"; })
+    with_provider[Ctr](InMem { n: 42 }, || { return f"v-{read()}"; })
 }
-fn main() with reads(Ctr) {
-    let mut acc = 0i64;
-    let mut i = 0i64;
-    while i < 200i64 {
-        acc = acc + local(9i64) + local(4i64) + heap().len();
+fn main() with reads(Ctr) writes(Stdout) {
+    let mut acc = 0;
+    let mut i = 0;
+    while i < 200 {
+        acc = acc + local(9) + local(4) + heap().len();
         i = i + 1;
     }
     println(acc);

@@ -1,17 +1,17 @@
 source = "tests/cli.rs::test_build_project_surfaces_e0222_across_directories"
 dedup_of = []
-expect = "stdout"
-exit = 0
+expect = "error:E0112"
+exit = 1
 tags = ["literal-unmatched", "src:legacy-tests", "deferred:project-mode"]
 class = "d"
-expected_from = "legacy-run"
+expected_from = "spec"
 legacy_backend = "legacy-build"
 legacy_exit = 0
 rules = []
 backends = []
 env = {}
-note = "first literal of the holding test: 'private-cross-dir'"
-bucket = "d"
+note = "first literal of the holding test: 'private-cross-dir' | B-2026-11-25-70 triage (probe wk49g): was expect = stdout; the entry is itself a refusal test (its name says so); karac check refuses it"
+bucket = "a:refused"
 classified_with = "9913c6855"
 extracted_src = "da365d9d"
 model_rev = "3acf4472"

@@ -1,16 +1,17 @@
 source = "tests/cli.rs::target_attr_single_file_active_and_filtered"
 dedup_of = []
-expect = "stdout"
-exit = 0
+expect = "error:E0100"
+exit = 1
 tags = []
 class = "e"
-expected_from = "assert"
+expected_from = "spec"
 legacy_backend = "legacy-build"
 legacy_exit = 0
 rules = []
 backends = []
 env = {}
-bucket = "check-refuses:check-failed"
+note = "B-2026-11-25-70 triage (probe wk49g): was expect = stdout; design.md § Targets: an item gated to another target is not available"
+bucket = "a:refused"
 classified_with = "9913c6855"
 extracted_src = "e848e5fa"
 model_exit = 0

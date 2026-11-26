@@ -1,0 +1,7 @@
+fn main() {
+let re = Regex.compile("^[0-9]+$").unwrap();
+let a = re.is_match("12345");
+let b = re.is_match("12a45");
+let c = re.is_match("");
+println(f"{a} {b} {c}");
+}

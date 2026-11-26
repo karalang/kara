@@ -1,0 +1,29 @@
+
+trait Counter { fn get(ref self) -> i64; }
+effect resource Ctr: Counter;
+struct InMem { n: i64 }
+impl Counter for InMem { fn get(ref self) -> i64 { self.n } }
+fn read() -> i64 with reads(Ctr) { Ctr.get() }
+fn heapy(flag: bool) -> i64 with reads(Ctr) {
+    with_provider[Ctr](InMem { n: 5 }, || {
+        let s = f"local-heap-payload-{read()}";
+        if flag { return s.len(); }
+        read()
+    })
+}
+fn blocky(flag: bool) -> i64 with reads(Ctr) {
+    providers { Ctr => InMem { n: 6 } } in {
+        let s = f"block-heap-payload-{read()}";
+        if flag { return s.len(); }
+        read()
+    }
+}
+fn main() with reads(Ctr) {
+    let mut n = 0i64;
+    let mut i = 0i64;
+    while i < 200i64 {
+        n = n + heapy(true) + heapy(false) + blocky(true) + blocky(false);
+        i = i + 1;
+    }
+    println(n);
+}

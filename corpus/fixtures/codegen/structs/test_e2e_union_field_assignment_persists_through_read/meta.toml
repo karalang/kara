@@ -1,17 +1,19 @@
 source = "tests/codegen/structs.rs::test_e2e_union_field_assignment_persists_through_read"
 dedup_of = []
-expect = "stdout"
-exit = 0
+expect = "error"
+exit = 1
 tags = ["src:legacy-tests", "post-m1:layout"]
 class = "e"
-expected_from = "oracle"
+expected_from = "spec"
 legacy_backend = "legacy-build"
 legacy_exit = 0
 rules = []
 backends = []
 env = {}
-bucket = "mir-gap:no definition for type `BitsLR`"
+note = "B-2026-11-25-70 triage (probe wk49g): was expect = stdout; not in 0.8: deferred.md § FFI unions and exported C ABI"
+bucket = "a:refused"
 classified_with = "9913c6855"
+deferred = "deferred.md § FFI unions and exported C ABI"
 extracted_src = "f44c60a0"
 model_rev = "3acf4472"
 model_src = "f44c60a0"

@@ -1,18 +1,19 @@
 source = "tests/codegen/enums.rs::test_e2e_constructor_invariant_violation_aborts"
 dedup_of = []
-expect = "panic:101"
-exit = 101
+expect = "error:E_DEFERRED_TRACK"
+exit = 1
 tags = ["literal-unmatched", "panic", "post-m1:contract"]
 class = "e"
-expected_from = "legacy-run"
+expected_from = "spec"
 legacy_backend = "legacy-build"
 legacy_exit = 101
 rules = []
 backends = []
 env = {}
-note = "first literal of the holding test: 'contract violated'"
-bucket = "mir-gap:build"
+note = "first literal of the holding test: 'contract violated' | B-2026-11-25-70 triage (probe wk49g): was expect = stdout; not in 0.8: deferred.md § Contracts (requires / ensures / invariant)"
+bucket = "a:refused"
 classified_with = "9913c6855"
+deferred = "deferred.md § Contracts (requires / ensures / invariant)"
 extracted_src = "8b1c5f0c"
 model_rev = "3acf4472"
 model_src = "8b1c5f0c"

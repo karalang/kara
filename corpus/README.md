@@ -59,6 +59,7 @@ kata/example file stem. A second distinct program in the same test gets `_2`.
 | `env` | extra environment for every run |
 | `timeout` | seconds a run may take, for an entry measured slower than the runner's `--timeout` (default 60); the larger of the two holds. The `note` says what was measured |
 | `leaks` | `shared-cycle` when the program builds a cycle of strong `shared` handles, which never frees ([design.md §11](../docs/design.md#cycles-and-weak)); the `mir-llvm-asan` lane then excuses a leak report, but no other sanitizer report |
+| `deferred` | the `deferred.md` section of a feature not in 0.8 that the program uses (a post-v1 package, GPU compute, contracts, SIMD, layout, FFI unions); the runner skips it and counts it as `deferred=` in its summary, and `expect` records the refusal `karac check` gives today (B-2026-11-25-70) |
 | `note` | free text |
 | `bucket` | the classifier rule that decided `class`, or the failure (`mir-gap:<construct>`, `timeout`, `check-refuses:<code>`, ...) |
 | `classified_with` | the karac commit the classification ran at |

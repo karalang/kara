@@ -1,16 +1,17 @@
 source = "tests/codegen/strings.rs::test_e2e_string_to_cstring_as_ptr_feeds_libc_puts"
 dedup_of = []
-expect = "stdout"
-exit = 0
+expect = "error:E0411"
+exit = 1
 tags = []
 class = "e"
-expected_from = "assert"
+expected_from = "spec"
 legacy_backend = "legacy-build"
 legacy_exit = 0
 rules = []
 backends = []
 env = {}
-bucket = "check-refuses:E0411"
+note = "B-2026-11-25-70 triage (probe wk49g): was expect = stdout; design.md § Targets: a resource the target does not provide is refused at check"
+bucket = "a:refused"
 classified_with = "9913c6855"
 extracted_src = "f202d8c0"
 model_rev = "3acf4472"

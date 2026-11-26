@@ -1,0 +1,33 @@
+
+fn main() {
+    let s = "hi there";
+    let up: String = s.chars().map(|c| c.to_uppercase()).collect();
+    println(up);
+
+    let mut words: Vec[String] = Vec.new();
+    words.push("ab");
+    words.push("cd");
+    let joined: String = words.iter().map(|w| w.to_uppercase()).collect();
+    println(joined);
+
+    let mut raw: Vec[i64] = Vec.new();
+    raw.push(1); raw.push(2); raw.push(2); raw.push(3);
+
+    let plain: Vec[i64] = raw.iter().map(|x| x * 2).collect();
+    println(plain.len());
+
+    let st: Set[i64] = raw.iter().map(|x| x).collect();
+    println(st.len());
+
+    let dq: VecDeque[i64] = raw.iter().map(|x| x * 10).collect();
+    println(dq.len());
+    println(dq[0]);
+
+    let mp: Map[i64, i64] = raw.iter().map(|x| (x, x * 100)).collect();
+    println(mp.len());
+    println(mp[3]);
+
+    let empty: Vec[i64] = Vec.new();
+    let es: Set[i64] = empty.iter().map(|x| x).collect();
+    println(es.len());
+}

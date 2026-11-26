@@ -7,7 +7,7 @@ fn main() {
     let mut words: Vec[String] = Vec.new();
     words.push("ab");
     words.push("cd");
-    let joined: String = words.iter().map(|w| w.to_uppercase()).collect();
+    let joined: String = Vec[String].from_iter(words.iter().map(|w| w.to_uppercase())).join("");
     println(joined);
 
     let mut raw: Vec[i64] = Vec.new();

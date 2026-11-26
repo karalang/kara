@@ -1,7 +1,7 @@
 fn main() {
         let s: String = "hello";
         println(f"{s.chars().count()}");
-        println(f"{s.chars().len()}");
+        println(f"{s.chars().count()}");
         let e: String = "";
         println(f"{e.chars().count()}");
     }

@@ -1,0 +1,6 @@
+fn main() {
+            let s: String = "hello";
+            let a: i64 = s.chars().count();
+            let b: i64 = s.chars().len();
+            println(f"{a} {b}");
+        }

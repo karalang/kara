@@ -1,17 +1,19 @@
 source = "tests/interpreter/map_set.rs::offset_of_enum_field_tagged_word_layout"
 dedup_of = []
-expect = "stdout"
-exit = 0
+expect = "error"
+exit = 1
 tags = ["src:legacy-tests", "post-m1:layout"]
 class = "e"
-expected_from = "oracle"
+expected_from = "spec"
 legacy_backend = "legacy-interp"
 legacy_exit = 0
 rules = []
 backends = []
 env = {}
-bucket = "mir-gap:the expression kind `OffsetOf`"
+note = "B-2026-11-25-70 triage (probe wk49g): was expect = stdout; not in 0.8: deferred.md § #[repr(packed)], #[repr(align(N))], offset_of"
+bucket = "a:refused"
 classified_with = "9913c6855"
+deferred = "deferred.md § #[repr(packed)], #[repr(align(N))], offset_of"
 extracted_src = "b61fe638"
 model_rev = "3acf4472"
 model_src = "b61fe638"
