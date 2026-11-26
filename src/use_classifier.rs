@@ -2357,8 +2357,14 @@ impl<'a> UseClassifier<'a> {
                 for item in prefix.iter().chain(suffix) {
                     self.assign_binding_types(item, &elem);
                 }
+                // The rest borrows its middle, a `ref` into an owned array
+                // (B-2026-11-25-44).
                 if let Some(RestPattern::Bound(name, _)) = rest {
-                    self.local_types.insert(name.clone(), ty.clone());
+                    let rt = match ty {
+                        Type::Array { .. } => Type::Ref(Box::new(ty.clone())),
+                        _ => ty.clone(),
+                    };
+                    self.local_types.insert(name.clone(), rt);
                 }
             }
             (
@@ -2983,11 +2989,10 @@ impl<'a> UseClassifier<'a> {
                 rest,
                 suffix,
             } => {
-                // `..mut ref rest` borrows its sub-array (B-2026-11-25-26);
-                // a plain `..rest` binds it by value.
-                matches!(rest, Some(RestPattern::Bound(_, false)))
-                    || (matches!(rest, Some(RestPattern::Bound(_, true)))
-                        && !crate::ownership::core_rules())
+                // The rest binding borrows, never moves, even under an owned
+                // scrutinee (design.md § Slice and array patterns,
+                // B-2026-11-25-26, B-2026-11-25-44).
+                (matches!(rest, Some(RestPattern::Bound(..))) && !crate::ownership::core_rules())
                     || prefix
                         .iter()
                         .chain(suffix.iter())

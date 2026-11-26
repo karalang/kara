@@ -1,0 +1,9 @@
+source = "B-2026-11-25-44"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["design", "patterns", "ownership"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Slice and array patterns with core-semantics §3.6: in `let [x, ..rest] = a`, `x` moves element 0 out and the rest only borrows, so `a` is partly moved and a whole use of it is refused at check. It passed check before and stopped at MIR's internal move check. The expected.out wording of an error pin is guidance, not a byte oracle."

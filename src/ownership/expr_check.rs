@@ -212,11 +212,10 @@ impl<'a> super::OwnershipChecker<'a> {
                 rest,
                 suffix,
             } => {
-                // `..mut ref rest` borrows its sub-array (B-2026-11-25-26);
-                // a plain `..rest` binds it by value.
-                matches!(rest, Some(RestPattern::Bound(_, false)))
-                    || (matches!(rest, Some(RestPattern::Bound(_, true)))
-                        && !crate::ownership::core_rules())
+                // The rest binding borrows, never moves, even under an owned
+                // scrutinee (design.md § Slice and array patterns,
+                // B-2026-11-25-26, B-2026-11-25-44).
+                (matches!(rest, Some(RestPattern::Bound(..))) && !crate::ownership::core_rules())
                     || prefix
                         .iter()
                         .chain(suffix.iter())

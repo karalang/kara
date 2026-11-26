@@ -6,4 +6,4 @@ tags = ["design", "patterns", "ownership", "drop"]
 expected_from = "spec"
 backends = []
 env = {}
-note = "B-2026-11-17-30: design.md § Slice and array patterns: a pattern over an owned Array[T, N] destructures like a tuple, so a plain binding moves its element out, and a named rest over an owned array is an Array[T, K] that takes its elements. core-semantics drop order: locals in reverse declaration order, a partly moved array drops only what it still holds, first to last."
+note = "B-2026-11-17-30: design.md § Slice and array patterns: a pattern over an owned Array[T, N] destructures like a tuple, so a plain binding moves its element out, and a named rest borrows its middle, never moves (a `ref Array[T, K]`, review ruling on B-2026-11-25-44), so the elements stay the array's. core-semantics drop order: locals in reverse declaration order, a partly moved array drops only what it still holds, first to last."

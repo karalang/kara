@@ -1,0 +1,9 @@
+source = "B-2026-11-25-44"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "patterns", "ownership", "drop"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "design.md § Slice and array patterns, as review ruled on B-2026-11-25-44: the rest binding borrows, never moves, even under an owned scrutinee, so over an owned array `..rest` is a `ref Array[T, K]` into it. With nothing moved the array is whole after the match and moves on; with the ends moved out, x and y drop as locals (reverse order of introduction) and the middle drops with the array, first to last (core-semantics §7.2, §7.8, §7.9). The rest took its elements before: `drop 2, drop 3` printed at the arm's end and a later `let b = a` stopped at MIR's internal move check."

@@ -27,6 +27,16 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   value `Type.m`. 0.8.1 let any module call any of them, so a library could
   not keep a helper method out of its API. No program in the corpus called
   one across that line (B-2026-11-25-54).
+- A named `..rest` over an owned `Array[T, N]` borrows its middle, a
+  `ref Array[T, K]` into the array, as design.md § Slice and array
+  patterns says the rest binding does ("borrows, never moves"); it was an
+  `Array[T, K]` that took the elements. So `rest` can no longer be passed
+  to an `own` parameter or outlive the array, and the elements it covers
+  now drop with the array, in index order, after the bindings beside them
+  (`[ref x, ..rest]` printed `drop 2, drop 3` at the arm's end, before
+  `drop 1`). A later use of the array, which then stopped with MIR's
+  internal move check, runs when nothing was moved out and is refused at
+  `karac check` when an element was (B-2026-11-25-44).
 - Two `par` branches that each sort, clone or dedup a `Vec` of a program
   type, or file or look up its key in a `Map` or `Set`, conflict when that
   type's `cmp`, `clone`, `eq` or `hash` writes a resource: the branch is

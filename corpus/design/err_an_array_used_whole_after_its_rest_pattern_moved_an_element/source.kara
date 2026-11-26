@@ -1,0 +1,18 @@
+// design.md § Slice and array patterns with core-semantics §3.6: `x`
+// moves element 0 out; the rest only borrows. The array is then partly
+// moved, so using it whole is refused (B-2026-11-25-44).
+struct D { n: i64 }
+
+impl Drop for D {
+    fn drop(mut ref self) {
+        println(f"drop {self.n}");
+    }
+}
+
+fn main() {
+    let a: Array[D, 3] = [D { n: 1 }, D { n: 2 }, D { n: 3 }];
+    let [x, ..rest] = a;
+    println(f"{x.n} {rest.len()}");
+    let b = a;
+    println(b[1].n);
+}

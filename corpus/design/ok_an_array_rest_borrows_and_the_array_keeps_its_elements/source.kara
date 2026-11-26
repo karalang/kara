@@ -1,0 +1,65 @@
+// design.md § Slice and array patterns: the rest binding borrows, never
+// moves, even under an owned scrutinee. Over an owned array `..rest` is a
+// `ref Array[T, K]` into it, so the elements it covers stay the array's
+// and drop with it, first to last, after the bindings beside them
+// (core-semantics §7.2, §7.8, §7.9; B-2026-11-25-44).
+struct D { n: i64 }
+
+impl Drop for D {
+    fn drop(mut ref self) {
+        println(f"drop {self.n}");
+    }
+}
+
+fn mk4() -> Array[D, 4] {
+    [D { n: 1 }, D { n: 2 }, D { n: 3 }, D { n: 4 }]
+}
+
+// Nothing moves: the array is whole after the match and usable.
+fn borrow_in_match() {
+    let a = mk4();
+    match a {
+        [ref x, ..rest] => println(f"arm {x.n} {rest.len()} {rest[2].n}"),
+    }
+    println("after the match");
+    let b = a;
+    println(b[1].n);
+}
+
+// The ends move out and drop as locals; the middle stays with `a`.
+fn both_ends() {
+    let a = mk4();
+    let [x, ..rest, y] = a;
+    println(f"{x.n} {rest.len()} {rest[0].n} {y.n}");
+}
+
+fn head() {
+    let a = mk4();
+    let [x, ..rest] = a;
+    println(f"{x.n} {rest[2].n}");
+}
+
+// Through a `ref Array`, a rest of non-`Copy` elements borrows too.
+fn through_ref(a: ref Array[D, 4]) -> i64 {
+    let [_, ..rest] = a;
+    rest[0].n + rest[2].n
+}
+
+fn copies() {
+    let a: Array[i64, 5] = [1, 2, 3, 4, 5];
+    let [h, ..rest, t] = a;
+    println(f"{h} {rest} {t} {rest[0] + rest[2]} {a}");
+}
+
+fn main() {
+    borrow_in_match();
+    println("--");
+    both_ends();
+    println("--");
+    head();
+    println("--");
+    let a = mk4();
+    println(through_ref(a));
+    println("--");
+    copies();
+}

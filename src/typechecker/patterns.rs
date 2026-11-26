@@ -2407,6 +2407,11 @@ impl<'a> super::TypeChecker<'a> {
                             element,
                             mutable: true,
                         },
+                        // The rest binding borrows, never moves, even under
+                        // an owned scrutinee: over an owned array it is a
+                        // `ref Array[T, K]` into it (design.md § Slice and
+                        // array patterns, review ruling, B-2026-11-25-44).
+                        (ScrutineeMode::Owned, ty @ Type::Array { .. }) => Type::Ref(Box::new(ty)),
                         (m, ty) => m.wrap_binding_ty(ty),
                     };
                     self.local_scope.insert(name.clone(), binding_ty);

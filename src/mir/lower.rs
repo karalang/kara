@@ -21480,40 +21480,28 @@ impl<'l, 'a> Bx<'l, 'a> {
                         out.push((l, rt));
                         return Ok(());
                     }
-                    // Over an array, `..rest` is the middle as an array; a
-                    // middle of `Copy` elements is copied, which reads the
-                    // same as the borrow the spec describes.
+                    // Over an array, `..rest` borrows the middle in place,
+                    // a `ref Array[T, K]`, owned scrutinee or not: the rest
+                    // binding borrows, never moves, so the elements stay
+                    // the array's and drop with it (design.md § Slice and
+                    // array patterns, B-2026-11-25-44).
                     if let Some(n) = known {
-                        // Non-`Copy` elements of an owned array move into
-                        // the `Array[T, K]` the checker types the rest as,
-                        // each from its own element, so the array is left
-                        // with none of them to drop (B-2026-11-17-30). Under
-                        // a borrowed scrutinee nothing may move: that rest
-                        // is not lowered yet.
-                        let copy = self.is_copy(elem);
-                        if !copy && (by_ref || place.is_move_forbidden()) {
-                            return self.unsupported(
-                                pat.span,
-                                "a named rest of non-`Copy` elements under a borrow",
-                            );
+                        let Some(len) = n.checked_sub(k + j) else {
+                            return self
+                                .unsupported(pat.span, "a slice pattern longer than its array");
+                        };
+                        if self.tys().is_vector(t) {
+                            return self.unsupported(pat.span, "`..rest` over a vector");
                         }
-                        let ops = (k..n - j)
-                            .map(|i| {
-                                let ep = place.project(ProjElem::ConstIndex(i));
-                                if copy {
-                                    Operand::Copy(ep)
-                                } else {
-                                    Operand::Move(ep)
-                                }
-                            })
-                            .collect();
                         let at = self.tys().tcx().intern(HK::Array {
                             elem,
-                            len: crate::ty::ArrayLen::Known(n - k - j),
+                            len: crate::ty::ArrayLen::Known(len),
                         });
-                        let l = self.user_local(name, at, pat.id);
-                        self.assign(l, Rvalue::Aggregate(AggregateKind::Array(elem), ops));
-                        out.push((l, at));
+                        let rt = self.tys().tcx().reference(at, false);
+                        let l = self.user_local(name, rt, pat.id);
+                        let mid = place.project(ProjElem::Subarray { from: k, len });
+                        self.assign(l, Rvalue::Ref(BorrowKind::Shared, mid));
+                        out.push((l, rt));
                         return Ok(());
                     }
                     // `..rest` is a view of the middle, `[k, len - j)`.

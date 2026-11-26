@@ -1814,7 +1814,7 @@ fn describe(items: Slice[i64]) -> String {
 
 **The rest binding borrows, never moves**, even under an owned scrutinee; it is valid for the arm's body. An `Array[T, N]` is stored inline, so moving out a contiguous range would leave a half-initialized array.
 - On `Vec[T]` and `Slice[T]`, `..rest` binds a `Slice[T]`: a view, with no copy and no allocation. Written `..mut ref rest` against a mutable place (a `let mut` owner, a `mut ref` or a `mut Slice[T]`), it binds a `mut Slice[T]`.
-- On `Array[T, N]` with a k-element head and a j-element tail, `..rest` covers `K = N − k − j` elements, computed by the same constant arithmetic as const generics. If `K < 0`, the pattern is rejected with a length-mismatch diagnostic. Over an owned array, `..rest` is an `Array[T, K]`; over a `ref Array[T, N]`, a `ref Array[T, K]`; and written `..mut ref rest` over a `mut ref Array[T, N]`, a `mut ref Array[T, K]`.
+- On `Array[T, N]` with a k-element head and a j-element tail, `..rest` covers `K = N − k − j` elements, computed by the same constant arithmetic as const generics. If `K < 0`, the pattern is rejected with a length-mismatch diagnostic. Over an owned array or a `ref Array[T, N]`, `..rest` is a `ref Array[T, K]` into it, and the elements it covers stay the array's, dropping with it; written `..mut ref rest` over a `let mut` array or a `mut ref Array[T, N]`, it is a `mut ref Array[T, K]`.
 
 **At most one rest marker per slice pattern.** `[a, .., b, .., c]` is a parse error, because the element positions would be ambiguous. Nested slice patterns (`[[..a, b], [c, ..d]]` over `Array[Array[T, M], N]`) each have their own single rest marker.
 

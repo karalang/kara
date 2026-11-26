@@ -15,10 +15,10 @@ after the match
 drop 2
 --
 1 2 2
-drop 2
-drop 3
 drop 1
 after the match
+drop 2
+drop 3
 --
 took 1
 drop 1

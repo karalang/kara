@@ -22952,15 +22952,13 @@ fn test_slice_pattern_array_over_arity_rejected() {
 
 #[test]
 fn test_slice_pattern_array_rest_with_arithmetic_remainder() {
-    // `..rest` over Array[i64, 5] with 2 prefix + 1 suffix → rest is
-    // Array[i64, 2]. The rest binding is used in the arm body; if its type
-    // were wrong, the arithmetic call wouldn't typecheck. We assert a
-    // typing rule indirectly: the arm body compiles iff rest has the
-    // expected Array[_, 2] type.
+    // `..rest` over Array[i64, 5] with 2 prefix + 1 suffix → rest is a
+    // `ref Array[i64, 2]` into it (the rest binding borrows, never moves,
+    // B-2026-11-25-44). The annotated `let` pins the length.
     typecheck_ok(
-        "fn f(arr: Array[i64, 5]) -> Array[i64, 2] { \
+        "fn f(arr: Array[i64, 5]) -> i64 { \
          match arr { \
-         [_, _, ..rest, _] => rest, \
+         [_, _, ..rest, _] => { let r: ref Array[i64, 2] = rest; r[0] + r[1] }, \
          } \
          }",
     );
@@ -23306,14 +23304,15 @@ fn test_match_ref_array_slice_rest_is_ref_array() {
 }
 
 #[test]
-fn test_match_owned_array_slice_rest_is_owned_array() {
-    // Sanity: owned `Array[T, N]` scrutinees keep the prior path —
-    // the rest stays `Array[T, K]`, not a ref.
+fn test_match_owned_array_slice_rest_is_a_ref_array() {
+    // An owned `Array[T, N]` scrutinee's rest borrows its middle too: a
+    // `ref Array[T, K]`, as design.md § Slice and array patterns says
+    // ("borrows, never moves", review ruling on B-2026-11-25-44).
     typecheck_ok(
-        "fn use_owned_array(a: Array[i64, 3]) -> i64 { 0 }
+        "fn use_ref_array(a: ref Array[i64, 3]) -> i64 { 0 }
          fn g(a: Array[i64, 5]) -> i64 {
              match a {
-                 [_, ..rest, _] => use_owned_array(rest),
+                 [_, ..rest, _] => use_ref_array(rest),
              }
          }
          fn main() { }",

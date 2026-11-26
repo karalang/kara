@@ -766,8 +766,14 @@ impl super::OwnershipChecker<'_> {
                 for item in prefix.iter().chain(suffix) {
                     self.record_let_binding_types(item, &elem);
                 }
+                // The rest borrows its middle, a `ref` into an owned array
+                // (B-2026-11-25-44).
                 if let Some(RestPattern::Bound(name, _)) = rest {
-                    self.binding_types.insert(name.clone(), ty.clone());
+                    let rt = match ty {
+                        Type::Array { .. } => Type::Ref(Box::new(ty.clone())),
+                        _ => ty.clone(),
+                    };
+                    self.binding_types.insert(name.clone(), rt);
                 }
             }
             _ => {
