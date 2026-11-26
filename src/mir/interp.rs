@@ -17505,15 +17505,18 @@ impl<'a> Interp<'a> {
         if let (Value::Agg(a), Value::Agg(b)) = (&x, &y) {
             if let (true, TyKind::Array(et, _)) = (self.tys.is_vector(ty), self.tys.kind(ty)) {
                 // A lane vector's operators work lane by lane; a comparison
-                // gives a lane mask.
+                // gives a lane mask. Integer lanes wrap at the lane width,
+                // the one exception to the overflow trap (deferred.md §
+                // Portable SIMD, "Integer lane arithmetic WRAPS"), so a
+                // lane's overflow is its wrapped value and never reaches the
+                // unchecked-op guard (B-2026-11-26-73), as the compiled
+                // vector op wraps.
                 let mut lanes = Vec::with_capacity(a.len());
-                let mut overflow = false;
                 for (p, q) in a.iter().zip(b) {
-                    let (v, of) = self.binop(op, p.clone(), q.clone(), et)?;
-                    overflow |= of;
+                    let (v, _wrapped) = self.binop(op, p.clone(), q.clone(), et)?;
                     lanes.push(v);
                 }
-                return Ok((Value::Agg(lanes), overflow));
+                return Ok((Value::Agg(lanes), false));
             }
         }
         match (x, y) {

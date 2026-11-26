@@ -693,6 +693,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   makes `mid` an `i32`, as a later argument or return would, where it used to
   be refused as a narrowing `i64` (B-2026-11-26-1).
 
+- The interpreter wraps integer `Vector[T, N]` lane arithmetic at the lane
+  width, as compiled code and the spec do (`Vector[u8, 4].splat(200)` added
+  to itself is 144), where it stopped on an internal unchecked-overflow
+  error (B-2026-11-26-73).
+
 - `karac explain <file>.<fn>` on a function in a recursive group, or one
   that calls itself, adds a `Fixpoint:` section: the group, then the
   chain `φ0 = ∅`, `φ1`, … up to `φ*`, each step with the atoms it added
