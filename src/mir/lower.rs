@@ -25744,7 +25744,8 @@ impl<'l, 'a> Bx<'l, 'a> {
             // `Vec.new()`, `String.new()`, `Map.new()`, `Vec.with_capacity(n)`:
             // a library constructor, named after the type it builds.
             // `String.from(x)`: a literal is passed as the constant; a
-            // `String` value is already the result.
+            // `String` temporary is already the result, and a `String`
+            // place is copied.
             // `String.from('Z')`: the one-character string.
             "String.from"
                 if args.len() == 1
@@ -25768,6 +25769,23 @@ impl<'l, 'a> Bx<'l, 'a> {
                         self.call_native(name, vec![c], dest);
                         Ok(())
                     }
+                    // A `String` that has a holder (a local, a field, the
+                    // item of a `for` over a collection) is lent at the
+                    // `Str` slot and copied, as at any other call: it is
+                    // neither moved nor, when borrowed, refused
+                    // (design.md §9 `impl From[Str] for String`,
+                    // B-2026-11-26-5).
+                    _ if self.is_place(&args[0].value) => {
+                        self.note_eval_order(&args[0].value);
+                        let t = self.place_type(&dest);
+                        let p = self.expr_place(&args[0].value, false)?;
+                        let rt = self.tys().tcx().reference(t, false);
+                        let r = self.temp(rt);
+                        self.assign(r, Rvalue::Ref(BorrowKind::Shared, p));
+                        self.call_native(name, vec![Operand::Move(Place::local(r))], dest);
+                        Ok(())
+                    }
+                    // A `String` the argument itself makes is the result.
                     _ => self.expr_into(&args[0].value, dest),
                 }
             }

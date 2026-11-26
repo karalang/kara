@@ -5352,6 +5352,11 @@ pub(crate) fn collect_callee_param_modes(
         "String.from_utf8_lossy".to_string(),
         vec![OwnershipMode::Ref],
     );
+    // `String.from(s: Str)` (design.md §9 Conversion traits lists only
+    // `impl From[Str] for String`): a `String` argument is lent at the
+    // `Str` slot and copied, as at any other call, so the caller keeps it
+    // (B-2026-11-26-5).
+    map.insert("String.from".to_string(), vec![OwnershipMode::Ref]);
     // `CString.from_bytes` likewise (B-2026-11-06-32).
     map.insert("CString.from_bytes".to_string(), vec![OwnershipMode::Ref]);
     // `with_provider[R](p, f)` moves `p` into the call, which owns it
