@@ -10,7 +10,7 @@ The unit is the entry, not the sentence: an entry makes one claim about 0.8, tha
 - **SUBSET**: a stated 0.8 subset, which holds as stated. **SHIPPED**: out of date, the feature is in 0.8 and the text belongs in design.md (or is already there). **TOOL ABSENT**: a `karac` command or flag that does not exist, refused as unknown.
 - **NO SURFACE**: design rationale, compiler internals, runtime strategy, a hosted product or an open question: nothing a 0.8 program can write. **DECLINED**: a permanent omission. **TRACK**: a track heading. **SUB**: part of the entry above it.
 
-Counts over the 213 entries (after the 2026-11-26 review ruling on experimental status, B-2026-11-25-65 and -68): NO SURFACE 94, DEFERRED REFUSED 70, SHIPPED 15, SUBSET 8, EXPERIMENTAL 8, TOOL ABSENT 6, DECLINED 5, DEFERRED ACCEPTED 4, DEFERRED 3.
+Counts over the 213 entries (after the 2026-11-26 review rulings, B-2026-11-25-65, -67 and -68): NO SURFACE 94, DEFERRED REFUSED 71, SHIPPED 15, SUBSET 8, EXPERIMENTAL 8, TOOL ABSENT 6, DECLINED 5, DEFERRED ACCEPTED 3, DEFERRED 3.
 
 Corpus caveat: the corpus backends `__mir-run` and `__mir-llvm-run` do not apply `karac check`, so a program every user lane refuses can still pass there (B-2026-11-25-70). Every claim below was measured on `karac check`, `run --interp` / `__mir-run` and `build`.
 
@@ -119,7 +119,7 @@ Corpus caveat: the corpus backends `__mir-run` and `__mir-llvm-run` do not apply
 | 2573 | Conditional Compilation Beyond Targets | NO SURFACE |  | Beyond `#[cfg]`; nothing to write. |
 | 2590 | `#[no_std]` / Bare Metal Support | DEFERRED REFUSED | no_std_refused | E_ATTRIBUTE_DEFERRED, naming this section (B-2026-11-25-61). |
 | 2597 | Additional Compilation Targets | NO SURFACE |  | Embedded targets; `--target` refuses unknown names (design §16 cells). |
-| 2606 | Atomic Operations and Memory Ordering | DEFERRED ACCEPTED | undeclared_atomic_fetch_or_runs, atomic_ordering_argument_is_deprecated, intrinsic_fence_reachable_from_a_program | library/concurrency.md says `fetch_and`, `fetch_or`, fences and weaker orderings are this track. In 0.8 `fetch_and` / `fetch_or` are accepted and run (2 corpus programs), `fence(MemoryOrdering.SeqCst)` is callable from a user program (intrinsic_fence_reachable_from_a_program), and an ordering argument is the documented deprecated form (accepted, stripped). Decision for review: promote fetch_and/fetch_or to concurrency.md (SeqCst, already correct) or refuse them. B-2026-11-25-67. |
+| 2606 | Atomic Operations and Memory Ordering | DEFERRED REFUSED | atomic_fetch_or_is_v1, atomic_ordering_argument_is_deprecated, intrinsic_fence_refused | `fetch_and`, `fetch_or` and `fetch_xor` are v1 now, in library/concurrency.md beside the other `Atomic` ops (review ruling 2026-11-26), and this entry keeps weaker orderings and fences. A trailing ordering argument is the deprecated form `karac fix` deletes. A program's `fence(..)` / `compiler_fence(..)`, and the other prelude intrinsics, are E_INTRINSIC_STDLIB_ONLY (design.md § Intrinsics). B-2026-11-25-67. |
 | 2630 | #### Methods | SUB |  | Part of “Atomic Operations and Memory Ordering”; covered by that row. |
 | 2640 | #### Memory Ordering | SUB |  | Part of “Atomic Operations and Memory Ordering”; covered by that row. |
 | 2654 | #### Fences | SUB |  | Part of “Atomic Operations and Memory Ordering”; covered by that row. |

@@ -6,30 +6,30 @@ fn main() {
     // Safety: every pointer addresses a live owned local for the duration of use.
     unsafe {
         let pw: *mut i32 = ptr.mut(r.status);
-        volatile_write(pw, 99);
+        pw.write_volatile(99);
         let pr: *const i32 = ptr.const(r.status);
-        println(volatile_read(pr));
+        println(pr.read_volatile());
     }
     let mut b: Block = Block { inner: Reg { status: 1, control: 2 }, id: 7 };
     unsafe {
         let pw: *mut i32 = ptr.mut(b.inner.control);
-        volatile_write(pw, 500);
+        pw.write_volatile(500);
         let pr: *const i32 = ptr.const(b.inner.control);
-        println(volatile_read(pr));
+        println(pr.read_volatile());
     }
     let mut pair: (i32, i32) = (11, 22);
     unsafe {
         let pw: *mut i32 = ptr.mut(pair.1);
-        volatile_write(pw, 222);
+        pw.write_volatile(222);
         let pr: *const i32 = ptr.const(pair.1);
-        println(volatile_read(pr));
+        println(pr.read_volatile());
     }
     let mut v: Vec[i32] = Vec.new();
     v.push(3);
     v.push(4);
     unsafe {
         let pw: *mut i32 = ptr.mut(v[1]);
-        volatile_write(pw, 444);
+        pw.write_volatile(444);
     }
     println(v[1]);
 }

@@ -1529,6 +1529,7 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
         phased("install", "karac install"),
     ),
     ("E_INTERIOR_NUL_IN_C_STRING", parse("Syntax")),
+    ("E_INTRINSIC_STDLIB_ONLY", ty("PrivateMethodAccess", None)),
     (
         "E_INVALID_REFINEMENT_PREDICATE",
         ty("InvalidRefinementPredicate", None),
@@ -3235,6 +3236,19 @@ const CODE_PROSE: &[(&str, &str)] = &[
          `ptr.with_addr(p, addr)`. To turn back into a pointer an address \
          that was exposed earlier, use `unsafe { ptr.from_exposed(addr) }` \
          with the pointer type annotated.",
+    ),
+    (
+        "E_INTRINSIC_STDLIB_ONLY",
+        "The intrinsics (`std.intrinsics`: `fence`, `compiler_fence`, \
+         `volatile_read`, `volatile_write`, `forget`, `ref_eq`) are the \
+         standard library's own, and only the standard library may call them \
+         (design.md § Intrinsics). A program uses the documented surface \
+         instead: `a.ref_eq(b)` on a `shared`, `sync` or `frozen` handle \
+         (`karac fix` rewrites the free call), `Atomic`, whose every \
+         operation is sequentially consistent, for ordering, and \
+         `VolatileCell[T]` for a memory-mapped register. Skipping a drop \
+         (`forget`) is deferred with the exported C ABI.",
+
     ),
     (
         "E_LAYOUT_QUERY_TAKES_NO_ARGS",

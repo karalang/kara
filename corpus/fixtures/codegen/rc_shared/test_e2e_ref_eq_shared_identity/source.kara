@@ -3,6 +3,6 @@ fn main() {
 let a = N { v: 1 };
 let b = a;
 let c = N { v: 1 };
-println(ref_eq(a, b));
-println(ref_eq(a, c));
+println(a.ref_eq(b));
+println(a.ref_eq(c));
 }

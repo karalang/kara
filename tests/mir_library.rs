@@ -1361,28 +1361,23 @@ fn the_mir_backend_does_not_reach_into_legacy_codegen() {
     );
 }
 
-/// `forget(value)` takes the value and runs no drop for it, nor for what
-/// it owns, which stays allocated without counting as a leak at exit
-/// (runtime/stdlib/intrinsics.kara, B-2026-10-22-38).
+/// `forget(value)` takes the value and runs no drop for it
+/// (runtime/stdlib/intrinsics.kara, B-2026-10-22-38), for the library's
+/// own use: a program cannot call it.
 #[test]
-fn forget_takes_the_value_and_drops_nothing() {
-    assert_runs(
-        r#"
+fn forget_is_refused_in_a_program() {
+    // `forget` is the library's intrinsic (design.md § Intrinsics); a
+    // program's call is refused before it runs (B-2026-11-25-67).
+    let err = run(r#"
 struct R { id: i64 }
 impl Drop for R { fn drop(mut ref self) { println(f"drop {self.id}") } }
 fn main() {
     let a = R { id: 1 };
-    let b = R { id: 2 };
     forget(a);
-    println("after forget");
-    let v = vec![R { id: 3 }, R { id: 4 }];
-    forget(v);
-    forget(String.from("text"));
-    println("end");
 }
-"#,
-        "after forget\nend\ndrop 2\n",
-    );
+"#)
+    .expect_err("forget is refused");
+    assert!(err.contains("E_INTRINSIC_STDLIB_ONLY"), "{err}");
 }
 
 /// A sorted map's and set's bounds, ranges and lookups, by the key type's

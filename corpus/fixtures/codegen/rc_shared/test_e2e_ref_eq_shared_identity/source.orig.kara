@@ -1,0 +1,8 @@
+shared struct N { v: i64 }
+fn main() {
+let a = N { v: 1 };
+let b = a;
+let c = N { v: 1 };
+println(ref_eq(a, b));
+println(ref_eq(a, c));
+}

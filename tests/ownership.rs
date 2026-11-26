@@ -133,10 +133,11 @@ fn test_forget_consumes_argument() {
 }
 
 #[test]
-fn test_forget_clean_program_ok() {
-    // A well-formed `forget` use — consume once, never touch again —
-    // passes ownership checking with no spurious diagnostics.
-    ownership_ok(
+fn test_forget_is_refused_in_a_program_and_its_only_error() {
+    // `forget` is the standard library's intrinsic (design.md §
+    // Intrinsics, B-2026-11-25-67): a program's call is E_INTRINSIC_STDLIB_ONLY,
+    // and a well-formed use (consume once, never touch again) draws nothing else.
+    let parsed = parse(
         "struct G { id: i64 }\n\
          impl Drop for G { fn drop(mut ref self) { } }\n\
          fn main() {\n\
@@ -144,6 +145,12 @@ fn test_forget_clean_program_ok() {
              forget(g);\n\
          }",
     );
+    let resolved = resolve(&parsed.program);
+    let typed = typecheck(&parsed.program, &resolved);
+    let msgs: Vec<String> = typed.errors.iter().map(|e| e.to_string()).collect();
+    assert_eq!(msgs.len(), 1, "{msgs:?}");
+    assert!(msgs[0].contains("E_INTRINSIC_STDLIB_ONLY"), "{msgs:?}");
+    assert!(ownershipcheck(&parsed.program, &typed).errors.is_empty());
 }
 
 #[test]

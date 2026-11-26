@@ -6493,7 +6493,7 @@ The stdlib is written in Kāra and layered `core` / `alloc` / `std` ([library/RE
 - I/O.
 
 **Rules.**
-- The intrinsics live in the module `std.intrinsics`. Only standard-library packages may import it; an import from any other package is an error.
+- The intrinsics live in the module `std.intrinsics`. Only standard-library packages may import it; an import from any other package is an error. The few the prelude declares for the library (`fence`, `compiler_fence`, `volatile_read`, `volatile_write`, `forget`, `ref_eq`) are refused in a program the same way, `E_INTRINSIC_STDLIB_ONLY`, unless the program declares its own function of that name.
 - Intrinsics that read or write raw memory are `unsafe fn`s, so each call sits in an `unsafe` block under the rules above.
 - `#[compiler_builtin]` marks a standard-library declaration whose calls the compiler implements. It is rejected outside the standard library.
 

@@ -1072,17 +1072,15 @@ fn main() {
 }
 "#;
 
-/// `forget(x)` takes `x` and runs no drop on both backends
-/// (B-2026-10-22-38).
+/// `forget(x)` is a library intrinsic (`std.intrinsics`), so a program's
+/// call of it is refused before either backend runs it (B-2026-11-25-67;
+/// it has no user surface yet: deferred.md § FFI unions and exported C
+/// ABI). It once ran here and dropped nothing (B-2026-10-22-38).
 #[test]
-fn forget_drops_nothing_on_both_backends() {
-    agrees(FORGET, "after forget\nend\ndrop 2\n", 0);
-}
-
-/// What `forget` leaks by design is not reported as a leak by the ASan lane.
-#[test]
-fn forget_is_clean_under_asan() {
-    if let Some(out) = under_asan(FORGET) {
-        assert_eq!(out, "after forget\nend\ndrop 2\n");
-    }
+fn forget_is_refused_in_a_program_on_both_backends() {
+    let err = karac::mir::lower::run_source(FORGET).expect_err("forget was accepted");
+    assert!(
+        err.contains("error[E_INTRINSIC_STDLIB_ONLY]: `forget`"),
+        "{err}"
+    );
 }

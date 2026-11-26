@@ -4,9 +4,9 @@ fn bump(r: mut ref Reg) -> i32 {
     // Safety: r is a live borrow of the caller's Reg.
     unsafe {
         let pw: *mut i32 = ptr.mut(r.control);
-        volatile_write(pw, 777);
+        pw.write_volatile(777);
         let pr: *const i32 = ptr.const(r.control);
-        volatile_read(pr)
+        pr.read_volatile()
     }
 }
 fn main() {
@@ -16,6 +16,6 @@ fn main() {
     // Safety: r is still live here.
     unsafe {
         let pr: *const i32 = ptr.const(r.control);
-        println(volatile_read(pr));
+        println(pr.read_volatile());
     }
 }

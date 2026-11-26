@@ -1,1 +1,1 @@
-fn main() { println(ref_eq(1, 2)); }
+fn main() { println(1.ref_eq(2)); }

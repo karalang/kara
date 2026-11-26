@@ -807,6 +807,41 @@ fn is_postfix_text(src: &[u8], from: usize, to: usize) -> bool {
 }
 
 /// The `ref_eq(a, b)` call around the argument at `arg` as `a == b`.
+/// A program's free `ref_eq(a, b)`, which is the library's intrinsic, as the
+/// method every handle has, `a.ref_eq(b)` (E_INTRINSIC_STDLIB_ONLY,
+/// B-2026-11-25-67). `call` is the whole call.
+fn free_ref_eq_as_method(src: &[u8], call: Span) -> Option<Vec<TextEdit>> {
+    if !word_at(src, call.offset, "ref_eq") {
+        return None;
+    }
+    let open = trim_fwd(src, call.offset + "ref_eq".len());
+    if src.get(open) != Some(&b'(') {
+        return None;
+    }
+    let close = matching(src, open)?;
+    let comma = find_top(src, open + 1, close, |s, i| s[i] == b',')?;
+    if find_top(src, comma + 1, close, |s, i| s[i] == b',').is_some() {
+        return None;
+    }
+    let (af, at) = (trim_fwd(src, open + 1), trim_back(src, comma));
+    let (bf, bt) = (trim_fwd(src, comma + 1), trim_back(src, close));
+    let a = std::str::from_utf8(src.get(af..at)?).ok()?;
+    let b = std::str::from_utf8(src.get(bf..bt)?).ok()?;
+    if a.is_empty() || b.is_empty() {
+        return None;
+    }
+    let receiver = if is_postfix_text(src, af, at) {
+        a.to_string()
+    } else {
+        format!("({a})")
+    };
+    Some(vec![edit(
+        call.offset,
+        close + 1 - call.offset,
+        &format!("{receiver}.ref_eq({b})"),
+    )])
+}
+
 fn ref_eq_as_eq(src: &[u8], arg: Span) -> Option<Vec<TextEdit>> {
     // The call's `(`: the first one back from the argument nothing closes.
     let mut depth = 0usize;
@@ -1398,6 +1433,9 @@ fn typed_fix(src: &[u8], e: &TypeError) -> Option<Vec<TextEdit>> {
         "()`",
     ) {
         return type_arg_call(src, e.span.offset, &format!("{to}()"));
+    }
+    if m.starts_with("error[E_INTRINSIC_STDLIB_ONLY]: `ref_eq`") {
+        return free_ref_eq_as_method(src, e.span);
     }
     if m.contains("`ref_eq` compares reference identity of `shared` values only") {
         return ref_eq_as_eq(src, e.span);

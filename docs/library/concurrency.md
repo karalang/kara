@@ -330,4 +330,4 @@ A flag is for checking, not for waiting. A loop such as `while not ready.load() 
 
 **Atomics are effect-free.** Atomic operations contribute nothing to a function's effects. A function's effects come from the data the atomic guards, not from the atomic. Which task's operation comes first is not fixed ([design.md §13](../design.md#determinism-contract)); to order two updates across tasks, use a `Mutex` or a channel.
 
-Fences and weaker orderings are part of the systems track ([deferred.md](../deferred.md#systems)).
+Fences and weaker orderings are part of the systems track ([deferred.md](../deferred.md#systems)). The fence intrinsic the standard library uses is its own: a program that calls `fence` is refused, `E_INTRINSIC_STDLIB_ONLY` ([design.md § Intrinsics](../design.md#intrinsics)).

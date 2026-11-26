@@ -37025,11 +37025,12 @@ fn main() {
         );
     }
 
-    /// `Interner`, `LazyLock`, the fences and the HTTP client's request
-    /// builder, as legacy prints them (the request fails before any
-    /// connection: its URL does not parse).
+    /// `Interner`, `LazyLock` and the HTTP client's request builder, as
+    /// legacy prints them (the request fails before any connection: its URL
+    /// does not parse). The fences this once called are library intrinsics,
+    /// refused in a program (E_INTRINSIC_STDLIB_ONLY, B-2026-11-25-67).
     #[test]
-    fn interner_lazy_lock_fences_and_http_match_legacy() {
+    fn interner_lazy_lock_and_http_match_legacy() {
         let src = r#"
 fn build() -> i64 { println("INIT"); return 42; }
 let TABLE: LazyLock[i64] = LazyLock.new(|| build());
@@ -37041,9 +37042,6 @@ fn main() {
     println(f"{a == c} {a == b} {tab.len()}");
     println(tab.resolve(b));
     println(tab.resolve(a).len());
-    compiler_fence(MemoryOrdering.Acquire);
-    // Safety: one thread; the fence orders nothing.
-    unsafe { fence(MemoryOrdering.SeqCst); }
     println(TABLE.get());
     println(TABLE.get());
     let cl = Client.new();
@@ -38620,9 +38618,9 @@ struct Reg { status: i32, control: i32 }
 fn bump(r: mut ref Reg) -> i32 {
     unsafe {
         let pw: *mut i32 = ptr.mut(r.control);
-        volatile_write(pw, 7);
+        pw.write_volatile(7);
         let pr: *const i32 = ptr.const(r.control);
-        volatile_read(pr)
+        pr.read_volatile()
     }
 }
 fn main() {
@@ -38637,7 +38635,7 @@ fn main() {
     v.push(4);
     unsafe {
         let pw: *mut i32 = ptr.mut(v[1]);
-        volatile_write(pw, 44);
+        pw.write_volatile(44);
     }
     println(f"{got} {r.control} {b} {a[0]} {v[1]}");
     let hi: Array[u8, 4] = [104u8, 105u8, 0u8, 0u8];

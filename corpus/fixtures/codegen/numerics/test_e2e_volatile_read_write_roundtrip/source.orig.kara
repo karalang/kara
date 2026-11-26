@@ -1,0 +1,12 @@
+
+fn main() {
+    let mut cell: i32 = 7;
+    // Safety: pw / pr point to the live local `cell`.
+    let after = unsafe {
+        let pw: *mut i32 = ptr.mut(cell);
+        volatile_write(pw, 42);
+        let pr: *const i32 = ptr.const(cell);
+        volatile_read(pr)
+    };
+    println(after);
+}

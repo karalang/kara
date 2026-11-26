@@ -1262,10 +1262,72 @@ impl<'a> super::TypeChecker<'a> {
                     .extend(args.iter().map(|a| SpanKey::from_span(&a.value.span)));
             }
         }
+        let before = self.errors.len();
         let ty = self.infer_call_inner(callee, args, span);
+        // A free `ref_eq` of values that are not handles has E0232 and its
+        // `==` fix already, which is what the program meant.
+        let not_handles = self.errors[before..]
+            .iter()
+            .any(|e| e.message.contains("`ref_eq` compares reference identity"));
+        if !not_handles {
+            self.refuse_user_intrinsic(callee, args, span);
+        }
         self.method_call_ends.pop();
         self.refuse_borrowed_successors_seed(callee, args);
         ty
+    }
+
+    /// design.md § Intrinsics: the intrinsics are the standard library's
+    /// own (`std.intrinsics`), and user code reaches them only through the
+    /// safe APIs built on them. The prelude declares these as free
+    /// functions for the library's sake, so a program's call of one is
+    /// refused here (B-2026-11-25-67). A program's own `fn` of the name, or
+    /// a local, is not the intrinsic and is left alone.
+    fn refuse_user_intrinsic(&mut self, callee: &Expr, args: &[CallArg], span: &Span) {
+        let ExprKind::Identifier(name) = &callee.kind else {
+            return;
+        };
+        let hint = match name.as_str() {
+            "fence" | "compiler_fence" => {
+                "; every `Atomic` operation is sequentially consistent, which orders it with \
+                 every other (library/concurrency.md § Atomics), and fences come with the \
+                 weaker orderings (docs/deferred.md § Atomic Operations and Memory Ordering)"
+            }
+            "volatile_read" | "volatile_write" => {
+                "; through a raw pointer, call its own methods, `p.read_volatile()` and \
+                 `p.write_volatile(v)`, and for a memory-mapped register use a \
+                 `VolatileCell[T]` (docs/deferred.md § Volatile Memory Access (MMIO))"
+            }
+            "ref_eq" => {
+                "; compare two handles' identity with the method every `shared`, `sync` and \
+                 `frozen` handle has: `a.ref_eq(b)` (design.md § Shared types)"
+            }
+            "forget" => {
+                "; skipping a value's drop is deferred with the exported C ABI it serves \
+                 (docs/deferred.md § FFI unions and exported C ABI)"
+            }
+            _ => return,
+        };
+        if self.current_fn_stdlib_origin
+            || span.offset >= self.program.library_start.unwrap_or(usize::MAX)
+            || self.local_scope.lookup(name).is_some()
+            || !self.env.functions.contains_key(name.as_str())
+            || self.program.items.iter().any(|item| {
+                matches!(item, crate::ast::Item::Function(f) if f.name == *name && !f.stdlib_origin)
+            })
+        {
+            return;
+        }
+        let _ = args;
+        self.type_error(
+            format!(
+                "error[E_INTRINSIC_STDLIB_ONLY]: `{name}` is a standard-library intrinsic \
+                 (`std.intrinsics`), which only the standard library may call (design.md § \
+                 Intrinsics){hint}"
+            ),
+            *span,
+            TypeErrorKind::PrivateMethodAccess,
+        );
     }
 
     /// B-2026-11-15-34: `successors(Some(x), |lap| Some(lap * 2))` with `x` a

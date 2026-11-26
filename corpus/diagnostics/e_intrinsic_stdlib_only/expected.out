@@ -1,0 +1,1 @@
+ERROR at line 4: `fence` is a standard-library intrinsic (`std.intrinsics`), which only the standard library may call (design.md § Intrinsics); every `Atomic` operation is sequentially consistent, which orders it with every other (library/concurrency.md § Atomics), and fences come with the weaker orderings (docs/deferred.md § Atomic Operations and Memory Ordering)

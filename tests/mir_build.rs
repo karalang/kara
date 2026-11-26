@@ -509,9 +509,10 @@ fn mir_string_slice_panics_name_the_cut() {
     }
 }
 
-/// `a.ref_eq(b)` on a `shared` type, and the free `ref_eq(a, b)`, compare
-/// the handles, not the values, on the interpreter and compiled alike
-/// (B-2026-10-13-17).
+/// `a.ref_eq(b)` on a `shared` type compares the handles, not the values,
+/// on the interpreter and compiled alike (B-2026-10-13-17). The free
+/// `ref_eq(a, b)` is a library intrinsic a program may not call
+/// (B-2026-11-25-67), so the second line spells it as the method too.
 #[test]
 fn mir_ref_eq_compares_shared_handles() {
     const SRC: &str = "shared struct N { val: i64 }\n\
@@ -519,7 +520,7 @@ fn mir_ref_eq_compares_shared_handles() {
         fn main() {\n    let a = N { val: 1 };\n    let b = a;\n    \
         let c = N { val: 1 };\n    \
         println(f\"{a.ref_eq(b)} {a.ref_eq(c)} {same(a, c)} {same(c, c)}\");\n    \
-        println(f\"{ref_eq(a, b)} {ref_eq(a, c)}\");\n}\n";
+        println(f\"{b.ref_eq(a)} {c.ref_eq(a)}\");\n}\n";
     let want = "true false false true\ntrue false\n";
     let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
     assert_eq!(interp.output, want);

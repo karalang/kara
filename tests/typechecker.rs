@@ -6406,14 +6406,30 @@ fn raw_pointer_is_null_returns_bool() {
 // T, T)`. Peers of the `p.read_volatile()` / `p.write_volatile()` method
 // forms above.
 
+// A program's call of the free forms is E_INTRINSIC_STDLIB_ONLY (design.md §
+// Intrinsics, B-2026-11-25-67), whose hint names the method forms.
 #[test]
-fn volatile_read_infers_pointee_type() {
-    typecheck_ok("fn f(p: *const i32) -> i32 reads(Hardware) { unsafe { volatile_read(p) } }");
+fn volatile_read_free_form_is_refused_in_a_program() {
+    let errs = typecheck_errors(
+        "fn f(p: *const i32) -> i32 reads(Hardware) { unsafe { volatile_read(p) } }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("E_INTRINSIC_STDLIB_ONLY")
+                && e.message.contains("p.read_volatile()")),
+        "{errs:?}"
+    );
 }
 
 #[test]
-fn volatile_write_returns_unit() {
-    typecheck_ok("fn f(p: *mut i32) writes(Hardware) { unsafe { volatile_write(p, 5) } }");
+fn volatile_write_free_form_is_refused_in_a_program() {
+    let errs =
+        typecheck_errors("fn f(p: *mut i32) writes(Hardware) { unsafe { volatile_write(p, 5) } }");
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("E_INTRINSIC_STDLIB_ONLY")),
+        "{errs:?}"
+    );
 }
 
 #[test]
