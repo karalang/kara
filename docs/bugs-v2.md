@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 783 |
+| diagnostics | 784 |
 | false-positive | 398 |
 | missing-feature | 267 |
 | perf | 206 |
@@ -79,9 +79,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 956 |
 | mir | 348 |
 | mir-llvm | 337 |
-| cli | 320 |
+| cli | 321 |
 | parser | 165 |
-| ownership | 143 |
+| ownership | 144 |
 | runtime | 116 |
 | interp | 115 |
 | effect | 70 |
@@ -115,7 +115,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-25-31 | 2026-11-25 | mir-llvm+runtime | low | Inserting 10^5 random `i64` keys into a compiled `SortedMap` still takes about 1.5x Rust's `BTreeMap` (100 rounds: 1.5 s against 1.0 s; `entry(k).or_insert(0) += 1` 1.6 s against 0.97 s), after B-2026-11-24-41 | — |
 | B-2026-11-25-48 | 2026-11-25 | typecheck | medium | `Vec.resize`, `Vec.filled` and `fill` do not enforce their `where T: Clone` bound: a struct with no Clone impl, a `Mutex[i64]`, and an unbounded generic `T` all pass `karac check` and get field-by-field copies, so `v.resize(2, Mutex.new(1))` makes two independent mutexes (and the interpreter stops with 'Mutex[i64] has no field 0') | — |
 | B-2026-11-25-56 | 2026-11-25 | interp | medium | `karac run --interp` stops with `error[mir]: run: in main#resume ...: _3: String still owns a value at return; a drop is missing` (exit 3) when a program waits (accept, recv) inside an endless loop after its last use of an owned local; `karac run` and `karac build` serve | — |
-| B-2026-11-25-59 | 2026-11-25 | cli | low | `karac query effects` shows a private function's parameter-rooted effect as its class alone (`sends(Channel)` for `fn inner(tx: ref Sender[i64]) { tx.send(2) }`): `"roots"` comes only from a clause | — |
 | B-2026-11-25-67 | 2026-11-25 | typecheck | medium | `Atomic.fetch_and` / `fetch_or` run in 0.8 though library/concurrency.md puts them in the systems track, and a program can call the intrinsic `fence(MemoryOrdering.SeqCst)` though design.md restricts `std.intrinsics` to the standard library | — |
 | B-2026-11-25-69 | 2026-11-25 | typecheck+cli | low | `#[multiversion(baseline, "avx2")] fn addup` draws two undocumented_unsafe warnings naming the compiler's own variant `addup$avx2` (an unsafe block with no Safety comment, an unsafe fn with no Safety section), which the program cannot fix | — |
 | B-2026-11-25-71 | 2026-11-25 | parser+typecheck | low | Deferred constructs refused without naming deferred.md: let-chains, user variance markers, varargs, call-site spread, bitfields (`u1`), the `exits` effect, effect-variable bounds, `#[wrapping] { }` blocks, non-ASCII identifiers | — |
@@ -123,13 +122,11 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-6 | 2026-11-26 | typecheck | low | `v.push([1, 2].to_vec())` with `v: Vec[Vec[i32]]` is refused as a `Vec[i64]`, with no fix, though the same literal through `.to_vec()` takes `i32` from a `let` annotation or a function's parameter | — |
 | B-2026-11-26-9 | 2026-11-26 | typecheck | low | `v.push(((0..3).map(|_| 1).collect(), 5))` with `v: Vec[(Vec[i32], i32)]` is refused, "expected '(Vec[i32], i32)', found '(C, i64)'", with no fix: the element type does not reach a `collect` inside a tuple argument, though it reaches a bare `v.push(it.collect())` and a `let p: (Vec[i32], i32) = (it.collect(), 5)` | — |
 | B-2026-11-26-69 | 2026-11-26 | typecheck+runtime | low | `Array[T, N]` has no `Serialize` / `Deserialize`: the ruling is a JSON array of `N` elements, read back from exactly `N` with an error naming the expected and actual length, nested arrays alike; B-2026-11-25-49 refuses the field at the derive until then | — |
-| B-2026-11-26-70 | 2026-11-26 | ownership | medium | Native methods' argument modes disagree with collections.md: `a.union(b)` (and `intersection` / `difference`, on `Set` and `SortedSet`) and `a.cmp(b)` on `Vec` refuse a bare parameter as `b` ('cannot give away parameter'), though the same call with a local leaves `b` usable; `m.floor(k)` (`ceiling`, `lower`, `higher`) and `v.fill(x)` move their argument, though the docs give `key: K` / `val: T` | — |
-| B-2026-11-26-71 | 2026-11-26 | typecheck | low | Remainder of B-2026-11-26-17: built-in methods no family covers are still refused as values: those taking a closure (`Vec.sort_by`, `sort_by_key`, `VecDeque.retain`, `Map.merge`, `String.sorted_by`), giving a mutable view or taking the receiver (`iter_mut`, `split_at_mut`, `into_iter`), and `entry`, `get_or`, `try_insert`, `try_reserve`, `to_cstring`, `slice`, `sorted`, `concat`, `try_into_array`, `clone_from_slice`, `copy_from_slice`, `get_unchecked`, `VecDeque.extend` and the containers' `to_string` | — |
 | B-2026-11-26-73 | 2026-11-26 | interp | medium | `Vector[T, N]` lane arithmetic that wraps stops the MIR interpreter with the internal "unchecked Add overflowed; the builder must use CheckedBinaryOp", where JIT and build wrap each lane (`Vector[u8, 4].splat(200) + itself` gives 144) | — |
-| B-2026-11-26-74 | 2026-11-26 | ownership | medium | A returned closure that captures a borrowed parameter directly is refused E0515 ("an escaping closure captures `p` by move, but `p` borrows its value"), though core-semantics §5.7/§9.3 (ruled 69d8fa070) make it a view result that borrows the argument, as the same capture through an inner closure already is | — |
 | B-2026-11-26-75 | 2026-11-26 | typecheck+mir | low | `[]` as a method receiver (`let n = [].len();`, `let v: Vec[i64] = [].iter().map(|x| *x).collect();`) gets only the internal E0516 "a type that failed to check is not lowered yet", not the element-type diagnostic `let mut w = [];` gets | — |
 | B-2026-11-26-77 | 2026-11-26 | typecheck+mir | low | Three refusals with the right verdict print an internal E0516 instead of the user diagnostic: a `ref` binding of a `Vec[Vector[..]]` element as a receiver, a `break` aimed through a `with_provider` closure body, and a let-bound closure's `collect()` with no target type | — |
 | B-2026-11-26-79 | 2026-11-26 | mir-llvm | low | A hand-written element shift down a slice (`while i > 0 { p[i] = p[i - 1]; i -= 1; }`) compiles to a scalar copy with a bounds check per element, where rustc and clang turn the same loop into one `memmove` | — |
+| B-2026-11-26-80 | 2026-11-26 | ownership+cli | low | E0516 on a temporary argument that a view result borrows (`let f = make("abc".to_string(), 1);` with `make` returning a closure over its bare parameter) has the bind-it-first help but no machine-applicable fix, so `karac fix` stops on it | — |
 
 ### Relocated
 
@@ -2342,6 +2339,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-25-55 | typecheck | low | A program's own `enum Ordering` cannot be used: `Ordering.Mine` is E0236 `no associated function 'Mine' on type 'Ordering'` and a match arm is E0273… | b8c09eb363 |
 | B-2026-11-25-57 | other | low | The browser playground crate (`playground/`, karac-playground) no longer builds for `wasm32-unknown-unknown`: about 45 errors, so examples/cartograph… | c67d7c5b43 |
 | B-2026-11-25-58 | cli | low | `karac query ownership` gives a derivation reason for a mode it does not report: tangle's `eval` reports `scope` as `ref` with the reason "`scope` is… | 4b7044d37d |
+| B-2026-11-25-59 | cli | low | `karac query effects` shows a private function's parameter-rooted effect as its class alone (`sends(Channel)` for `fn inner(tx: ref Sender[i64]) { tx… | 50ff374f3c |
 | B-2026-11-25-60 | cli | low | `karac check --output=json` on a package whose module directory is not snake_case (`src/Db/`) prints a bare `{"severity":"error","phase":"build",...}… | 292116b6d9 |
 | B-2026-11-25-61 | typecheck | low | Attributes that design.md's attribute list does not have are accepted: `#[unsafe(no_mangle)]`, `#[unsafe(link_section(".."))]`, `#[used]` and `#[prof… | 4c96c893c7 |
 | B-2026-11-25-62 | typecheck | low | An `impl` that leaves out a trait's required method reports E0203 and then a spurious E0236 `no method 'name' on type 'Rock'` at the trait's default… | 277fb76bcb |
@@ -2377,7 +2375,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-66 | typecheck+mir | medium | `Some` / `Ok` / `Err` named as a function value (`parse_message(raw).map(Some)`) passed `karac check` and failed to build with "a call to this functi… | ba41739764 |
 | B-2026-11-26-67 | interp+mir-llvm | medium | The deprecated `String.slice(a, b)` checks neither bounds nor code-point boundaries: `"héllo".slice(1, 2)` gives a `Str` holding half of `é` (invalid… | d9f4226b4b |
 | B-2026-11-26-68 | typecheck | medium | A trait impl on a const-generic `Array[T, N]` never resolves: `impl[T: Tally, const N: i64] Tally for Array[T, N]` then `a.tally()` on an `Array[i64,… | 06de4537e8 |
+| B-2026-11-26-70 | ownership | medium | Native methods' argument modes disagree with collections.md: `a.union(b)` (and `intersection` / `difference`, on `Set` and `SortedSet`) and `a.cmp(b)… | f2de56079e |
+| B-2026-11-26-71 | typecheck | low | Remainder of B-2026-11-26-17: built-in methods no family covers are still refused as values: those taking a closure (`Vec.sort_by`, `sort_by_key`, `V… | f2de56079e |
 | B-2026-11-26-72 | typecheck | low | E0200's annotation suggestion for an untyped `.try_into()` writes `let r: Result[Target, _] = v.try_into();`, which does not parse (E0001 "Expected t… | c46b0b1b30 |
+| B-2026-11-26-74 | ownership | medium | A returned closure that captures a borrowed parameter directly is refused E0515 ("an escaping closure captures `p` by move, but `p` borrows its value… | adb459f87d |
 | B-2026-11-26-76 | ownership | medium | A `match` whose moving arm reassigns the scrutinee, beside an arm that leaves it untouched, makes a later use E0500 "may have been moved", though the… | b1c327f77c |
 | B-2026-11-26-78 | typecheck | low | `let w: (Vec[i32], i64) = ([1, 2].to_vec(), 3)` is refused as a `(Vec[i64], i64)`, with advice to annotate the binding that already is and no fix, th… | a648c7a471 |
 
