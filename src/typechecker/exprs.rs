@@ -5111,7 +5111,12 @@ impl<'a> super::TypeChecker<'a> {
                 self.infer_expr(count);
             }
             self.check_expr(value, element);
-            self.require_value_clone("[v; n]", element, &value.span);
+            // A derived `Default` fills an array field with `Array[d; N]`
+            // (desugar.rs), the element's default, which asks no `Clone`: its
+            // value carries the literal's own span, the field type's.
+            if (value.span.offset, value.span.length) != (expr.span.offset, expr.span.length) {
+                self.require_value_clone("[v; n]", element, &value.span);
+            }
             self.record_expr_type(&expr.span, expected);
             return expected.clone();
         }
@@ -5239,7 +5244,14 @@ impl<'a> super::TypeChecker<'a> {
                         );
                     }
                     self.check_expr(value, &element);
-                    self.require_value_clone("[v; n]", &element, &value.span);
+                    // A derived `Default` fills an array field with `Array[d; N]`
+                    // (desugar.rs), the element's default, which asks no `Clone`: its
+                    // value carries the literal's own span, the field type's.
+                    if (value.span.offset, value.span.length)
+                        != (expr.span.offset, expr.span.length)
+                    {
+                        self.require_value_clone("[v; n]", &element, &value.span);
+                    }
                     self.warn_partial_move_of_drop_struct(value, &element);
                 }
                 _ => unreachable!("gated by contextual_sequence_element_pushdown"),
@@ -22285,7 +22297,12 @@ impl<'a> super::TypeChecker<'a> {
                 } else {
                     self.infer_expr(value)
                 };
-                self.require_value_clone("[v; n]", &elem_ty, &value.span);
+                // A derived `Default` fills an array field with `Array[d; N]`
+                // (desugar.rs), the element's default, which asks no `Clone`: its
+                // value carries the literal's own span, the field type's.
+                if (value.span.offset, value.span.length) != (expr.span.offset, expr.span.length) {
+                    self.require_value_clone("[v; n]", &elem_ty, &value.span);
+                }
                 let count_ty = self.infer_expr(count);
                 // Count must be an integer type; report otherwise but keep going.
                 let count_is_int = matches!(count_ty, Type::Int(_) | Type::UInt(_) | Type::Error);

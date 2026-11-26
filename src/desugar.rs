@@ -1560,7 +1560,10 @@ fn default_field_expr(
         _ => None,
     };
     if let Some((element, size)) = array_parts {
-        let value = default_field_expr(&element, defaultable)?;
+        // The value takes the literal's span: the typechecker tells this
+        // fill from a written `[v; n]`, whose value must be `Clone`, by it.
+        let mut value = default_field_expr(&element, defaultable)?;
+        value.span = span;
         return Some(dummy(ExprKind::RepeatLiteral {
             type_name: Some("Array".to_string()),
             value: Box::new(value),
