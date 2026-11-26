@@ -58,8 +58,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 781 |
-| false-positive | 395 |
+| diagnostics | 783 |
+| false-positive | 397 |
 | missing-feature | 267 |
 | perf | 205 |
 | other | 157 |
@@ -76,12 +76,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 953 |
-| mir | 346 |
+| typecheck | 955 |
+| mir | 348 |
 | mir-llvm | 336 |
 | cli | 320 |
 | parser | 165 |
-| ownership | 141 |
+| ownership | 143 |
 | runtime | 116 |
 | interp | 115 |
 | effect | 70 |
@@ -134,6 +134,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-71 | 2026-11-26 | typecheck | low | Remainder of B-2026-11-26-17: built-in methods no family covers are still refused as values: those taking a closure (`Vec.sort_by`, `sort_by_key`, `VecDeque.retain`, `Map.merge`, `String.sorted_by`), giving a mutable view or taking the receiver (`iter_mut`, `split_at_mut`, `into_iter`), and `entry`, `get_or`, `try_insert`, `try_reserve`, `to_cstring`, `slice`, `sorted`, `concat`, `try_into_array`, `clone_from_slice`, `copy_from_slice`, `get_unchecked`, `VecDeque.extend` and the containers' `to_string` | — |
 | B-2026-11-26-72 | 2026-11-26 | typecheck | low | E0200's annotation suggestion for an untyped `.try_into()` writes `let r: Result[Target, _] = v.try_into();`, which does not parse (E0001 "Expected type, found `_`") | — |
 | B-2026-11-26-73 | 2026-11-26 | interp | medium | `Vector[T, N]` lane arithmetic that wraps stops the MIR interpreter with the internal "unchecked Add overflowed; the builder must use CheckedBinaryOp", where JIT and build wrap each lane (`Vector[u8, 4].splat(200) + itself` gives 144) | — |
+| B-2026-11-26-74 | 2026-11-26 | ownership | medium | A returned closure that captures a borrowed parameter directly is refused E0515 ("an escaping closure captures `p` by move, but `p` borrows its value"), though core-semantics §5.7/§9.3 (ruled 69d8fa070) make it a view result that borrows the argument, as the same capture through an inner closure already is | — |
+| B-2026-11-26-75 | 2026-11-26 | typecheck+mir | low | `[]` as a method receiver (`let n = [].len();`, `let v: Vec[i64] = [].iter().map(|x| *x).collect();`) gets only the internal E0516 "a type that failed to check is not lowered yet", not the element-type diagnostic `let mut w = [];` gets | — |
+| B-2026-11-26-76 | 2026-11-26 | ownership | medium | A `match` whose moving arm reassigns the scrutinee, beside an arm that leaves it untouched, makes a later use E0500 "may have been moved", though the place is initialized on every path (core-semantics §3.4) | — |
+| B-2026-11-26-77 | 2026-11-26 | typecheck+mir | low | Three refusals with the right verdict print an internal E0516 instead of the user diagnostic: a `ref` binding of a `Vec[Vector[..]]` element as a receiver, a `break` aimed through a `with_provider` closure body, and a let-bound closure's `collect()` with no target type | — |
 
 ### Relocated
 
