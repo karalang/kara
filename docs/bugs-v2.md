@@ -63,7 +63,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | missing-feature | 265 |
 | perf | 205 |
 | other | 157 |
-| soundness | 134 |
+| soundness | 135 |
 | miscompile | 110 |
 | run-vs-build | 77 |
 | crash | 71 |
@@ -78,12 +78,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 949 |
 | mir | 346 |
-| mir-llvm | 335 |
+| mir-llvm | 336 |
 | cli | 320 |
 | parser | 165 |
 | ownership | 140 |
 | runtime | 115 |
-| interp | 113 |
+| interp | 114 |
 | effect | 70 |
 | resolver | 59 |
 | other | 56 |
@@ -124,7 +124,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-25-59 | 2026-11-25 | cli | low | `karac query effects` shows a private function's parameter-rooted effect as its class alone (`sends(Channel)` for `fn inner(tx: ref Sender[i64]) { tx.send(2) }`): `"roots"` comes only from a clause | — |
 | B-2026-11-25-61 | 2026-11-25 | typecheck | low | Attributes that design.md's attribute list does not have are accepted: `#[unsafe(no_mangle)]`, `#[unsafe(link_section(".."))]`, `#[used]` and `#[profile(..)]` (deferred.md's systems and embedded tracks) check with no diagnostic, `#[profile(kernel)]` is even enforced, the `@deprecated` shorthand works, and `#[with_provider(R, e)]` on a plain `fn` is silent; design.md says the list is generated from the registry and anything else is E_UNKNOWN_ATTRIBUTE | — |
 | B-2026-11-25-62 | 2026-11-25 | typecheck | low | An `impl` that leaves out a trait's required method reports E0203 and then a spurious E0236 `no method 'name' on type 'Rock'` at the trait's default method body that calls it | — |
-| B-2026-11-25-63 | 2026-11-25 | typecheck | low | `String.slice(a, b)` is accepted and returns a `Str` view, but library/strings.md has no `slice`: the documented view is `s[a..b]` (design.md §5) and the copy is `substring`; book ch09b taught `s.slice` (now `s[a..b]`) | — |
 | B-2026-11-25-65 | 2026-11-25 | typecheck+mir+cli | medium | deferred.md's experimental status lines, and `karac explain` for their codes, say module-level cells, `offset_of` and GPU kernels are implemented and run in 0.8; `karac check` refuses a module-level `LazyLock` (E_MODULE_LET), MIR does not lower `offset_of` (E0516), and `gpu.*` is refused (E_ARCHIVED) | — |
 | B-2026-11-25-66 | 2026-11-25 | resolver | medium | Attributes of deferred features are recognised and accepted with no effect: `#[interrupt(..)]` (the function is still called directly), `#[unsafe(link_section(..))]`, `#[used]`, `#[property]` / `#[snapshot]` on a test, `#[with_provider(..)]` on a plain fn; `#[profile(..)]` is enforced while `karac explain` calls its codes deferred | — |
 | B-2026-11-25-67 | 2026-11-25 | typecheck | medium | `Atomic.fetch_and` / `fetch_or` run in 0.8 though library/concurrency.md puts them in the systems track, and a program can call the intrinsic `fence(MemoryOrdering.SeqCst)` though design.md restricts `std.intrinsics` to the standard library | — |
@@ -143,12 +142,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-9 | 2026-11-26 | typecheck | low | `v.push(((0..3).map(|_| 1).collect(), 5))` with `v: Vec[(Vec[i32], i32)]` is refused, "expected '(Vec[i32], i32)', found '(C, i64)'", with no fix: the element type does not reach a `collect` inside a tuple argument, though it reaches a bare `v.push(it.collect())` and a `let p: (Vec[i32], i32) = (it.collect(), 5)` | — |
 | B-2026-11-26-10 | 2026-11-26 | effect | medium | Three disjoint `par` shapes are refused E0418/E0517: a branch that writes one field turns its method read of another field of the same root into a mutable borrow; tuple items `p.0` / `p.1` conflict; a `let mut` closure called in ONE branch is E0517 | — |
 | B-2026-11-26-11 | 2026-11-26 | mir | medium | A nested `par` that reads a field of an outer local is refused by `karac check` with the internal E0516 "the capture of `t` is not lowered yet" | — |
-| B-2026-11-26-12 | 2026-11-26 | typecheck | low | `SortedSet` has no `clear`, though Vec, VecDeque, Map, Set, SortedMap and PriorityQueue all have one | — |
 | B-2026-11-26-13 | 2026-11-26 | typecheck | low | Remainder of B-2026-11-21-63: `(0..250).map(|i| f"{i % 10}q").collect()` into a `String` gets no fix, because the rewrite's span starts inside the `(` that opens the receiver chain, so the edit would leave a stray `(` and `karac fix`'s parse guard refuses it | — |
 | B-2026-11-26-14 | 2026-11-26 | ownership | medium | `karac check` misses the move of a place that is the FIRST branch of an `if` or `match` used as a method receiver: `if c { b1 } else { mk() }.len(); println(b1)` checks clean, and interp and JIT stop at the internal MIR move check | — |
 | B-2026-11-26-15 | 2026-11-26 | typecheck | medium | A hand-written `impl PartialOrd` (with `partial_cmp`) is refused by every `T: PartialOrd` bound: free `min`/`max`, a user `fn g[T: PartialOrd]` and an `impl[T: PartialOrd]` block | — |
 | B-2026-11-26-16 | 2026-11-26 | resolver | medium | `karac fix` copies a std import's misspelled item into correct uses (`import std.time.{Duratoin}`), leaves a std module typo unfixed or rewrites its uses (`std.tiem`, `std.randmo` to `rand.`), and loses a method typo's edit before a `(` argument (`v.psuh((1))`) | — |
 | B-2026-11-26-17 | 2026-11-26 | typecheck | low | A built-in method with no library wrapper cannot be named as a value: `let f = i64.checked_add;` and `let g = Vec.windows;` are refused (E0200 / E0236, with the closure to write), though `i64.abs`, `i64.pow`, `Vec.len`, `Vec.first` are function values | — |
+| B-2026-11-26-67 | 2026-11-26 | interp+mir-llvm | medium | The deprecated `String.slice(a, b)` checks neither bounds nor code-point boundaries: `"héllo".slice(1, 2)` gives a `Str` holding half of `é` (invalid UTF-8), and `slice(2, 9)` past the end clamps, where `s[a..b]` panics on both | — |
 
 ### Relocated
 
@@ -2356,10 +2355,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-25-55 | typecheck | low | A program's own `enum Ordering` cannot be used: `Ordering.Mine` is E0236 `no associated function 'Mine' on type 'Ordering'` and a match arm is E0273… | b8c09eb363 |
 | B-2026-11-25-58 | cli | low | `karac query ownership` gives a derivation reason for a mode it does not report: tangle's `eval` reports `scope` as `ref` with the reason "`scope` is… | 4b7044d37d |
 | B-2026-11-25-60 | cli | low | `karac check --output=json` on a package whose module directory is not snake_case (`src/Db/`) prints a bare `{"severity":"error","phase":"build",...}… | 292116b6d9 |
+| B-2026-11-25-63 | typecheck | low | `String.slice(a, b)` is accepted and returns a `Str` view, but library/strings.md has no `slice`: the documented view is `s[a..b]` (design.md §5) and… | d8f58f1ac4 |
 | B-2026-11-25-64 | typecheck+mir | medium | Remainder of B-2026-11-25-22: a `shared struct` cursor started from a `for` item whose child is read into a local first, `let next = at.left; let Som… | a04a0d1cf7 |
 | B-2026-11-25-80 | typecheck+interp+mir-llvm+runtime+cli | medium | A client request body could only be text: `RequestBuilder.body` and `Request.with_body` took a `String`, so an S3-style client could not upload a bin… | 007ec989df |
 | B-2026-11-25-81 | typecheck+interp+mir-llvm+runtime | low | `String` / `Str` had no `eq_ignore_ascii_case`, which a header-name lookup wants (Rust's `k.eq_ignore_ascii_case(name)` was refused with "no method '… | 007ec989df |
 | B-2026-11-25-82 | mir+mir-llvm | medium | `Some(ref s)` with `s: String` handed to an `Option[Str]` passes the check, then fails MIR validation ("field 0 of Option has the wrong type") on bot… | 007ec989df |
+| B-2026-11-26-12 | typecheck | low | `SortedSet` has no `clear`, though Vec, VecDeque, Map, Set, SortedMap and PriorityQueue all have one | 4f5cd67ae9 |
 | B-2026-11-26-60 | parser | low | Rust's rest pattern for a tuple variant, `F.Eq(..)`, had no fix to Kāra's `F.Eq { . | ba41739764 |
 | B-2026-11-26-61 | ownership | medium | `for (t, vs) in ref self.attrs { return Some(vs) }` in a method returning `Option[ref Vec[String]]` was refused with E0509, as if `vs` borrowed a loc… | ba41739764 |
 | B-2026-11-26-62 | typecheck | medium | A list literal in a tuple literal's `Slice` slot inside a call argument (`attrs([("objectClass", ["top", "domain"])])` for a `Slice[(Str, Slice[Str])… | ba41739764 |
