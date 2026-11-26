@@ -65,7 +65,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | other | 157 |
 | soundness | 135 |
 | miscompile | 110 |
-| run-vs-build | 77 |
+| run-vs-build | 78 |
 | crash | 71 |
 | codegen-gap | 47 |
 | use-after-free | 13 |
@@ -83,7 +83,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | parser | 165 |
 | ownership | 141 |
 | runtime | 116 |
-| interp | 114 |
+| interp | 115 |
 | effect | 70 |
 | resolver | 59 |
 | other | 56 |
@@ -137,6 +137,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-70 | 2026-11-26 | ownership | medium | Native methods' argument modes disagree with collections.md: `a.union(b)` (and `intersection` / `difference`, on `Set` and `SortedSet`) and `a.cmp(b)` on `Vec` refuse a bare parameter as `b` ('cannot give away parameter'), though the same call with a local leaves `b` usable; `m.floor(k)` (`ceiling`, `lower`, `higher`) and `v.fill(x)` move their argument, though the docs give `key: K` / `val: T` | — |
 | B-2026-11-26-71 | 2026-11-26 | typecheck | low | Remainder of B-2026-11-26-17: built-in methods no family covers are still refused as values: those taking a closure (`Vec.sort_by`, `sort_by_key`, `VecDeque.retain`, `Map.merge`, `String.sorted_by`), giving a mutable view or taking the receiver (`iter_mut`, `split_at_mut`, `into_iter`), and `entry`, `get_or`, `try_insert`, `try_reserve`, `to_cstring`, `slice`, `sorted`, `concat`, `try_into_array`, `clone_from_slice`, `copy_from_slice`, `get_unchecked`, `VecDeque.extend` and the containers' `to_string` | — |
 | B-2026-11-26-72 | 2026-11-26 | typecheck | low | E0200's annotation suggestion for an untyped `.try_into()` writes `let r: Result[Target, _] = v.try_into();`, which does not parse (E0001 "Expected type, found `_`") | — |
+| B-2026-11-26-73 | 2026-11-26 | interp | medium | `Vector[T, N]` lane arithmetic that wraps stops the MIR interpreter with the internal "unchecked Add overflowed; the builder must use CheckedBinaryOp", where JIT and build wrap each lane (`Vector[u8, 4].splat(200) + itself` gives 144) | — |
 
 ### Relocated
 
