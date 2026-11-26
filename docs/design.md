@@ -5011,6 +5011,8 @@ fn connect(a: own GraphNode, b: own GraphNode) {
 `sync struct` and `sync enum` are the cross-task form of `shared`. Their count is atomic, and no field is written `mut` ([core-semantics.md §6.3](core-semantics.md#6-sharing-c7)).
 
 ```kara,uses=d-counter-state
+import std.sync.{Atomic, Mutex};
+
 // shared struct: one task, plain count, mut fields with borrow flags
 shared struct TreeNode {
     val: i64,
@@ -5036,6 +5038,8 @@ sync struct Counter {
 **`sync enum`** follows the same rules in every variant:
 
 ```kara
+import std.sync.{Atomic, Mutex};
+
 sync enum WorkItem {
     Task { id: u64, payload: Mutex[Vec[u8]] },
     Control { cmd: Atomic[u32] },
@@ -5083,6 +5087,7 @@ The note puts each `mut` field of `bool`, `i32`, `i64`, `u32` or `u64` in an `At
 **Performance note: types that are mostly single-task.** A `sync` type pays an atomic count on every handle operation, in single-task code too. For a type that is mostly used in one task, keep the mutable state in a plain struct behind one `Mutex`: code holding the guard works on the plain struct with no atomic traffic.
 
 ```kara
+import std.sync.{Mutex};
 import std.time.{Instant};
 
 struct SessionState { request_count: i64, last_active: Instant }   // plain
@@ -5374,6 +5379,8 @@ A resource may be rooted at a value: `sends(tx)` on a channel sender, `receives(
 - a function type's parameters have no names, so its clause writes a channel effect as `sends(Channel)` or `receives(Channel)`: some channel, which the clause cannot name, so it conflicts with every channel. A stored callback that receives on its parameter is `Fn(ref Receiver[String]) -> String with receives(Channel) blocks`.
 
 ```kara
+import std.sync.{Receiver, SendError, Sender};
+
 fn produce(tx: Sender[i64], from: i64, to: i64) -> Result[(), SendError[i64]] {
     for i in from..to { tx.send(i)?; }       // sends(tx)
     Ok(())
@@ -6041,6 +6048,8 @@ help: declare `Entries` as a `sync struct`, or freeze the value if the branches 
 `Mutex[T]` and `Atomic[T]` are the two ways to mutate state that several tasks share. Their API is in [library/concurrency.md](library/concurrency.md#mutext); a [`sync` type](#sync-types) holds its mutable state in them.
 
 ```kara
+import std.sync.{Mutex};
+
 struct Totals { requests: i64, bytes: i64 }
 
 fn add(totals: Mutex[Totals], n: i64) {

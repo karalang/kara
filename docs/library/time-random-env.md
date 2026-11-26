@@ -119,6 +119,8 @@ Every method has a default body that panics, naming the resource and the method 
 A `ClockProvider` fake implements the methods the code under test reaches: `Instant.now()` reads `monotonic_ns`, `SystemTime.now()` reads `wall_ns`, and `Clock.now()` reads `now`. Nothing keeps the three consistent with each other in a fake. That is acceptable, because a method the fake leaves out panics rather than answering.
 
 ```kara
+import std.env.{EnvProvider};
+
 struct FakeEnv {}
 
 impl EnvProvider for FakeEnv {

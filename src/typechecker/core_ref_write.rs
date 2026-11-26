@@ -2026,8 +2026,12 @@ impl Walk<'_, '_> {
                 ));
                 return;
             }
-            ("Column" | "DataFrame" | "LazyExpr" | "Tensor", _) => {
-                let doc = if ty == "Tensor" {
+            (
+                "Column" | "DataFrame" | "LazyExpr" | "LazyFrame" | "LazyGroupBy" | "Tensor"
+                | "F16" | "Bf16",
+                _,
+            ) => {
+                let doc = if matches!(ty, "Tensor" | "F16" | "Bf16") {
                     "docs/deferred.md § Numerical types"
                 } else {
                     "docs/library/data.md"

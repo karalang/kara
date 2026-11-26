@@ -92,10 +92,10 @@ An ordinary program uses all three. Running with only `core` or `core` + `alloc`
 
 The prelude is the set of library names in scope in every module without an `import`. The mechanism (a synthetic lowest-precedence wildcard import that any explicit import shadows) is [design.md §4](../design.md#4-modules-and-packages). The prelude holds core types and traits only:
 
-- **Types:** `Option`, `Result`, `Ordering`, `String`, `Str`, `Array`, `Vec`, `Slice`, `Map`, `Set`, `SortedMap`, `SortedSet`, `VecDeque`, `PriorityQueue`, `Entry`. The primitive types are keywords and need no prelude.
+- **Types:** `Option`, `Result`, `Ordering`, `String`, `Str`, `Array`, `Vec`, `Slice`, `Map`, `Set`, `SortedMap`, `SortedSet`, `VecDeque`, `PriorityQueue`, `Entry`; `Never`, the type of an expression that does not return ([design.md §5](../design.md)); `ExitCode`, what `main` may return; `CStr` and `CString`, the C strings of [strings.md](strings.md). The primitive types are keywords and need no prelude.
 - **Variants:** `Some`, `None`, `Ok`, `Err`, which expressions write bare. Other enums' variants are written qualified in expressions (`Ordering.Less`, `NormalizationForm.Nfc`), and may be written bare in patterns ([design.md §5](../design.md#enums)).
 - **Traits:** the lang-item traits; `Clone`, `Default`, `From`, `Into`, `TryFrom`, `TryInto`; `PartialEq`, `Eq`, `PartialOrd`, `Ord`, `Hash`; `Debug`, `Display`; `Iterable`, `Iterator`, `IntoIterator`, `FromIterator`; `Error`.
-- **Error types:** `AnyError`, the erased error ([design.md §10](../design.md#error-and-anyerror)); and the error types the core methods return: `IoError`, `VarError`, `AllocError`, `ParseError`, `Utf8Error`.
+- **Error types:** `AnyError`, the erased error ([design.md §10](../design.md#error-and-anyerror)); and the error types the core methods return: `IoError`, `VarError`, `AllocError`, `ParseError`, `Utf8Error`, `DiscriminantError` (an integer that names no variant) and `NulError` (a `CString` built from text holding a NUL).
 - **Other types the core methods take:** `NormalizationForm`.
 - **Functions:** `print`, `println`, `eprint`, `eprintln`. Each takes any `Display` value; `print` and `println` have `writes(Stdout)` and `eprint` and `eprintln` have `writes(Stderr)`. The `ln` forms add a newline (B-2026-11-20-53). And `drop`, `fn drop[T](x: own T) {}`, which ends a value's life early: the value moves in and drops when `drop` returns, so a `BufWriter` flushes and a file closes there ([core-semantics.md §7](../core-semantics.md)). It is an ordinary function and adds no rule (B-2026-11-09-72).
 - **Builtins:** `todo`, `unreachable`, `panic`, `dbg`, `assert`, `assert_eq`, `assert_ne`. Their bodies are compiler-provided because they capture source locations or have the `Never` type; their signatures are declared in library source so documentation and tools see them. `assert`, `assert_eq` and `assert_ne` are usable everywhere, production code included ([design.md §14](../design.md#assertions)).
@@ -106,13 +106,14 @@ Everything else is imported from a `std.*` module:
 
 | Module | Items |
 |---|---|
-| `std.sync` | `channel`, `Sender`, `Receiver`, `SendError`, `TaskGroup`, `TaskHandle`, `Mutex`, `MutexGuard`, `Atomic` |
-| `std.time` | `Clock`, `Instant`, `SystemTime`, `Duration`, `sleep` |
-| `std.random`, `std.uuid` | `next_u64`; `v4` |
-| `std.io` | `File`, `OpenOptions`, `SeekFrom`, `BufReader`, `BufWriter` |
-| `std.net` | `TcpListener`, `TcpStream`, `UdpSocket`, `NetError` (and its alias `TcpError`) |
+| `std.sync` | `channel`, `Sender`, `Receiver`, `SendError`, `TaskGroup`, `TaskHandle`, `IsolatingGroup`, `TaskFailed`, `Mutex`, `MutexGuard`, `Atomic`, `MemoryOrdering`, `Semaphore`, `SemaphoreError`, `RateLimiter`, `BoundedChannel`, `OnFull`, `ChannelError`, `Channel` (the legacy handle pair); experimental: `OnceLock`, `OnceCell`, `AlreadySetError`, `LazyLock` |
+| `std.time` | `Clock`, `ClockProvider`, `Instant`, `SystemTime`, `Duration`, `sleep` |
+| `std.env` | `EnvProvider` |
+| `std.random`, `std.uuid` | `next_u64`, `RandomProvider`; `v4` |
+| `std.io` | `File`, `OpenOptions`, `SeekFrom`, `BufReader`, `BufWriter`, `Metadata`, `LinesIter`, `StdinLines`, `StdoutProvider`, `StderrProvider`, `StdinProvider`, `FileSystemProvider` |
+| `std.net` | `TcpListener`, `TcpStream`, `UdpSocket`, `NetError` (and its alias `TcpError`); HTTP: `Client`, `Request`, `RequestBuilder`, `Response`, `HttpError`, `Server`, `WebSocket`; TLS: `TlsConfig`, `TlsListener`, `TlsStream`, `TlsError` ([io.md](io.md)) |
 | `std.hash` | `Hasher`, `BuildHasher`, `SipHash13BuildHasher`, `FxBuildHasher`, `StableHash` |
-| `std.cmp` | `Reverse` ([core-types.md](core-types.md#reverse)) |
+| `std.cmp` | `Reverse` ([core-types.md](core-types.md#reverse)), `F32`, `F64` (the totally ordered float keys) |
 | `std.iter` | `DoubleEndedIterator`, `ExactSizeIterator`, `Extend`, the adapter structs |
 | `std.process` | `exit`, `Command`, `Stdio`, `Child`, `ChildStdin`, `ChildStdout`, `ChildStderr`, `ExitStatus`, `Output` |
 | `std.regex` | `Regex`, `RegexError`, `Match`, `Captures` |
@@ -125,6 +126,20 @@ Everything else is imported from a `std.*` module:
 | `std.crypto.legacy` | `sha1`, `Sha1` |
 | `std.log` | `debug`, `info`, `warn`, `error`, `init`, `Level`, `Record`, `Backend`, `Stream`, `json_backend`, `text_backend` |
 | `std.secret` | `Secret`, `ConstantTimeEq`, `Zeroize` |
-| `std.runtime` | `has_debug_metadata`, `list_tasks`, `list_par_blocks`, `TaskInfo`, `ParBlockInfo`, `WaitTarget` ([design.md § Debugger contract](../design.md#debugger-contract)) |
+| `std.arena` | `Arena`, `ArenaRef`, `ArenaCheckpoint` ([collections.md](collections.md)) |
+| `std.intern` | `Symbol`, `Interner`: an `Interner` maps each distinct string to a small `Symbol` and back, so repeated names compare and hash as integers |
+| `std.runtime` | `Runtime`, `has_debug_metadata`, `list_tasks`, `list_par_blocks`, `TaskInfo`, `ParBlockInfo`, `WaitTarget` ([design.md § Debugger contract](../design.md#debugger-contract)) |
+
+Experimental modules: implemented in 0.8 and imported like any other, but their surface may change before v1 ([deferred.md](../deferred.md)).
+
+| Module | Items |
+|---|---|
+| `std.simd` (experimental) | `Vector` |
+| `std.gpu` (experimental) | `GpuBuffer` |
+| `std.embedded` (experimental) | `VolatileCell`, `CriticalSectionGuard` |
+| `std.tracing` (experimental) | `Span`, `LogEvent`, `SpanField`, `NoOpExporter`, `StdoutExporter`, `Log` |
+| `std.protobuf` (experimental) | `ProtoBuf`, `ProtoReader` |
+
+The data track (`Tensor`, `Column`, `DataFrame`, `LazyFrame`, `LazyExpr`, `LazyGroupBy`, `Stats`, `F16`, `Bf16`) is the post-v1 `kara-data` package and is not in 0.8 ([data.md](data.md), [deferred.md § M4c](../deferred.md)).
 
 Domain names (an HTTP `Response`, a parser's `Parser` and `Span`, JSON types) live under `std.*` as well and are never in the prelude. A local binding may shadow any prelude name; a lint flags the likely-unintended cases.

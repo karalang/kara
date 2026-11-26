@@ -50,6 +50,8 @@ trait StdinProvider {
 Every method takes `mut ref self`, because each call advances the stream, and every method has a default body that panics naming the stream and the method, so a fake states only the methods it uses. Inside `with_provider[Stdout](fake, || ..)`, `print`, `println`, `stdout.print` and `stdout.println` in the closure and in every function it calls format their text, the newline included, and pass it to `fake.write`; `stdout.flush()` calls `fake.flush`. Outside an override the printers write to the process's stream directly, with no intermediate `String`. `stdin.lines()` reads the process's stdin only and is refused under a `Stdin` override. The panic path never uses a provider: a panic message, a failed `assert`, `dbg` and the runtime's own warnings go to the process's standard error even under `with_provider[Stderr]`.
 
 ```kara
+import std.io.{StdoutProvider};
+
 struct Lines { n: i64 }
 
 impl StdoutProvider for Lines {
@@ -208,6 +210,8 @@ A file updated in place opens with `File.options().read(true).write(true).open(p
 **Overriding the file system.** `FileSystem` is a program-rooted resource too ([core-semantics §14.11](../core-semantics.md)): inside `with_provider[FileSystem](fake, || ..)` every path operation above calls the fake, in any function the closure calls, and the real file system is back once the call returns. The fake implements `FileSystemProvider`, which has one method per path operation, with the parameters and result of the `fs` function of its name after a `self`: `ref self` for the ones that only look (`read_to_string`, `read_lines`, `exists`, `metadata`, `read_dir`, `read_bytes`, `read_link`, `symlink_metadata`), `mut ref self` for the rest. A method the fake does not implement panics when called, naming it. A fake that keeps files in memory:
 
 ```kara
+import std.io.{FileSystemProvider};
+
 struct MemFs { files: Map[String, String] }
 
 impl FileSystemProvider for MemFs {
@@ -274,6 +278,8 @@ The library also provides `impl From[NetError] for IoError` (B-2026-11-11-25), s
 `std.net` has TCP and UDP sockets, a TLS server and a WebSocket server (below). There is an HTTP server, which also serves HTTPS and upgrades to WebSocket, and an HTTP client, which speaks HTTPS.
 
 ```kara
+import std.net.{TcpListener, TcpStream};
+
 impl TcpListener {
     fn bind(addr: Str) -> Result[TcpListener, NetError] with sends(Network) receives(Network) blocks
     fn accept(self) -> Result[TcpStream, NetError] with receives(self) blocks suspends
@@ -347,6 +353,8 @@ type TcpError = NetError;
 **Sockets under an override** ([core semantics §14.12](../core-semantics.md)). `Network`'s bound is `NetworkProvider`, whose methods name a socket by an `i64` id of the fake's choosing, each with a default that panics, so a fake states only the ones it uses:
 
 ```kara
+import std.net.{HttpError, Request, Response};
+
 trait NetworkProvider {
     fn send(mut ref self, req: Request) -> Result[Response, HttpError]
     fn bind(mut ref self, addr: Str) -> Result[i64, NetError]
@@ -364,6 +372,8 @@ Inside `with_provider[Network](fake, || ..)` (or a `providers { Network => fake 
 ### TLS server
 
 ```kara
+import std.net.{TlsListener, TlsStream};
+
 impl TlsListener {
     fn bind_tls(addr: Str, cert_pem: Str, key_pem: Str) -> Result[TlsListener, NetError] with sends(Network) receives(Network) blocks
     fn accept(self) -> Result[TlsStream, NetError] with receives(self) blocks suspends
@@ -390,6 +400,8 @@ A failed connection fails with `NetError.Tls`, and every later call on it fails 
 ### WebSocket
 
 ```kara
+import std.net.{TcpListener, TlsListener, WebSocket};
+
 impl WebSocket {
     fn accept(listener: TcpListener) -> Result[WebSocket, NetError] with receives(listener) blocks suspends
     fn accept_tls(listener: TlsListener) -> Result[WebSocket, NetError] with receives(listener) blocks suspends
@@ -423,6 +435,8 @@ The sends write one unfragmented frame each; a server's frames are not masked. A
 The servers speak HTTP/1.1 with keep-alive (and WebSocket through `serve_ws`); HTTP/2 on the server is deferred ([deferred.md § Server-side HTTP/2](../deferred.md#server-side-http2)).
 
 ```kara
+import std.net.{HttpError, Request, Response, WebSocket};
+
 impl Server {
     fn serve(addr: own String, handler: Fn(Request) -> Response + CrossTask) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends
     fn serve_tls(addr: own String, cert_pem: own String, key_pem: own String, handler: Fn(Request) -> Response + CrossTask) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends
@@ -459,6 +473,9 @@ Each connection is served by a task of its own, in an isolating group ([core sem
 Since every connection's task calls the handler, the handler must be `CrossTask` ([core semantics §6.3](../core-semantics.md#6-sharing-c7)), and so must everything it captures: state that requests share is a `sync` type, never a `shared` one, even when only one worker runs the tasks. A store the requests change keeps its plain state behind a `Mutex`, and each request holds the lock while it reads or writes:
 
 ```kara,norun
+import std.net.{Request, Response, Server};
+import std.sync.{Mutex};
+
 struct Counts { hits: Map[String, i64] }
 sync struct Store { state: Mutex[Counts] }
 
@@ -484,6 +501,8 @@ fn main() {
 The client negotiates HTTP/2 through ALPN over `https://`, falling back to HTTP/1.1, and speaks HTTP/1.1 over `http://`.
 
 ```kara
+import std.net.{Client, HttpError, RequestBuilder, Response};
+
 impl Client {
     fn new() -> Client
     fn get(self, url: own String) -> Result[Response, HttpError] with sends(Network) receives(Network) blocks suspends
@@ -539,6 +558,8 @@ Exit codes and `main`'s return value are in [design.md §10](../design.md#the-ma
 ### Running programs
 
 ```kara
+import std.process.{Child, Command, ExitStatus, Stdio};
+
 impl Command {
     fn new(program: Str) -> Command
     fn arg(own self, a: Str) -> Command
@@ -573,6 +594,9 @@ for w in words {
 `spawn` fails with `NotFound` when there is no such program or working directory, `PermissionDenied` when the program cannot be run, and nothing else: on `wasm_wasi`, which cannot start processes, a program that spawns one is refused at compile time ([design.md §16](../design.md#resources-each-target-provides)). `status` and `output` fail the same ways. They never fail because the program did: a non-zero exit is an `Ok` status.
 
 ```kara
+import std.io.{File};
+import std.process.{ChildStderr, ChildStdout, Stdio};
+
 impl Stdio {
     fn inherit() -> Stdio
     fn null() -> Stdio
@@ -588,6 +612,8 @@ impl Stdio {
 `Stdio` is a type with constructors rather than an enum, so it can gain kinds later without breaking a `match`. Before, it was an enum: `karac fix` rewrites `Stdio.Inherit`, `Stdio.Null` and `Stdio.Piped` to the constructors.
 
 ```kara
+import std.process.{ChildStderr, ChildStdin, ChildStdout, ExitStatus};
+
 impl Child {
     fn id(self) -> i64
     fn wait(self) -> Result[ExitStatus, IoError] with sends(ProcessTable) blocks suspends
@@ -637,6 +663,8 @@ impl ExitStatus {
 The shell pipeline `ls | wc -l`:
 
 ```kara
+import std.process.{Command, Stdio};
+
 fn count_entries() -> Result[String, IoError] {
     let ls = Command.new("ls").stdout(Stdio.piped()).spawn()?;
     let wc = Command.new("wc").arg("-l")

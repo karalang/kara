@@ -7,6 +7,8 @@ Tasks start only in `par {}`, `par for` and `TaskGroup.spawn`. There is no free 
 ## Channels
 
 ```kara
+import std.sync.{Receiver, Sender};
+
 fn channel[T: CrossTask](cap: i64) -> (Sender[T], Receiver[T])
 ```
 
@@ -21,6 +23,8 @@ let (tx, rx): (Sender[Job], Receiver[Job]) = channel(64);
 **Operations.**
 
 ```kara
+import std.sync.{SendError, Sender};
+
 impl[T: CrossTask] Sender[T] {
     fn send(self, value: own T) -> Result[(), SendError[T]] with sends(self) blocks
     fn try_send(self, value: own T) -> Result[(), SendError[T]] with sends(self)
@@ -132,6 +136,8 @@ The two branches do not conflict: one only sends on the channel and the other on
 A `TaskGroup` runs a dynamic number of tasks, such as one per accepted connection, and joins them all when it drops.
 
 ```kara
+import std.sync.{TaskGroup, TaskHandle};
+
 impl TaskGroup {
     fn new(; limit: i64 = i64.MAX) -> TaskGroup
     fn spawn[T: CrossTask](self, f: own OnceFn() -> T) -> TaskHandle[T] with blocks
@@ -162,6 +168,7 @@ impl[T] TaskHandle[T] {
 An accept loop, one task per connection, at most 1000 at a time:
 
 ```kara,uses=c-handle-client
+import std.net.{TcpStream};
 import std.net.{TcpListener, NetError};
 import std.sync.{TaskGroup};
 
@@ -179,6 +186,8 @@ The closure moves `conn` into its task, because `handle_client` takes it `own`. 
 **Collecting every result.** Keep the handles and join them one by one. Every task runs to completion whatever the others return, so for tasks that return `Result` this collects every result and every error:
 
 ```kara,uses=c-fetch-page
+import std.sync.{TaskGroup};
+
 fn fetch_all(urls: Slice[String]) -> Vec[Result[Page, FetchError]] {
     let group = TaskGroup.new();
     let mut handles = Vec.new();
@@ -198,6 +207,8 @@ Each task borrows its `url` from `urls`, which outlives the group. For a collect
 ## `Mutex[T]`
 
 ```kara
+import std.sync.{Mutex};
+
 impl[T] Mutex[T] {
     fn new(value: own T) -> Mutex[T]
     fn lock(self) -> MutexGuard[T] with blocks
@@ -214,6 +225,8 @@ struct MutexGuard[T] {
 `lock` waits until no other task holds the mutex, then returns a guard. The guard's `value` field is a `mut ref` to the protected value, so access is written through it: `g.value.count += 1`. Method lookup does not pass through the guard ([design.md §9](../design.md#method-resolution)), so a method of the protected value is called as `g.value.m()`. The guard releases the mutex when it drops at the end of its scope ([core-semantics.md §7](../core-semantics.md#7-destruction-c6-supersedes-the-drop-judgment-0)):
 
 ```kara
+import std.sync.{Mutex};
+
 struct Totals { count: i64, sum: i64 }
 
 sync struct Stats {
@@ -241,6 +254,8 @@ A `sync` type holds its mutable state in `Mutex[T]` and `Atomic[T]` fields. Thei
 ## `Semaphore`
 
 ```kara
+import std.sync.{Semaphore, SemaphoreError};
+
 impl Semaphore {
     fn new(permits: i64) -> Semaphore
     fn acquire(ref self, timeout: i64) -> Result[(), SemaphoreError]
@@ -250,9 +265,11 @@ impl Semaphore {
 enum SemaphoreError { Timeout }
 ```
 
-`Semaphore` and `SemaphoreError` are in the prelude, so a program names them without an import (`import std.sync.{Semaphore}` is refused). A counting semaphore: `new` starts it with `permits` free (a negative count is 0). `acquire` takes a free permit. With none free, the task waits until another task's `release` frees one, or until `timeout` milliseconds have passed, when it returns `Err(SemaphoreError.Timeout)`. Outside a task no other task can release a permit, so an `acquire` on an exhausted semaphore there waits its whole timeout and fails. `release` frees a permit and wakes a waiting `acquire`. It is not capped at the starting count, so a semaphore made with `Semaphore.new(0)` signals between tasks, as Python's `threading.Semaphore` and POSIX `sem_post` do (B-2026-11-11-34):
+`Semaphore` and `SemaphoreError` are items of `std.sync`, so a program imports them (`import std.sync.{Semaphore, SemaphoreError};`) before it names them. A counting semaphore: `new` starts it with `permits` free (a negative count is 0). `acquire` takes a free permit. With none free, the task waits until another task's `release` frees one, or until `timeout` milliseconds have passed, when it returns `Err(SemaphoreError.Timeout)`. Outside a task no other task can release a permit, so an `acquire` on an exhausted semaphore there waits its whole timeout and fails. `release` frees a permit and wakes a waiting `acquire`. It is not capped at the starting count, so a semaphore made with `Semaphore.new(0)` signals between tasks, as Python's `threading.Semaphore` and POSIX `sem_post` do (B-2026-11-11-34):
 
 ```kara
+import std.sync.{Semaphore};
+
 sync struct FooBar {
     n: i64,
     foo_sem: Semaphore,   // Semaphore.new(1): foo goes first
@@ -277,6 +294,8 @@ The canonical bounded use is gating a fan-out: acquire before starting a piece o
 `Atomic[T]` exists for `T` = `bool`, `i32`, `i64`, `u32` and `u64`:
 
 ```kara
+import std.sync.{Atomic};
+
 impl[T] Atomic[T] {
     fn new(value: T) -> Atomic[T]
     fn load(self) -> T

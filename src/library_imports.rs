@@ -14,6 +14,116 @@ use std::collections::{BTreeSet, HashSet};
 
 /// Each module, and the items a program names only through its import.
 pub const IMPORT_REQUIRED_MODULES: &[(&str, &[&str])] = &[
+    // library/README.md § The prelude: these are imported from their
+    // `std.*` module, never in the prelude; the compiler kept them in scope
+    // anyway (review ruling 2026-11-26, step 1: the names README's module
+    // table assigns).
+    (
+        "std.sync",
+        &[
+            "Atomic",
+            "Mutex",
+            "Sender",
+            "Receiver",
+            "SendError",
+            "TaskGroup",
+            "TaskHandle",
+            // Step 2: the names the module table did not list.
+            "Semaphore",
+            "SemaphoreError",
+            "MemoryOrdering",
+            "RateLimiter",
+            "BoundedChannel",
+            "OnFull",
+            "ChannelError",
+            "IsolatingGroup",
+            "TaskFailed",
+            "Channel",
+            "OnceLock",
+            "OnceCell",
+            "AlreadySetError",
+            "LazyLock",
+        ],
+    ),
+    (
+        "std.hash",
+        &["SipHash13BuildHasher", "FxBuildHasher", "StableHash"],
+    ),
+    (
+        "std.io",
+        &[
+            "File",
+            "OpenOptions",
+            "SeekFrom",
+            "BufReader",
+            "BufWriter",
+            "Metadata",
+            "LinesIter",
+            "StdinLines",
+            "StdoutProvider",
+            "StderrProvider",
+            "StdinProvider",
+            "FileSystemProvider",
+        ],
+    ),
+    (
+        "std.net",
+        &[
+            "TcpListener",
+            "TcpStream",
+            "TcpError",
+            "Client",
+            "Request",
+            "RequestBuilder",
+            "Response",
+            "HttpError",
+            "Server",
+            "WebSocket",
+            "TlsConfig",
+            "TlsListener",
+            "TlsStream",
+            "TlsError",
+        ],
+    ),
+    ("std.time", &["ClockProvider"]),
+    ("std.env", &["EnvProvider"]),
+    ("std.random", &["RandomProvider"]),
+    ("std.cmp", &["F32", "F64"]),
+    ("std.arena", &["Arena", "ArenaRef", "ArenaCheckpoint"]),
+    ("std.intern", &["Symbol", "Interner"]),
+    // Experimental modules (library/README.md).
+    ("std.simd", &["Vector"]),
+    ("std.gpu", &["GpuBuffer"]),
+    ("std.embedded", &["VolatileCell", "CriticalSectionGuard"]),
+    (
+        "std.tracing",
+        &[
+            "Span",
+            "LogEvent",
+            "SpanField",
+            "NoOpExporter",
+            "StdoutExporter",
+            "Log",
+        ],
+    ),
+    ("std.protobuf", &["ProtoBuf", "ProtoReader"]),
+    ("std.encoding", &["DecodeError"]),
+    (
+        "std.runtime",
+        &["TaskInfo", "ParBlockInfo", "WaitTarget", "Runtime"],
+    ),
+    (
+        "std.process",
+        &[
+            "Command",
+            "Stdio",
+            "Child",
+            "ChildStdin",
+            "ChildStdout",
+            "ChildStderr",
+            "ExitStatus",
+        ],
+    ),
     ("std.regex", &["Regex", "Match", "Captures", "RegexError"]),
     ("std.json", &["Json", "JsonError"]),
     // deferred.md § std.cli: `import std.cli`. The row types the parser
@@ -34,6 +144,19 @@ pub const IMPORT_REQUIRED_MODULES: &[(&str, &[&str])] = &[
             "ParsedValue",
         ],
     ),
+];
+
+/// Names the library's own source uses that are no item a program can name
+/// (the review's prelude ruling, 2026-11-26): each with the spelling a
+/// program writes instead, when there is one.
+pub const INTERNAL_LIBRARY_NAMES: &[(&str, Option<&str>)] = &[
+    // `Hash` impls feed their bytes to it; a program hashes through `Hasher`.
+    ("KeyByteSink", None),
+    // `std.process`'s environment pairs; a program reads `env.var(name)`.
+    ("EnvVar", None),
+    // The compiler's name for the borrowed string view, which programs
+    // spell `Str` (strings.md).
+    ("StringSlice", Some("Str")),
 ];
 
 /// Whether `name` is an item of an [`IMPORT_REQUIRED_MODULES`] module, so a
@@ -76,6 +199,26 @@ pub fn missing_library_imports(src: &str) -> Vec<TypeError> {
             Item::Function(f) => {
                 declared.insert(f.name.clone());
             }
+            // `effect resource Log;`: a program's own resource of a library
+            // item's name, as its own type is.
+            Item::EffectResource(r) => {
+                declared.insert(r.name.clone());
+            }
+            Item::EffectGroup(g) => {
+                declared.insert(g.name.clone());
+            }
+            Item::UnionDef(u) => {
+                declared.insert(u.name.clone());
+            }
+            Item::TraitAlias(t) => {
+                declared.insert(t.name.clone());
+            }
+            Item::MarkerTrait(t) => {
+                declared.insert(t.name.clone());
+            }
+            Item::ConstDecl(c) => {
+                declared.insert(c.name.clone());
+            }
             Item::Import(imp) => {
                 let module = imp.path.join(".");
                 if imp.is_wildcard {
@@ -110,6 +253,7 @@ pub fn missing_library_imports(src: &str) -> Vec<TypeError> {
         .collect();
     // Each module, its first use (name and span), and every item used.
     let mut missing: Vec<(&str, &str, Span, BTreeSet<&str>)> = Vec::new();
+    let mut internal: Vec<TypeError> = Vec::new();
     let mut in_import = false;
     for (i, t) in tokens.iter().enumerate() {
         match &t.token {
@@ -125,6 +269,13 @@ pub fn missing_library_imports(src: &str) -> Vec<TypeError> {
                     || variant_names.contains(&t.span.offset)
                     || bare_variant
                 {
+                    continue;
+                }
+                if let Some((_, instead)) = INTERNAL_LIBRARY_NAMES
+                    .iter()
+                    .find(|(n, _)| *n == name.as_str())
+                {
+                    internal.push(internal_name_error(name, *instead, t.span));
                     continue;
                 }
                 let Some((module, names)) = IMPORT_REQUIRED_MODULES
@@ -150,7 +301,7 @@ pub fn missing_library_imports(src: &str) -> Vec<TypeError> {
         }
     }
     if missing.is_empty() {
-        return Vec::new();
+        return internal;
     }
     let imports: Vec<String> = missing
         .iter()
@@ -195,7 +346,37 @@ pub fn missing_library_imports(src: &str) -> Vec<TypeError> {
             got: None,
             help: None,
         })
+        .chain(internal)
         .collect()
+}
+
+/// A use of an [`INTERNAL_LIBRARY_NAMES`] name: refused, with the rename to
+/// the spelling a program writes when there is one.
+fn internal_name_error(name: &str, instead: Option<&str>, span: Span) -> TypeError {
+    let message = match instead {
+        Some(to) => format!(
+            "`{name}` is internal to the library and no program names it: write `{to}` \
+             (docs/library/README.md)"
+        ),
+        None => format!(
+            "`{name}` is internal to the library and no program names it \
+             (docs/library/README.md)"
+        ),
+    };
+    TypeError {
+        message,
+        span,
+        kind: TypeErrorKind::RemovedInCore,
+        lint_name: None,
+        fix_it: instead.map(|to| FixIt {
+            span,
+            replacement: to.to_string(),
+        }),
+        class: None,
+        expected: None,
+        got: None,
+        help: None,
+    }
 }
 
 /// The offset just past the newline that ends the line holding `at`, or the

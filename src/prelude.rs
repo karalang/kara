@@ -80,6 +80,11 @@ pub const REMOVED_LIBRARY_TYPES: &[&str] = &[
     "DataFrame",
     "LazyExpr",
     "Tensor",
+    // The rest of the data track (the review's prelude ruling, 2026-11-26).
+    "LazyFrame",
+    "LazyGroupBy",
+    "F16",
+    "Bf16",
 ];
 
 /// Stdlib type names visible without import. These are the placeholder
@@ -2561,10 +2566,58 @@ pub const LIBRARY_GLOBAL_MODULES: &[(&[&str], &[&str], &[&str])] = &[
             "BoundedChannel",
             "channel",
             "MutexGuard",
+            // The review's prelude ruling (2026-11-26): library/README.md
+            // § The prelude does not list these, so they are imported.
+            "Semaphore",
+            "SemaphoreError",
+            "MemoryOrdering",
+            "RateLimiter",
+            "OnFull",
+            "ChannelError",
+            // Experimental: the module-level cells (deferred.md § systems).
+            "OnceLock",
+            "OnceCell",
+            "AlreadySetError",
+            "LazyLock",
         ],
         &[],
     ),
-    (&["std", "time"], &["Clock", "sleep_ms"], &[]),
+    (
+        &["std", "time"],
+        &["Clock", "sleep_ms", "ClockProvider"],
+        &[],
+    ),
+    (&["std", "env"], &["EnvProvider"], &[]),
+    (&["std", "random"], &["RandomProvider"], &[]),
+    (&["std", "cmp"], &["F32", "F64"], &[]),
+    (
+        &["std", "arena"],
+        &["Arena", "ArenaRef", "ArenaCheckpoint"],
+        &[],
+    ),
+    (&["std", "intern"], &["Symbol", "Interner"], &[]),
+    // Experimental modules (docs/library/README.md): the tracks deferred.md
+    // keeps after v1, importable in 0.8 as they are implemented.
+    (&["std", "simd"], &["Vector"], &[]),
+    (&["std", "gpu"], &["GpuBuffer"], &[]),
+    (
+        &["std", "embedded"],
+        &["VolatileCell", "CriticalSectionGuard"],
+        &[],
+    ),
+    (
+        &["std", "tracing"],
+        &[
+            "Span",
+            "LogEvent",
+            "SpanField",
+            "NoOpExporter",
+            "StdoutExporter",
+            "Log",
+        ],
+        &[],
+    ),
+    (&["std", "protobuf"], &["ProtoBuf", "ProtoReader"], &[]),
     (
         &["std", "runtime"],
         &["Runtime", "ParBlockInfo", "TaskInfo", "WaitTarget"],
@@ -2579,6 +2632,12 @@ pub const LIBRARY_GLOBAL_MODULES: &[(&[&str], &[&str], &[&str])] = &[
             "BufReader",
             "BufWriter",
             "Metadata",
+            "LinesIter",
+            "StdinLines",
+            "StdoutProvider",
+            "StderrProvider",
+            "StdinProvider",
+            "FileSystemProvider",
         ],
         &[],
     ),
@@ -2595,6 +2654,16 @@ pub const LIBRARY_GLOBAL_MODULES: &[(&[&str], &[&str], &[&str])] = &[
             "TlsFailure",
             "WebSocket",
             "WsMessage",
+            // HTTP and TLS: io.md § Networking puts the servers and the
+            // client in `std.net`.
+            "Client",
+            "Request",
+            "RequestBuilder",
+            "Response",
+            "HttpError",
+            "Server",
+            "TlsConfig",
+            "TlsError",
         ],
         &[],
     ),

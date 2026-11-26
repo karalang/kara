@@ -497,6 +497,8 @@ Both are ordinary `BuildHasher` types: `build()` makes a `SipHash13Hasher` or an
 **Stable digests use `StableHash`, not `Hash`.** Content addressing, on-disk indexes, snapshot tests and sharding need a digest that never changes. `StableHash` provides explicit, versioned functions for this. They take bytes, name the algorithm in the function name, take the key as an argument, and are versioned separately from the `Hash` trait. `karac explain --concept=stable-hash` points users who reach for `Hash` here.
 
 ```kara
+import std.hash.{StableHash};
+
 fn content_id(payload: Str) -> u64 {
     StableHash.siphash24(payload.bytes(), 0, 0)
 }

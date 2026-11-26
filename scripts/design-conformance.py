@@ -767,8 +767,17 @@ def evaluate_signatures(block, karac):
                  for t in items]
     outside = []
     diags = []
+    # The block's own imports hold for its signatures: `Mutex` is named
+    # through `import std.sync.{Mutex};` (library/README.md § The prelude).
+    imports = "".join(
+        line.strip() + "\n"
+        for line in (
+            block.code.splitlines() if isinstance(block.code, str) else block.code
+        )
+        if line.strip().startswith("import ")
+    )
     if items:
-        preamble = "\n".join(local_type_stubs(block.code))
+        preamble = imports + "\n".join(local_type_stubs(block.code))
         _, d = run_karac(karac,
                          (preamble + "\n" if preamble else "")
                          + "\n".join(items) + "\n\nfn main() {}\n")
@@ -780,7 +789,7 @@ def evaluate_signatures(block, karac):
         diags += [x for x in d if not UNRESOLVED_RE.match(x.get("message", ""))]
         outside += [x for x in d if UNRESOLVED_RE.match(x.get("message", ""))]
     for probe, decl in calls:
-        _, d = run_karac(karac, "fn main() {\n    let _ = %s;\n}\n" % probe)
+        _, d = run_karac(karac, imports + "fn main() {\n    let _ = %s;\n}\n" % probe)
         # Resolution only: the arguments are fillers, so a type complaint about
         # one of them is the probe's own doing and, more to the point, is proof
         # the name resolved.

@@ -62,6 +62,10 @@ const DOCUMENTED_PRELUDE_TYPES: &[&str] = &[
     "VecDeque",
     "PriorityQueue",
     "Entry",
+    "Never",
+    "ExitCode",
+    "CStr",
+    "CString",
     // § The prelude's error types, and the other type the core methods take.
     "AnyError",
     "IoError",
@@ -69,6 +73,8 @@ const DOCUMENTED_PRELUDE_TYPES: &[&str] = &[
     "AllocError",
     "ParseError",
     "Utf8Error",
+    "DiscriminantError",
+    "NulError",
     "NormalizationForm",
 ];
 
