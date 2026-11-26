@@ -3472,6 +3472,10 @@ pub struct TypeChecker<'a> {
     pub(super) forking: Option<provider_share::Forking>,
     /// See [`TypeCheckResult::core_moving_scrutinees`].
     pub(super) core_moving_scrutinees: FxHashMap<SpanKey, Vec<crate::resolver::TextEdit>>,
+    /// `(type, method)` for each method an impl leaves out of its trait
+    /// (E0203): a call of it is that error's, not one of its own
+    /// (B-2026-11-25-62).
+    pub(super) missing_required_methods: Vec<(String, String)>,
     /// See [`TypeCheckResult::mut_fn_local_calls`].
     pub(super) mut_fn_local_calls: FxHashSet<SpanKey>,
     /// See [`TypeCheckResult::mut_fn_place_calls`].
@@ -5120,6 +5124,7 @@ impl<'a> TypeChecker<'a> {
             fn_item_spans: FxHashSet::default(),
             forking: None,
             core_moving_scrutinees: FxHashMap::default(),
+            missing_required_methods: Vec::new(),
             mut_fn_local_calls: FxHashSet::default(),
             mut_fn_place_calls: FxHashSet::default(),
             receiver_write_calls: FxHashMap::default(),
@@ -5924,6 +5929,21 @@ impl<'a> TypeChecker<'a> {
                 !once
                     .iter()
                     .any(|t| e.message.contains(&format!("`{t}` does not implement")))
+            });
+        }
+        // A call of a method its impl left out (E0203, which is reported) is
+        // not a missing method of its own: the trait's default bodies and
+        // the program's calls all name it (B-2026-11-25-62).
+        if !self.missing_required_methods.is_empty() {
+            let missing = std::mem::take(&mut self.missing_required_methods);
+            self.errors.retain(|e| {
+                !matches!(e.kind, TypeErrorKind::NoMethodFound)
+                    || !missing.iter().any(|(ty, m)| {
+                        let head = format!("no method '{m}' on type '{ty}");
+                        e.message
+                            .strip_prefix(&head)
+                            .is_some_and(|rest| rest.starts_with('\'') || rest.starts_with('['))
+                    })
             });
         }
         // One finding at one place is reported once, however many passes

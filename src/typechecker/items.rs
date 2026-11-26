@@ -5454,6 +5454,8 @@ impl<'a> super::TypeChecker<'a> {
                 .iter()
                 .any(|it| matches!(it, ImplItem::Method(m) if m.name == name));
             if !defined {
+                self.missing_required_methods
+                    .push((type_name.clone(), name.clone()));
                 self.type_error(
                     format!(
                         "impl of trait '{trait_name}' for '{type_name}' is missing method \
