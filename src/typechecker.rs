@@ -2196,6 +2196,11 @@ pub struct TypeCheckResult {
     /// copies may borrow there; the ownership pass asks each copy's own node
     /// (B-2026-10-28-11).
     pub core_ref_copy_nodes: FxHashSet<crate::ids::NodeId>,
+    /// The `windows(k)` / `chunks(k)` calls on a `Vec` or `Slice` that an
+    /// `.into_iter()` consumes straight away (B-2026-11-20-109): the
+    /// `into_iter` is typed `SliceRuns[T]`, and lowering cuts the runs as
+    /// they are asked for instead of collecting the `Vec[Slice[T]]`.
+    pub lazy_run_calls: FxHashSet<crate::ids::NodeId>,
     /// v2 core: each `for` iterable that is an iterator value held in a
     /// local, which the loop consumes (B-2026-10-18-36): `for g in given` over
     /// `let given = a.split(",")`.
@@ -3396,6 +3401,11 @@ pub struct TypeChecker<'a> {
     pub(super) braceless_arm_assign: Option<usize>,
     /// See [`TypeCheckResult::core_ref_copy_nodes`].
     pub(super) core_ref_copy_nodes: FxHashSet<crate::ids::NodeId>,
+    /// See [`TypeCheckResult::lazy_run_calls`].
+    pub(super) lazy_run_calls: FxHashSet<crate::ids::NodeId>,
+    /// The `windows(k)` / `chunks(k)` calls whose receiver is a `Vec` or a
+    /// `Slice`, by their closing paren, which an `into_iter` may make lazy.
+    pub(super) builtin_run_calls: FxHashSet<SpanKey>,
     /// v2 core §4.6 (B-2026-10-28-25): the results of a `match`, `if` or
     /// block (a block's tail, a bare arm body) that are references, noted by
     /// [`Self::note_ref_result`] while the bindings they name are in scope.
@@ -5125,6 +5135,8 @@ impl<'a> TypeChecker<'a> {
             core_view_lets: Vec::new(),
             braceless_arm_assign: None,
             core_ref_copy_nodes: FxHashSet::default(),
+            lazy_run_calls: FxHashSet::default(),
+            builtin_run_calls: FxHashSet::default(),
             core_ref_results: FxHashSet::default(),
             core_consuming_for_iterables: FxHashSet::default(),
             collect_strings_fixes: FxHashMap::default(),
@@ -6007,6 +6019,7 @@ impl<'a> TypeChecker<'a> {
             core_ref_copy_spans: self.core_ref_copy_spans,
             rejected_assign_spans: self.rejected_assign_spans,
             core_ref_copy_nodes: self.core_ref_copy_nodes,
+            lazy_run_calls: self.lazy_run_calls,
             core_consuming_for_iterables: self.core_consuming_for_iterables,
             core_moving_scrutinees: self.core_moving_scrutinees,
             mut_fn_local_calls: self.mut_fn_local_calls,

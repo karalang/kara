@@ -156,6 +156,78 @@ impl[T] ExactSizeIterator for SliceIter[T] {
     }
 }
 
+/// The runs `windows(size)` or `chunks(size)` cuts from a slice, front to
+/// back, each a view, cut as it is asked for (B-2026-11-20-109).
+/// `v.windows(k).into_iter()` and `v.chunks(k).into_iter()` are this
+/// rather than a walk of the `Vec[Slice[T]]` the call returns, so a chain
+/// over them allocates nothing; a stored `windows(k)` is still that `Vec`.
+/// Run `i` starts at `i` (windows) or `i * size` (chunks); a chunk is cut
+/// short at the end. The arithmetic wraps where `i < back` already bounds
+/// it, so that each window's length is plainly `size`.
+struct SliceRuns[T] {
+    s: Slice[T],
+    size: i64,
+    chunks: bool,
+    front: i64,
+    back: i64,
+}
+
+impl[T] SliceRuns[T] {
+    fn cut_run(ref self, i: i64) -> Slice[T] {
+        if self.chunks {
+            let at = i.wrapping_mul(self.size);
+            let end = at.wrapping_add(self.size);
+            let n = self.s.len();
+            self.s[at..if end > n { n } else { end }]
+        } else {
+            self.s[i..i.wrapping_add(self.size)]
+        }
+    }
+}
+
+impl[T] Iterator for SliceRuns[T] {
+    type Item = Slice[T];
+
+    fn next(mut ref self) -> Option[Self.Item] {
+        let i = self.front;
+        if i >= self.back {
+            return None;
+        }
+        self.front = i.wrapping_add(1);
+        Some(self.cut_run(i))
+    }
+
+    /// Steps past `n` runs by moving the index; `false` if fewer were
+    /// left, which are then all consumed.
+    fn advance_by(mut ref self, n: i64) -> bool {
+        if n <= 0 {
+            return true;
+        }
+        if n > self.back - self.front {
+            self.front = self.back;
+            return false;
+        }
+        self.front = self.front + n;
+        true
+    }
+}
+
+impl[T] DoubleEndedIterator for SliceRuns[T] {
+    fn next_back(mut ref self) -> Option[Self.Item] {
+        if self.front >= self.back {
+            return None;
+        }
+        self.back = self.back - 1;
+        Some(self.cut_run(self.back))
+    }
+}
+
+impl[T] ExactSizeIterator for SliceRuns[T] {
+    fn len(ref self) -> i64 {
+        self.back - self.front
+    }
+}
+
 /// The elements of a slice, front to back, each borrowed to be changed in
 /// place (B-2026-11-06-37). Each element is handed out once.
 struct SliceIterMut[T] {
@@ -2219,6 +2291,32 @@ impl Extend[String] for String {
 /// (B-2026-11-13-34). Rust's `bool::select_unpredictable`.
 fn __select_unpredictable[T](c: bool, a: own T, b: own T) -> T {
     if c { a } else { b }
+}
+
+// `v.windows(k).into_iter()` and `v.chunks(k).into_iter()` on a `Vec` or
+// a `Slice`: the checker types the call as `SliceRuns[T]` and lowering
+// calls one of these by name (B-2026-11-20-109). The panic is the one the
+// collected `windows` and `chunks` raise.
+fn slice_runs[T](s: Slice[T], size: i64, chunks: bool) -> SliceRuns[T] {
+    if size <= 0 {
+        if chunks {
+            panic("chunks: size must be positive");
+        }
+        panic("windows: size must be positive");
+    }
+    let n = s.len();
+    let back = if chunks {
+        n / size + if n % size > 0 { 1 } else { 0 }
+    } else if n >= size {
+        n - size + 1
+    } else {
+        0
+    };
+    SliceRuns { s: s, size: size, chunks: chunks, front: 0, back: back }
+}
+
+fn vec_runs[T](v: ref Vec[T], size: i64, chunks: bool) -> SliceRuns[T] {
+    slice_runs(v.as_slice(), size, chunks)
 }
 
 fn vec_contains_str(v: ref Vec[String], x: Str) -> bool {

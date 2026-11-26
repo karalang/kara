@@ -1,0 +1,7 @@
+// A walked `windows` refuses a size that is not positive as the collected
+// one does (B-2026-11-20-109).
+fn main() {
+    let v: Vec[i64] = [1, 2, 3].to_vec();
+    let k = v.len() - 3;
+    println(v.windows(k).into_iter().count());
+}

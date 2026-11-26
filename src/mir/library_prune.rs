@@ -567,6 +567,11 @@ pub fn prune_code(program: &mut Program, code: &str, user_len: usize) -> Pruned 
         .collect();
     let user = &src[..user_len.min(src.len())];
     words(user, &mut reached);
+    // `v.windows(k).into_iter()` is typed `SliceRuns[T]`, which no program
+    // spells (B-2026-11-20-109).
+    if reached.contains("windows") || reached.contains("chunks") {
+        reached.insert("SliceRuns".to_string());
+    }
     // What `called_only` methods answer to: the program's own words, and
     // every `.name` the program or a kept part of the library writes.
     let mut user_words: FxHashSet<String> = FxHashSet::default();

@@ -2574,6 +2574,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   take 1.5 s rather than 2.6 s with `insert` and 1.6 s rather than 3.6 s
   with `entry(k).or_insert(0)`, against 1.0 s for Rust's `BTreeMap`; kata
   1296's bench runs 1.2 times Rust rather than 2 (B-2026-11-24-41).
+- `v.windows(k)` and `v.chunks(k)` on a `Vec` or a `Slice`, walked where
+  they are written (`.into_iter()` straight after the call, or a `for` over
+  it), cut each run as it is reached instead of collecting a
+  `Vec[Slice[T]]` first, and each window's length is then plainly `k`, so
+  `w[0]` and `w[1]` are not bounds-checked. Kata 1752's bench runs 0.80G
+  instructions rather than 1.96G, under Rust's 0.86G; the same count as a
+  `for` loop is 1.02G rather than 1.82G. A stored `windows(k)` is still
+  the `Vec` (B-2026-11-20-109).
 - `v.into_iter()` no longer copies the vector into a second one on its
   first `next`: it walks a cursor over the vector it took, as Rust's
   `vec::IntoIter` does, reading each element out in place, so the first

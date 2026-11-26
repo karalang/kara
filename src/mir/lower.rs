@@ -17733,6 +17733,92 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// index. `v.into_iter()` moves the collection into the loop, which
     /// gives up its elements front to front; what a `break` leaves behind
     /// drops with it at the loop's end.
+    /// `for w in v.windows(k)` / `v.chunks(k)` on a `Vec` or `Slice`: the
+    /// loop walks the library's `SliceRuns` (B-2026-11-20-109), cutting each
+    /// run as the loop reaches it, rather than collecting the
+    /// `Vec[Slice[T]]` first. The items are the same views in the same
+    /// order. `false` when `iterable` is not such a call.
+    fn for_runs(
+        &mut self,
+        label: &Option<String>,
+        pattern: &'a Pattern,
+        iterable: &'a Expr,
+        body: &'a Block,
+        dest: Place,
+    ) -> R<bool> {
+        let ExprKind::MethodCall {
+            object: recv,
+            method,
+            args,
+            ..
+        } = &iterable.kind
+        else {
+            return Ok(false);
+        };
+        let [k] = args.as_slice() else {
+            return Ok(false);
+        };
+        if !matches!(method.as_str(), "windows" | "chunks")
+            || matches!(
+                self.lcx.calls.get(&iterable.id).map(|c| &c.callee),
+                Some(crate::typed_hir::Callee::Def(_))
+            )
+        {
+            return Ok(false);
+        }
+        let rt = self.expr_ty(recv)?;
+        let (_, base) = self.strip_ty_full(rt);
+        let tcx = self.tys().tcx();
+        let elem = match tcx.kind(base) {
+            HK::Slice { elem, .. } => elem,
+            HK::Intrinsic {
+                kind: IntrinsicKind::Vec,
+                args,
+            } => tcx.list(args)[0],
+            _ => return Ok(false),
+        };
+        let Some(d) = self.lcx.defs.lookup(0, "slice_runs") else {
+            return Ok(false);
+        };
+        let it_t = match self.lcx.fn_return(d, &[elem]) {
+            Ok(t) => t,
+            Err(_) => return Ok(false),
+        };
+        let Some(next) = self.iterator_next_of(it_t, iterable.span)? else {
+            return Ok(false);
+        };
+        let opt_t = next.3;
+        let Some(some) = self
+            .error_variant(opt_t)
+            .filter(|_| {
+                self.tys()
+                    .tcx()
+                    .adt_of(opt_t)
+                    .is_some_and(|(a, _)| a.name == "Option")
+            })
+            .map(|none| 1 - none)
+        else {
+            return Ok(false);
+        };
+        let Some(item_t) = self.tys().tcx().field_ty(opt_t, Some(some), 0) else {
+            return Ok(false);
+        };
+        self.push_scope();
+        let it = self.temp(it_t);
+        self.lazy_runs(
+            iterable,
+            recv,
+            method == "chunks",
+            &k.value,
+            Place::local(it),
+        )?;
+        if self.needs_drop(it_t) {
+            self.schedule(ScopeEntry::Drop(Place::local(it)));
+        }
+        self.for_iterator_loop(label, pattern, it, next, some, item_t, body, dest)?;
+        Ok(true)
+    }
+
     fn for_collection(
         &mut self,
         e: &'a Expr,
@@ -17742,6 +17828,9 @@ impl<'l, 'a> Bx<'l, 'a> {
         body: &'a Block,
         dest: Place,
     ) -> R<()> {
+        if self.for_runs(label, pattern, iterable, body, dest.clone())? {
+            return Ok(());
+        }
         // `c.into_iter()` over a library collection loops below, by
         // position, so a borrowed `c` lends its elements (the library's
         // `VecIntoIter` is for an iterator value).
@@ -17764,7 +17853,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                 method,
                 args,
                 ..
-            } if method == "into_iter" && args.is_empty() => {
+            } if method == "into_iter"
+                && args.is_empty()
+                && !self.lcx.tc.lazy_run_calls.contains(&object.id) =>
+            {
                 let ot = self.expr_ty(object)?;
                 let (kind, t) = self.strip_ty_full(ot);
                 match kind {
@@ -20509,6 +20601,32 @@ impl<'l, 'a> Bx<'l, 'a> {
         let it_t = self.expr_ty(iterable)?;
         self.push_scope();
         let it = self.temp_of(iterable, it_t)?;
+        self.for_iterator_loop(
+            label,
+            pattern,
+            it,
+            (d, args, name, opt_t),
+            some,
+            item_t,
+            body,
+            dest,
+        )
+    }
+
+    /// The loop of [`Self::for_iterator`] over the iterator in `it`, in the
+    /// scope the caller pushed, which it pops.
+    #[allow(clippy::too_many_arguments)]
+    fn for_iterator_loop(
+        &mut self,
+        label: &Option<String>,
+        pattern: &'a Pattern,
+        it: Local,
+        (d, args, name, opt_t): NextFn,
+        some: u32,
+        item_t: Ty,
+        body: &'a Block,
+        dest: Place,
+    ) -> R<()> {
         let head = self.b.new_block();
         let exit = self.b.new_block();
         self.goto(head);
@@ -26066,6 +26184,65 @@ impl<'l, 'a> Bx<'l, 'a> {
         Ok(true)
     }
 
+    /// `v.windows(k).into_iter()` / `v.chunks(k).into_iter()`, which the
+    /// checker typed `SliceRuns[T]` (B-2026-11-20-109): the library's
+    /// `slice_runs` or `vec_runs` over the receiver, with no
+    /// `Vec[Slice[T]]` collected.
+    fn lazy_runs(
+        &mut self,
+        e: &'a Expr,
+        recv: &'a Expr,
+        chunks: bool,
+        k: &'a Expr,
+        dest: Place,
+    ) -> R<()> {
+        let rt = self.expr_ty(recv)?;
+        let (_, base) = self.strip_ty_full(rt);
+        let tcx = self.tys().tcx();
+        let (slice, elem) = match tcx.kind(base) {
+            HK::Slice { elem, .. } => (true, elem),
+            HK::Intrinsic {
+                kind: IntrinsicKind::Vec,
+                args,
+            } => (false, tcx.list(args)[0]),
+            _ => return self.unsupported(e.span, "`windows` or `chunks` of this receiver"),
+        };
+        let helper = if slice { "slice_runs" } else { "vec_runs" };
+        let Some(d) = self.lcx.defs.lookup(0, helper) else {
+            return self.unsupported(e.span, "`windows` or `chunks` walked in place");
+        };
+        let inst_args = vec![elem];
+        let f = self.lcx.fns[&d].f;
+        let first = if slice {
+            let pt = self.callee_param_ty(&f.params[0], &inst_args)?;
+            self.arg_pending(recv, pt)?
+        } else {
+            self.recv_place(recv, false)?
+        };
+        let kt = self.callee_param_ty(&f.params[1], &inst_args)?;
+        let size = self.arg_pending(k, kt)?;
+        let bt = self.tys().tcx().intern(HK::Bool);
+        let ops = self.finish_args(vec![
+            first,
+            size,
+            PendingRecv::Ready(bool_const(bt, chunks)),
+        ])?;
+        let name = self.lcx.instance(d, inst_args.clone());
+        let func = self.fn_operand(&name, d, inst_args);
+        let next = self.b.new_block();
+        self.goto_with(
+            TerminatorKind::Call {
+                func,
+                args: ops,
+                destination: dest,
+                target: Some(next),
+                unwind: UnwindAction::Abort,
+            },
+            next,
+        );
+        Ok(())
+    }
+
     fn method_call(
         &mut self,
         e: &'a Expr,
@@ -26076,6 +26253,22 @@ impl<'l, 'a> Bx<'l, 'a> {
     ) -> R<()> {
         if self.comptime_native(e, &dest)? {
             return Ok(());
+        }
+        if method == "into_iter"
+            && args.is_empty()
+            && self.lcx.tc.lazy_run_calls.contains(&object.id)
+        {
+            if let ExprKind::MethodCall {
+                object: recv,
+                method: m,
+                args: a,
+                ..
+            } = &object.kind
+            {
+                if let [k] = a.as_slice() {
+                    return self.lazy_runs(e, recv, m == "chunks", &k.value, dest);
+                }
+            }
         }
         if self.dyn_method_call(object, method, args, dest.clone())? {
             return Ok(());
@@ -34137,6 +34330,9 @@ const LIBRARY_NAMES_THE_COMPILER_USES: &[&str] = &[
     "identity_handle_eq",
     "identity_handle_address",
     "identity_of_handle",
+    "SliceRuns",
+    "slice_runs",
+    "vec_runs",
     "vec_extend_iter",
     "string_extend_iter",
     "vec_extend_into",

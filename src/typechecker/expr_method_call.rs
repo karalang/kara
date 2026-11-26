@@ -2101,6 +2101,88 @@ impl<'a> super::TypeChecker<'a> {
         );
     }
 
+    /// `v.windows(k).into_iter()` and `v.chunks(k).into_iter()` on a `Vec`
+    /// or a `Slice` are the library's lazy `SliceRuns[T]` rather than a walk
+    /// of the collected `Vec[Slice[T]]` (B-2026-11-20-109): the runs are
+    /// cut as they are asked for, and a chain over them allocates nothing.
+    /// The items are the same views, front to back, and the iterator has the
+    /// same `DoubleEndedIterator` and `ExactSizeIterator` surface. A stored
+    /// `windows(k)` keeps its documented `Vec` type.
+    fn note_lazy_runs(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        args: &[CallArg],
+        args_close_span: &Span,
+        ty: Type,
+        errors_before: usize,
+    ) -> Type {
+        if self.errors.len() > errors_before {
+            return ty;
+        }
+        match method {
+            "windows" | "chunks" if args.len() == 1 => {
+                let recv = self
+                    .expr_types
+                    .get(&SpanKey::from_span(&object.span))
+                    .map(|t| self.resolved_now(t));
+                let mut recv = match recv {
+                    Some(t) => t,
+                    None => return ty,
+                };
+                while let Type::Ref(inner) | Type::MutRef(inner) = recv {
+                    recv = *inner;
+                }
+                let builtin = match &recv {
+                    Type::Slice { .. } => true,
+                    Type::Named { name, args } => name == "Vec" && args.len() == 1,
+                    _ => false,
+                };
+                if builtin {
+                    self.builtin_run_calls
+                        .insert(SpanKey::from_span(args_close_span));
+                }
+                ty
+            }
+            "into_iter" if args.is_empty() => {
+                let ExprKind::MethodCall {
+                    method: m,
+                    args: a,
+                    args_close_span: c,
+                    ..
+                } = &object.kind
+                else {
+                    return ty;
+                };
+                if !matches!(m.as_str(), "windows" | "chunks")
+                    || a.len() != 1
+                    || !self.builtin_run_calls.contains(&SpanKey::from_span(c))
+                    || !self.env.structs.contains_key("SliceRuns")
+                {
+                    return ty;
+                }
+                let element = match self.resolved_now(&ty) {
+                    Type::Named { name, args } if name == "VecIntoIter" && args.len() == 1 => {
+                        match &args[0] {
+                            Type::Slice {
+                                element,
+                                mutable: false,
+                            } => (**element).clone(),
+                            _ => return ty,
+                        }
+                    }
+                    _ => return ty,
+                };
+                self.lazy_run_calls.insert(object.id);
+                Type::Named {
+                    name: "SliceRuns".to_string(),
+                    args: vec![element],
+                }
+            }
+            _ => ty,
+        }
+    }
+
     pub(super) fn infer_method_call(
         &mut self,
         object: &Expr,
@@ -2158,6 +2240,7 @@ impl<'a> super::TypeChecker<'a> {
             self.note_range_collect(object, &[*span, whole]);
         }
         let ty = self.infer_method_call_inner(object, method, args, span, args_close_span);
+        let ty = self.note_lazy_runs(object, method, args, args_close_span, ty, errors_before);
         if method == "ct_eq" && self.errors.len() == errors_before {
             self.refuse_ct_eq_payload(object, span);
         }
