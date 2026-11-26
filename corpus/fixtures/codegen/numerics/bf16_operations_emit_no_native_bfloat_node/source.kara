@@ -1,4 +1,6 @@
 
+import std.cmp.{Bf16};
+
 #[derive(PartialEq)]
 shared struct Sb { x: bf16 }
 fn main() {

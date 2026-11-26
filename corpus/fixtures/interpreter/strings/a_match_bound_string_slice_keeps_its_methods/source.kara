@@ -1,7 +1,7 @@
-fn head(s: ref String) -> Option[StringSlice] { return Some(s[0..3]); }
-        struct SplitIter { rest: StringSlice, done: bool }
+fn head(s: ref String) -> Option[Str] { return Some(s[0..3]); }
+        struct SplitIter { rest: Str, done: bool }
         impl SplitIter {
-            fn next(mut ref self) -> Option[StringSlice] {
+            fn next(mut ref self) -> Option[Str] {
                 if self.done { return None; }
                 match self.rest.find(",") {
                     Some(k) => {

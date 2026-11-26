@@ -1,3 +1,5 @@
+import std.cmp.{Bf16, F16};
+
 fn main() {
 let a: F16 = F16 { value: 2.5 };
 let b: F16 = F16 { value: 1.5 };

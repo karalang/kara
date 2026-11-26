@@ -1,3 +1,5 @@
+import std.sync.{Atomic};
+
 fn main() {
     let a = Atomic.new(4);
     let v = a.fetch_or(1);

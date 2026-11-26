@@ -1,3 +1,5 @@
+import std.sync.{MemoryOrdering};
+
 fn main() {
     // Safety: a fence has no precondition.
     unsafe {

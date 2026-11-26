@@ -7,6 +7,7 @@ import std.io.{BufReader};
 import std.net.{TcpListener, TcpStream};
 import std.sync.{Mutex};
 import std.time.Duration;
+import std.sync.{TaskGroup};
 
 const ADDR: Str = "127.0.0.1:23787";
 const SESSIONS: i64 = 6;

@@ -1,1 +1,3 @@
+import std.cmp.{Bf16};
+
 fn main() { let x = Bf16.from(3.25); println(x); }
