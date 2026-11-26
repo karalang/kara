@@ -13,7 +13,7 @@ fn longest_word(words: Vec[String]) -> String {
     let mut built: Set[String] = Set.new();
     let mut best = String.new();
     for word in sorted.iter() {
-        if word.len() == 1 or built.contains(word.slice(0, word.len() - 1).to_string()) {
+        if word.len() == 1 or built.contains(word[0..word.len() - 1].to_string()) {
             built.insert(word.clone());
             if word.len() > best.len() {
                 best = word.clone();

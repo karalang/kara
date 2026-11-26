@@ -3466,6 +3466,9 @@ impl<'a> super::TypeChecker<'a> {
         if matches!(method, "is_ok" | "is_err") && args.is_empty() {
             self.warn_option_result_predicate(object, method, &obj_ty, args_close_span);
         }
+        if method == "slice" && args.len() == 2 {
+            self.warn_string_slice(object, args, &obj_ty, args_close_span);
+        }
         if let Some(t) = self.record_temp_receiver_types(object, method, args, span, &obj_ty) {
             return t;
         }

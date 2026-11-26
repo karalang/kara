@@ -1,7 +1,7 @@
 //! A string method's index, count or length takes a borrowed integer the way
 //! an `i64` parameter does: `for len in lens.iter()` yields `ref i64`, and
 //! `s.substring(0, len)` reads it as its value (B-2026-11-01-4). The same
-//! holds for `char_at`, `repeat`, `slice` and `String.truncate`, on the
+//! holds for `char_at`, `repeat`, the range index `s[a..b]` (once `slice`, deprecated by B-2026-11-25-63) and `String.truncate`, on the
 //! interpreter and compiled.
 
 mod common;
@@ -66,7 +66,7 @@ const PROG: &str = r#"fn main() {
         println(s.substring(0, len));
         println(f"{s.char_at(len)}");
         println("x".repeat(len));
-        println(s.slice(len, 4));
+        println(s[len..4]);
     }
     let mut t = "hello".to_string();
     for len in lens.iter() {

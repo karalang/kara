@@ -384,8 +384,8 @@ fn check_case(t: mut ref Tally, c: Case) {
     let full = letters(s2).len() == 26;
     let doubled1 = f"{s1}{s1}";
     let doubled2 = f"{s2}{s2}";
-    let longer1 = f"{s1}{s1.slice(0, 1)}";
-    let longer2 = f"{s2}{s2.slice(0, 1)}";
+    let longer1 = f"{s1}{s1[0..1]}";
+    let longer2 = f"{s2}{s2[0..1]}";
     let s3 = apply(c.third, s2);
     let merged = apply(c.merge, s2);
     for w in 0..5 {

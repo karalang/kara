@@ -8,15 +8,15 @@ fn expand(s: Str) -> Vec[String] {
     let mut i = 0;
     while i < s.len() {
         let mut letters: Vec[String] = [];
-        if s.slice(i, i + 1) == "{" {
-            let close = i + s.slice(i, s.len()).find("}").unwrap();
-            for part in s.slice(i + 1, close).split(",") {
+        if s[i..i + 1] == "{" {
+            let close = i + s[i..s.len()].find("}").unwrap();
+            for part in s[i + 1..close].split(",") {
                 letters.push(part.to_string());
             }
             letters.sort();
             i = close + 1;
         } else {
-            letters.push(s.slice(i, i + 1).to_string());
+            letters.push(s[i..i + 1].to_string());
             i += 1;
         }
         let mut next: Vec[String] = [];

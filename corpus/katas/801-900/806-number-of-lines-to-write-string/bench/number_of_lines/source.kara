@@ -37,7 +37,7 @@ fn main() {
         let mut s = String.new();
         for _ in 0..1000 {
             let at = next_random(mut seed) % 26;
-            s.push_str(letters.slice(at, at + 1));
+            s.push_str(letters[at..at + 1]);
         }
         strings.push(s);
     }

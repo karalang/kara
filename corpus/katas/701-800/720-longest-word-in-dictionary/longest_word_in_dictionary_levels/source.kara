@@ -20,7 +20,7 @@ fn longest_word(words: Vec[String]) -> String {
     while length < by_length.len() {
         let mut found: Set[String] = Set.new();
         for word in by_length[length].iter() {
-            if length == 1 or level.contains(word.slice(0, length - 1).to_string()) {
+            if length == 1 or level.contains(word[0..length - 1].to_string()) {
                 found.insert(word.clone());
             }
         }

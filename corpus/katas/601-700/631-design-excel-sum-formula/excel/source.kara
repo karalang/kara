@@ -59,7 +59,7 @@ impl Excel {
     // The zero-based row and column of a name such as `B12`.
     fn position(self, name: String) -> (i64, i64) {
         let column = name.chars().next().unwrap() as i64 - 'A' as i64;
-        let row = i64.parse(name.slice(1, name.len())).unwrap();
+        let row = i64.parse(name[1..name.len()]).unwrap();
         (row - 1, column)
     }
 

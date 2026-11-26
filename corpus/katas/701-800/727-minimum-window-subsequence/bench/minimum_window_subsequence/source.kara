@@ -48,7 +48,7 @@ fn min_window(s1: String, s2: String) -> String {
     if best_start < 0 {
         return "".to_string();
     }
-    s1.slice(best_start, best_start + best_len).to_string()
+    s1[best_start..best_start + best_len].to_string()
 }
 
 fn next_random(seed: mut ref i64) -> i64 {

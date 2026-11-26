@@ -10,7 +10,7 @@ fn longest_word_star(words: Vec[String]) -> String {
     let mut built: Set[String] = Set.new();
     let mut best = String.new();
     for word in sorted.iter() {
-        if word.len() == 1 or built.contains(word.slice(0, word.len() - 1).to_string()) {
+        if word.len() == 1 or built.contains(word[0..word.len() - 1].to_string()) {
             built.insert(word.clone());
             if word.len() > best.len() {
                 best = word.clone();
@@ -69,7 +69,7 @@ fn longest_word_every(words: Vec[String]) -> String {
     for word in words.iter() {
         let mut buildable = true;
         for k in 1..word.len() {
-            if not all.contains(word.slice(0, k).to_string()) {
+            if not all.contains(word[0..k].to_string()) {
                 buildable = false;
                 break;
             }
@@ -97,7 +97,7 @@ fn longest_word_levels(words: Vec[String]) -> String {
     while length < by_length.len() {
         let mut found: Set[String] = Set.new();
         for word in by_length[length].iter() {
-            if length == 1 or level.contains(word.slice(0, length - 1).to_string()) {
+            if length == 1 or level.contains(word[0..length - 1].to_string()) {
                 found.insert(word.clone());
             }
         }
@@ -167,7 +167,7 @@ fn definition(words: Vec[String]) -> String {
     for word in words.iter() {
         let mut buildable = true;
         for k in 1..word.len() {
-            let prefix = word.slice(0, k).to_string();
+            let prefix = word[0..k].to_string();
             let mut found = false;
             for other in words.iter() {
                 if *other == prefix {

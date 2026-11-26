@@ -457,8 +457,8 @@ fn render_reversed(items: ref Vec[Nested]) -> String {
 
 // One list holding the members of `a` followed by those of `b`.
 fn join_texts(a: ref String, b: ref String) -> String {
-    let ia = a.slice(1, a.len() - 1);
-    let ib = b.slice(1, b.len() - 1);
+    let ia = a[1..a.len() - 1];
+    let ib = b[1..b.len() - 1];
     if ia.is_empty() {
         return f"[{ib}]";
     }

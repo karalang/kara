@@ -19,7 +19,7 @@ fn replace_words(dictionary: Vec[String], sentence: String) -> String {
     for word in sentence.split(" ") {
         let mut replaced = word.clone();
         for k in 1..word.len().min(longest) + 1 {
-            let prefix = word.slice(0, k).to_string();
+            let prefix = word[0..k].to_string();
             if roots.contains(prefix) {
                 replaced = prefix;
                 break;

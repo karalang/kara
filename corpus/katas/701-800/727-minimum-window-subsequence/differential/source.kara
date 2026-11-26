@@ -45,7 +45,7 @@ fn min_window_star(s1: String, s2: String) -> String {
     if best_start < 0 {
         return "".to_string();
     }
-    s1.slice(best_start, best_start + best_len).to_string()
+    s1[best_start..best_start + best_len].to_string()
 }
 
 // ---- dp arm ---------------------------------------------------------
@@ -77,7 +77,7 @@ fn min_window_dp(s1: String, s2: String) -> String {
     if best_start < 0 {
         return "".to_string();
     }
-    s1.slice(best_start, best_start + best_len).to_string()
+    s1[best_start..best_start + best_len].to_string()
 }
 
 // ---- table arm ------------------------------------------------------
@@ -123,7 +123,7 @@ fn min_window_table(s1: String, s2: String) -> String {
     if best_start < 0 {
         return "".to_string();
     }
-    s1.slice(best_start, best_start + best_len).to_string()
+    s1[best_start..best_start + best_len].to_string()
 }
 
 // ---- bisect arm -----------------------------------------------------
@@ -181,7 +181,7 @@ fn min_window_bisect(s1: String, s2: String) -> String {
     if best_start < 0 {
         return "".to_string();
     }
-    s1.slice(best_start, best_start + best_len).to_string()
+    s1[best_start..best_start + best_len].to_string()
 }
 
 // ---- the definition and the properties ------------------------------------
@@ -241,7 +241,7 @@ fn definition(s1: String, s2: String) -> String {
     let n = s1.len();
     for len in 1..n + 1 {
         for i in 0..n - len + 1 {
-            let w = s1.slice(i, i + len).to_string();
+            let w = s1[i..i + len].to_string();
             if is_subsequence(s2.clone(), w.clone()) {
                 return w;
             }
@@ -285,7 +285,7 @@ fn main() {
             let mut inside = false;
             if got.len() > 0 and got.len() <= n {
                 for i in 0..n - got.len() + 1 {
-                    if s1.slice(i, i + got.len()) == got.as_str() {
+                    if s1[i..i + got.len()] == got.as_str() {
                         inside = true;
                     }
                 }

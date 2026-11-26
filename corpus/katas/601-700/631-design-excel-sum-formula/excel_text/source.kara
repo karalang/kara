@@ -53,8 +53,8 @@ impl Excel {
                     let last = ref ends[ends.len() - 1];
                     let left = first.chars().next().unwrap() as i64 - 'A' as i64;
                     let right = last.chars().next().unwrap() as i64 - 'A' as i64;
-                    let top = i64.parse(first.slice(1, first.len())).unwrap();
-                    let bottom = i64.parse(last.slice(1, last.len())).unwrap();
+                    let top = i64.parse(first[1..first.len()]).unwrap();
+                    let bottom = i64.parse(last[1..last.len()]).unwrap();
                     for r in top..bottom + 1 {
                         for c in left..right + 1 {
                             total += self.value((r - 1) * self.width + c);

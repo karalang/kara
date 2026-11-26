@@ -11,5 +11,5 @@ fn main() {
     println(f"{t0.since_epoch().as_ms() > 1700000000000} {t0 < t1}");
     let u = v4();
     let parts: Vec[Str] = u.split("-").collect();
-    println(f"{u.len()} {parts.len()} {parts[2].slice(0, 1)} {next_u64() != next_u64()} {Clock.now() > 0}");
+    println(f"{u.len()} {parts.len()} {parts[2][0..1]} {next_u64() != next_u64()} {Clock.now() > 0}");
 }

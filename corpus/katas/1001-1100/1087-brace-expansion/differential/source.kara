@@ -52,15 +52,15 @@ fn bfs_arm(s: Str) -> Vec[String] {
     let mut i = 0;
     while i < s.len() {
         let mut letters: Vec[String] = [];
-        if s.slice(i, i + 1) == "{" {
-            let close = i + s.slice(i, s.len()).find("}").unwrap();
-            for part in s.slice(i + 1, close).split(",") {
+        if s[i..i + 1] == "{" {
+            let close = i + s[i..s.len()].find("}").unwrap();
+            for part in s[i + 1..close].split(",") {
                 letters.push(part.to_string());
             }
             letters.sort();
             i = close + 1;
         } else {
-            letters.push(s.slice(i, i + 1).to_string());
+            letters.push(s[i..i + 1].to_string());
             i += 1;
         }
         let mut next: Vec[String] = [];
@@ -81,10 +81,10 @@ fn expand_text(s: Str) -> Vec[String] {
         None => [s.to_string()],
         Some(open) => {
             let close = s.find("}").unwrap();
-            let before = s.slice(0, open);
-            let rest = expand_text(s.slice(close + 1, s.len()));
+            let before = s[0..open];
+            let rest = expand_text(s[close + 1..s.len()]);
             let mut out: Vec[String] = [];
-            for letter in s.slice(open + 1, close).split(",") {
+            for letter in s[open + 1..close].split(",") {
                 for tail in rest.iter() {
                     out.push(f"{before}{letter}{tail}");
                 }

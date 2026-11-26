@@ -37,7 +37,7 @@ fn replace_words(dictionary: Vec[String], sentence: String) -> String {
             length += 1;
         }
         if node != 0 and ends[node] {
-            out.push(word.slice(0, length).to_string());
+            out.push(word[0..length].to_string());
         } else {
             out.push(word.clone());
         }

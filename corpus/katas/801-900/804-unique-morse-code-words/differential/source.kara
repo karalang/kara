@@ -174,7 +174,7 @@ fn parse(code: Vec[i64], seed: mut ref i64) -> String {
             }
         }
         let letter = fits[next_random(mut seed) % fits.len()];
-        word.push_str(letters.slice(letter, letter + 1));
+        word.push_str(letters[letter..letter + 1]);
         at += table[letter].len();
     }
     word
@@ -204,7 +204,7 @@ fn swapped(word: String) -> String {
         while from.bytes()[i] != b {
             i += 1;
         }
-        out.push_str(to.slice(i, i + 1));
+        out.push_str(to[i..i + 1]);
     }
     out
 }
@@ -248,7 +248,7 @@ fn main() {
             let mut word = String.new();
             for _ in 0..length {
                 let at = next_random(mut seed) % letters.len();
-                word.push_str(letters.slice(at, at + 1));
+                word.push_str(letters[at..at + 1]);
             }
             pool.push(word);
         }

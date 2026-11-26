@@ -164,7 +164,7 @@ fn brute(s: String) -> i64 {
                 }
             }
             if ok {
-                found.insert(s.slice(i, j).to_string());
+                found.insert(s[i..j].to_string());
             }
         }
     }

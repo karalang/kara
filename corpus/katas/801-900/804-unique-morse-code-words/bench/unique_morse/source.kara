@@ -41,10 +41,10 @@ fn main() {
             for _ in 0..length {
                 if few {
                     let at = next_random(mut seed) % 6;
-                    word.push_str(short.slice(at, at + 1));
+                    word.push_str(short[at..at + 1]);
                 } else {
                     let at = next_random(mut seed) % 26;
-                    word.push_str(letters.slice(at, at + 1));
+                    word.push_str(letters[at..at + 1]);
                 }
             }
             words.push(word);

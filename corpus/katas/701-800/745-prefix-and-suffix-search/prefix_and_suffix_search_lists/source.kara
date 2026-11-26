@@ -29,8 +29,8 @@ impl WordFilter {
             let w = ref words[i];
             let n = w.len();
             for p in 1..n + 1 {
-                add_to(mut starts, String.from(w.slice(0, p)), i);
-                add_to(mut ends, String.from(w.slice(n - p, n)), i);
+                add_to(mut starts, String.from(w[0..p]), i);
+                add_to(mut ends, String.from(w[n - p..n]), i);
             }
         }
         WordFilter { starts: starts, ends: ends }

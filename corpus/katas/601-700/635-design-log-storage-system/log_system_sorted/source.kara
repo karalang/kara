@@ -26,8 +26,8 @@ impl LogSystem {
         let n = length(granularity);
         let floor = "0000:00:00:00:00:00";
         let ceiling = "9999:99:99:99:99:99";
-        let low = f"{start.slice(0, n)}{floor.slice(n, 19)}";
-        let high = f"{end.slice(0, n)}{ceiling.slice(n, 19)}";
+        let low = f"{start[0..n]}{floor[n..19]}";
+        let high = f"{end[0..n]}{ceiling[n..19]}";
         let mut ids: Vec[i64] = Vec.new();
         for (_, at) in self.logs.range_inclusive(low, high) {
             for id in at.iter() {

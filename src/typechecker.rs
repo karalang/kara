@@ -125,6 +125,7 @@ mod stdlib_iter;
 mod stdlib_map;
 mod stdlib_methods;
 mod stdlib_seq;
+mod string_slice_deprecated;
 mod table_keys;
 #[cfg(test)]
 mod tests;
@@ -4008,6 +4009,9 @@ pub struct TypeChecker<'a> {
     /// call's closing `)`, which a re-inference visits again
     /// (B-2026-11-09-21).
     pub(super) option_result_predicates_reported: rustc_hash::FxHashSet<usize>,
+    /// The deprecated `s.slice(a, b)` calls already warned about, by the
+    /// call's closing `)` (B-2026-11-25-63).
+    pub(super) string_slice_reported: rustc_hash::FxHashSet<usize>,
     /// Casts `redundant_cast` / `lossless_cast` already reported, for the
     /// same reason.
     pub(super) cast_lints_reported: FxHashSet<SpanKey>,
@@ -5235,6 +5239,7 @@ impl<'a> TypeChecker<'a> {
             vec_macro_reported: rustc_hash::FxHashSet::default(),
             refused_deferred: rustc_hash::FxHashSet::default(),
             option_result_predicates_reported: rustc_hash::FxHashSet::default(),
+            string_slice_reported: rustc_hash::FxHashSet::default(),
             cast_lints_reported: FxHashSet::default(),
             clone_lints_reported: FxHashSet::default(),
             call_receiver_roots: Vec::new(),

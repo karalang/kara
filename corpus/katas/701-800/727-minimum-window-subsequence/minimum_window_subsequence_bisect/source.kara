@@ -59,7 +59,7 @@ fn min_window(s1: String, s2: String) -> String {
     if best_start < 0 {
         return "".to_string();
     }
-    s1.slice(best_start, best_start + best_len).to_string()
+    s1[best_start..best_start + best_len].to_string()
 }
 
 // ---- test harness ---------------------------------------------------------
@@ -88,7 +88,7 @@ fn summary(what: String, s1: String, s2: String) {
     let mut at = -1;
     if w.len() > 0 {
         for i in 0..s1.len() - w.len() + 1 {
-            if at < 0 and s1.slice(i, i + w.len()) == w.as_str() {
+            if at < 0 and s1[i..i + w.len()] == w.as_str() {
                 at = i;
             }
         }

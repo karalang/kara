@@ -6,7 +6,7 @@ fn parse_until(c: mut ref Cursor, stop: char) -> Str {
     while c.pos < n and c.src.char_at(c.pos) != Some(stop) {
         c.pos += 1;
     }
-    let out = c.src.slice(start, c.pos);
+    let out = c.src[start..c.pos];
     if c.pos < n { c.pos += 1; }
     out
 }

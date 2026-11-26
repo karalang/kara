@@ -56,7 +56,7 @@ impl Excel_star {
     // The zero-based row and column of a name such as `B12`.
     fn position(self, name: String) -> (i64, i64) {
         let column = name.chars().next().unwrap() as i64 - 'A' as i64;
-        let row = i64.parse(name.slice(1, name.len())).unwrap();
+        let row = i64.parse(name[1..name.len()]).unwrap();
         (row - 1, column)
     }
 
@@ -177,7 +177,7 @@ impl Excel_push {
     // The zero-based row and column of a name such as `B12`.
     fn position(self, name: String) -> (i64, i64) {
         let column = name.chars().next().unwrap() as i64 - 'A' as i64;
-        let row = i64.parse(name.slice(1, name.len())).unwrap();
+        let row = i64.parse(name[1..name.len()]).unwrap();
         (row - 1, column)
     }
 
@@ -289,8 +289,8 @@ impl Excel_text {
                     let last = ref ends[ends.len() - 1];
                     let left = first.chars().next().unwrap() as i64 - 'A' as i64;
                     let right = last.chars().next().unwrap() as i64 - 'A' as i64;
-                    let top = i64.parse(first.slice(1, first.len())).unwrap();
-                    let bottom = i64.parse(last.slice(1, last.len())).unwrap();
+                    let top = i64.parse(first[1..first.len()]).unwrap();
+                    let bottom = i64.parse(last[1..last.len()]).unwrap();
                     for r in top..bottom + 1 {
                         for c in left..right + 1 {
                             total += self.value((r - 1) * self.width + c);
@@ -393,7 +393,7 @@ impl Excel_rebuild {
     // The zero-based row and column of a name such as `B12`.
     fn position(self, name: String) -> (i64, i64) {
         let column = name.chars().next().unwrap() as i64 - 'A' as i64;
-        let row = i64.parse(name.slice(1, name.len())).unwrap();
+        let row = i64.parse(name[1..name.len()]).unwrap();
         (row - 1, column)
     }
 
@@ -497,8 +497,8 @@ fn covered(range: String) -> Vec[(i64, i64)] {
     let last = ref ends[ends.len() - 1];
     let left = first.chars().next().unwrap() as i64 - 'A' as i64;
     let right = last.chars().next().unwrap() as i64 - 'A' as i64;
-    let top = i64.parse(first.slice(1, first.len())).unwrap();
-    let bottom = i64.parse(last.slice(1, last.len())).unwrap();
+    let top = i64.parse(first[1..first.len()]).unwrap();
+    let bottom = i64.parse(last[1..last.len()]).unwrap();
     let mut out: Vec[(i64, i64)] = Vec.new();
     for r in top..bottom + 1 {
         for c in left..right + 1 {

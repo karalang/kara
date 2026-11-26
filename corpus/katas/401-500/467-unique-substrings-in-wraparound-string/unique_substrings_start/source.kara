@@ -35,7 +35,7 @@ fn show(s: String) {
     if s.len() <= 40 {
         println(f"\"{s}\" -> {count}");
     } else {
-        println(f"{s.len()} letters from \"{s.slice(0, 10)}\" -> {count}");
+        println(f"{s.len()} letters from \"{s[0..10]}\" -> {count}");
     }
 }
 

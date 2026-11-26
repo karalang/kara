@@ -5,8 +5,8 @@ impl SplitIter {
         if self.done { return None; }
         match self.rest.find(",") {
             Some(k) => {
-                let head = self.rest.slice(0, k);
-                self.rest = self.rest.slice(k + 1, self.rest.len());
+                let head = self.rest[0..k];
+                self.rest = self.rest[k + 1..self.rest.len()];
                 return Some(head);
             }
             None => { self.done = true; return Some(self.rest); }
@@ -20,7 +20,7 @@ fn main() {
     let mut total = 0;
     let mut r = 0;
     while r < 10 {
-        let mut it = SplitIter { rest: s.slice(0, s.len()), done: false };
+        let mut it = SplitIter { rest: s[0..s.len()], done: false };
         while true {
             match it.next() { None => break, Some(f) => { total = total + f.len(); } }
         }

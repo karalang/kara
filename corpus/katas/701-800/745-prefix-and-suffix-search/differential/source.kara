@@ -16,9 +16,9 @@ impl WordFilterStar {
             let n = w.len();
             for p in 0..n + 1 {
                 for s in 0..n + 1 {
-                    let mut key = String.from(w.slice(0, p));
+                    let mut key = String.from(w[0..p]);
                     key.push('{');
-                    key.push_str(w.slice(s, n));
+                    key.push_str(w[s..n]);
                     keys.insert(key, i);
                 }
             }
@@ -144,8 +144,8 @@ impl WordFilterLists {
             let w = ref words[i];
             let n = w.len();
             for p in 1..n + 1 {
-                add_to_lists(mut starts, String.from(w.slice(0, p)), i);
-                add_to_lists(mut ends, String.from(w.slice(n - p, n)), i);
+                add_to_lists(mut starts, String.from(w[0..p]), i);
+                add_to_lists(mut ends, String.from(w[n - p..n]), i);
             }
         }
         WordFilterLists { starts: starts, ends: ends }
@@ -264,8 +264,8 @@ fn main() {
         if next_random(mut seed) % 2 == 0 {
             let w = ref words[next_random(mut seed) % n];
             let len = w.len();
-            pref = String.from(w.slice(0, 1 + next_random(mut seed) % len));
-            suff = String.from(w.slice(len - 1 - next_random(mut seed) % len, len));
+            pref = String.from(w[0..1 + next_random(mut seed) % len]);
+            suff = String.from(w[len - 1 - next_random(mut seed) % len..len]);
         }
         let want = definition(words, pref.clone(), suff.clone());
         if want != -1 {

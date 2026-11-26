@@ -22,11 +22,11 @@ impl LogSystem {
 
     fn retrieve(self, start: String, end: String, granularity: String) -> Vec[i64] {
         let n = length(granularity);
-        let low = start.slice(0, n);
-        let high = end.slice(0, n);
+        let low = start[0..n];
+        let high = end[0..n];
         let mut ids: Vec[i64] = Vec.new();
         for (id, timestamp) in self.logs.iter() {
-            let cut = timestamp.slice(0, n);
+            let cut = timestamp[0..n];
             if cut >= low and cut <= high {
                 ids.push(id);
             }

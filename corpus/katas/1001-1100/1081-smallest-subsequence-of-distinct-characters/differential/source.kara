@@ -105,9 +105,9 @@ fn greedy_arm(s: Str) -> String {
     for b in b'a'..=b'z' {
         let c = b as char;
         if let Some(at) = s.find(c.to_string()) {
-            let rest = s.slice(at, s.len());
+            let rest = s[at..s.len()];
             if greedy_distinct(rest) == want {
-                let after = rest.slice(1, rest.len()).replace(c.to_string(), "");
+                let after = rest[1..rest.len()].replace(c.to_string(), "");
                 return f"{c}{greedy_arm(after)}";
             }
         }

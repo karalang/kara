@@ -40,7 +40,7 @@ fn tree2str(root: Option[TreeNode]) -> String {
     if out.is_empty() {
         return out;
     }
-    out.slice(1, out.len() - 1).to_string()
+    out[1..out.len() - 1].to_string()
 }
 
 // ---- test harness ---------------------------------------------------------

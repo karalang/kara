@@ -20,9 +20,9 @@ impl WordFilter {
             let n = w.len();
             for p in 0..n + 1 {
                 for s in 0..n + 1 {
-                    let mut key = String.from(w.slice(0, p));
+                    let mut key = String.from(w[0..p]);
                     key.push('{');
-                    key.push_str(w.slice(s, n));
+                    key.push_str(w[s..n]);
                     keys.insert(key, i);
                 }
             }

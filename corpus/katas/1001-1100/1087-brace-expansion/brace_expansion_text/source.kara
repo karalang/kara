@@ -9,10 +9,10 @@ fn expand_text(s: Str) -> Vec[String] {
         None => [s.to_string()],
         Some(open) => {
             let close = s.find("}").unwrap();
-            let before = s.slice(0, open);
-            let rest = expand_text(s.slice(close + 1, s.len()));
+            let before = s[0..open];
+            let rest = expand_text(s[close + 1..s.len()]);
             let mut out: Vec[String] = [];
-            for letter in s.slice(open + 1, close).split(",") {
+            for letter in s[open + 1..close].split(",") {
                 for tail in rest.iter() {
                     out.push(f"{before}{letter}{tail}");
                 }

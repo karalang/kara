@@ -12,7 +12,7 @@ impl Iterator for Hits {
         }
         let at = self.pos;
         self.pos = at + 2;
-        Some((at, self.s.slice(at, at + 1)))
+        Some((at, self.s[at..at + 1]))
     }
 }
 
@@ -30,7 +30,7 @@ impl Iterator for Own {
         }
         let at = self.pos;
         self.pos = at + 1;
-        Some(self.s.slice(at, at + 1))
+        Some(self.s[at..at + 1])
     }
 }
 

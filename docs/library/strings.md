@@ -78,6 +78,7 @@ An empty pattern matches at every char boundary, the start and the end included,
 | `clone` | `fn clone(self) -> String` | The same owned copy as `to_string()`. A `Str` is a view, so `clone()` copies the text it views, not the view |
 | `[]` | `s[a..b]` | A `Str` over the byte range `[a, b)`, through `Index` ([design.md §5](../design.md#5-types)). Panics if either end falls inside a multi-byte code point (`byte index 2 is not a char boundary`), or if a bound is negative or past the end or the range is inverted (`string slice bounds 4..2 out of range (len 6)`); unlike `substring`, nothing saturates |
 | `substring` | `fn substring(self, start: i64) -> String` / `fn substring(self, start: i64, end: i64) -> String` | An owned copy of the bytes from `start` to the end, or of the byte range `[start, end)`. Out-of-range, negative or inverted bounds saturate, so the result may be empty. An end that falls inside a multi-byte code point panics, as `s[a..b]` does, including both ends of an empty range there |
+| `slice` | `fn slice(self, start: i64, end: i64) -> Str` | **Deprecated**: a second spelling of `s[a..b]`. `karac check` warns and `karac fix` rewrites `s.slice(a, b)` to `s[a..b]`; it is removed in a later release. It checks neither the bounds nor the code-point boundaries, which `s[a..b]` does (B-2026-11-25-63) |
 
 Byte offsets (`len`, `find`, `s[a..b]`, `bytes()`) count bytes, not characters. Locate a valid cut with `find`, or work in characters with `chars()` and `char_at`.
 

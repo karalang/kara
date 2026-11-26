@@ -20,16 +20,16 @@ pub fn is_absolute(p: Str) -> bool {
 fn path_trimmed(p: Str) -> Str {
     let mut end = p.len();
     loop {
-        while end > 1 and p.slice(0, end).ends_with("/") {
+        while end > 1 and p[0..end].ends_with("/") {
             end = end - 1;
         }
-        if end >= 2 and p.slice(0, end).ends_with("/.") {
+        if end >= 2 and p[0..end].ends_with("/.") {
             end = end - 1;
         } else {
             break;
         }
     }
-    p.slice(0, end)
+    p[0..end]
 }
 
 /// The path without its last component: `"a/b/c.txt"` gives `"a/b"`, `"a"`
@@ -46,9 +46,9 @@ pub fn parent(p: Str) -> Option[Str] {
             // The parent ends in no separator and no `.` component either:
             // `"a/./b"` gives `"a"`, not `"a/."` (review-thread ruling
             // 2026-11-20, B-2026-11-20-52).
-            Some(path_trimmed(t.slice(0, i + 1)))
+            Some(path_trimmed(t[0..i + 1]))
         }
-        None => Some(t.slice(0, 0)),
+        None => Some(t[0..0]),
     }
 }
 
@@ -57,7 +57,7 @@ pub fn parent(p: Str) -> Option[Str] {
 pub fn file_name(p: Str) -> Option[Str] {
     let t = path_trimmed(p);
     let name = match t.rfind("/") {
-        Some(i) => t.slice(i + 1, t.len()),
+        Some(i) => t[i + 1..t.len()],
         None => t,
     };
     if name.is_empty() or name == "." or name == ".." {
@@ -72,7 +72,7 @@ pub fn file_name(p: Str) -> Option[Str] {
 pub fn extension(p: Str) -> Option[Str] {
     let t = path_trimmed(p);
     let name = match t.rfind("/") {
-        Some(i) => t.slice(i + 1, t.len()),
+        Some(i) => t[i + 1..t.len()],
         None => t,
     };
     if name.is_empty() or name == "." or name == ".." {
@@ -80,7 +80,7 @@ pub fn extension(p: Str) -> Option[Str] {
     }
     match name.rfind(".") {
         Some(0) | None => None,
-        Some(i) => Some(name.slice(i + 1, name.len())),
+        Some(i) => Some(name[i + 1..name.len()]),
     }
 }
 
@@ -89,7 +89,7 @@ pub fn extension(p: Str) -> Option[Str] {
 pub fn stem(p: Str) -> Option[Str] {
     let t = path_trimmed(p);
     let name = match t.rfind("/") {
-        Some(i) => t.slice(i + 1, t.len()),
+        Some(i) => t[i + 1..t.len()],
         None => t,
     };
     if name.is_empty() or name == "." or name == ".." {
@@ -97,7 +97,7 @@ pub fn stem(p: Str) -> Option[Str] {
     }
     match name.rfind(".") {
         Some(0) | None => Some(name),
-        Some(i) => Some(name.slice(0, i)),
+        Some(i) => Some(name[0..i]),
     }
 }
 
@@ -123,7 +123,7 @@ pub fn components(p: Str) -> Vec[Str] {
     let abs = p.starts_with("/");
     let mut out: Vec[Str] = Vec.new();
     if abs {
-        out.push(p.slice(0, 1));
+        out.push(p[0..1]);
     }
     let mut at_start = true;
     for c in p.split("/") {

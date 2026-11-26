@@ -3,7 +3,7 @@ fn word(c: mut ref Cursor) -> Str {
     let start = c.pos;
     let n = c.src.len();
     while c.pos < n and c.src.char_at(c.pos) != Some(' ') { c.pos += 1; }
-    let out = c.src.slice(start, c.pos);
+    let out = c.src[start..c.pos];
     if c.pos < n { c.pos += 1; }
     out
 }

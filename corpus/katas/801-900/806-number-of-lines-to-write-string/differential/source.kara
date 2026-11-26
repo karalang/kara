@@ -162,8 +162,8 @@ fn main() {
         let mut turned_s = String.new();
         for _ in 0..length {
             let at = next_random(mut seed) % 26;
-            s.push_str(letters.slice(at, at + 1));
-            turned_s.push_str(letters.slice(25 - at, 26 - at));
+            s.push_str(letters[at..at + 1]);
+            turned_s.push_str(letters[25 - at..26 - at]);
         }
         let mut turned_widths: Vec[i64] = Vec.new();
         for i in 0..26 {
@@ -171,7 +171,7 @@ fn main() {
         }
         let extra = next_random(mut seed) % 26;
         let mut longer = s.clone();
-        longer.push_str(letters.slice(extra, extra + 1));
+        longer.push_str(letters[extra..extra + 1]);
         let want = definition(widths, s);
         let (want_lines, _) = want;
         total += want_lines;

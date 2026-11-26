@@ -4,7 +4,7 @@ impl Cursor {
         let start = self.pos;
         let n = self.src.len();
         while self.pos < n and self.src.char_at(self.pos) != Some(' ') { self.pos += 1; }
-        let out = self.src.slice(start, self.pos);
+        let out = self.src[start..self.pos];
         if self.pos < n { self.pos += 1; }
         out
     }

@@ -3288,18 +3288,18 @@ fn organize() -> Result[(), Exc] {
 }
 
 fn to_int(s: ref String) -> i64 {
-    let t = if s.starts_with("+") { s.slice(1, s.len()).to_string() } else { s.clone() };
+    let t = if s.starts_with("+") { s[1..s.len()].to_string() } else { s.clone() };
     str_int(t)
 }
 
 fn parse_micro(s: ref String) -> i64 {
     let neg = s.starts_with("-");
-    let body = if neg { s.slice(1, s.len()).to_string() } else { s.clone() };
+    let body = if neg { s[1..s.len()].to_string() } else { s.clone() };
     let parts: Vec[Str] = body.splitn(2, ".").collect();
     let whole = to_int(parts[0].to_string());
     let mut frac = if parts.len() > 1 { parts[1].to_string() } else { String.new() };
     frac.push_str("000000");
-    let v = whole * 1000000 + to_int(frac.slice(0, 6).to_string());
+    let v = whole * 1000000 + to_int(frac[0..6].to_string());
     if neg { -v } else { v }
 }
 
@@ -3307,7 +3307,7 @@ fn parse_tenths(s: ref String) -> i64 {
     let parts: Vec[Str] = s.splitn(2, ".").collect();
     let mut frac = if parts.len() > 1 { parts[1].to_string() } else { String.new() };
     frac.push_str("0");
-    to_int(parts[0].to_string()) * 10 + to_int(frac.slice(0, 1).to_string())
+    to_int(parts[0].to_string()) * 10 + to_int(frac[0..1].to_string())
 }
 
 fn r1(n: i64, d: i64) -> Pv {
@@ -3325,7 +3325,7 @@ fn dms(micro: i64) -> Pv {
 
 fn offset_seconds(off: ref String) -> i64 {
     let sign = if off.starts_with("-") { -1 } else { 1 };
-    sign * (to_int(off.slice(1, 3).to_string()) * 3600 + to_int(off.slice(4, 6).to_string()) * 60)
+    sign * (to_int(off[1..3].to_string()) * 3600 + to_int(off[4..6].to_string()) * 60)
 }
 
 fn days_from_civil(y0: i64, m: i64, d: i64) -> i64 {

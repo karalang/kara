@@ -15,7 +15,7 @@ fn longest_word(words: Vec[String]) -> String {
     for word in words.iter() {
         let mut buildable = true;
         for k in 1..word.len() {
-            if not all.contains(word.slice(0, k).to_string()) {
+            if not all.contains(word[0..k].to_string()) {
                 buildable = false;
                 break;
             }
