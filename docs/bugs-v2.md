@@ -61,7 +61,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | diagnostics | 783 |
 | false-positive | 398 |
 | missing-feature | 267 |
-| perf | 205 |
+| perf | 206 |
 | other | 157 |
 | soundness | 135 |
 | miscompile | 110 |
@@ -78,7 +78,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 956 |
 | mir | 348 |
-| mir-llvm | 336 |
+| mir-llvm | 337 |
 | cli | 320 |
 | parser | 165 |
 | ownership | 143 |
@@ -125,7 +125,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-1 | 2026-11-26 | typecheck | low | An `as` cast settles an unsuffixed literal binding to `i64` on the spot, so a later use cannot fix it: `let mid = 5; let x = mid as f64; mid` in a `-> i32` body is refused (and `let x = mid as i64` lints redundant_cast), while the same cast written after the fixing use (`take(mid); mid as f64`) and `let y = mid + 1; y` both check; the refusal blames an operator or a method | — |
 | B-2026-11-26-2 | 2026-11-26 | typecheck | low | A `for` over an array literal settles the array's literals to `i64` before the loop body can fix them: `for (rider, start, end) in [(10, 3, 8), (5, 10, 16)] { b.check_in(rider, "Leyton", start) }` with `check_in(id: i32, .., t: i32)` is refused, as is `for a in [1, 2] { take_i32(a) }` and `for a in [1, 2].iter()`, while the same array bound first (`let pairs = [(1, 2)]; for (a, b) in pairs.iter() { take_i32(a) }`), `let (c, d) = (5, 6); take_i32(c)` and `let x = [1, 2][0]; take_i32(x)` all check | — |
 | B-2026-11-26-6 | 2026-11-26 | typecheck | low | `v.push([1, 2].to_vec())` with `v: Vec[Vec[i32]]` is refused as a `Vec[i64]`, with no fix, though the same literal through `.to_vec()` takes `i32` from a `let` annotation or a function's parameter | — |
-| B-2026-11-26-7 | 2026-11-26 | mir-llvm | low | `s.rotate_right(k)` and `rotate_left` turn a slice by three reversals of element swaps, where Rust's `rotate_right(1)` moves the elements once with a `memmove`: kata 1409's bench, `p[..=at].rotate_right(1)` once a query, runs in 0.17-0.18 s against Rust's 0.046-0.058 s with overflow checks on and C's 0.071 s | — |
 | B-2026-11-26-9 | 2026-11-26 | typecheck | low | `v.push(((0..3).map(|_| 1).collect(), 5))` with `v: Vec[(Vec[i32], i32)]` is refused, "expected '(Vec[i32], i32)', found '(C, i64)'", with no fix: the element type does not reach a `collect` inside a tuple argument, though it reaches a bare `v.push(it.collect())` and a `let p: (Vec[i32], i32) = (it.collect(), 5)` | — |
 | B-2026-11-26-10 | 2026-11-26 | effect | medium | Three disjoint `par` shapes are refused E0418/E0517: a branch that writes one field turns its method read of another field of the same root into a mutable borrow; tuple items `p.0` / `p.1` conflict; a `let mut` closure called in ONE branch is E0517 | — |
 | B-2026-11-26-69 | 2026-11-26 | typecheck+runtime | low | `Array[T, N]` has no `Serialize` / `Deserialize`: the ruling is a JSON array of `N` elements, read back from exactly `N` with an error naming the expected and actual length, nested arrays alike; B-2026-11-25-49 refuses the field at the derive until then | — |
@@ -137,6 +136,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-75 | 2026-11-26 | typecheck+mir | low | `[]` as a method receiver (`let n = [].len();`, `let v: Vec[i64] = [].iter().map(|x| *x).collect();`) gets only the internal E0516 "a type that failed to check is not lowered yet", not the element-type diagnostic `let mut w = [];` gets | — |
 | B-2026-11-26-76 | 2026-11-26 | ownership | medium | A `match` whose moving arm reassigns the scrutinee, beside an arm that leaves it untouched, makes a later use E0500 "may have been moved", though the place is initialized on every path (core-semantics §3.4) | — |
 | B-2026-11-26-77 | 2026-11-26 | typecheck+mir | low | Three refusals with the right verdict print an internal E0516 instead of the user diagnostic: a `ref` binding of a `Vec[Vector[..]]` element as a receiver, a `break` aimed through a `with_provider` closure body, and a let-bound closure's `collect()` with no target type | — |
+| B-2026-11-26-79 | 2026-11-26 | mir-llvm | low | A hand-written element shift down a slice (`while i > 0 { p[i] = p[i - 1]; i -= 1; }`) compiles to a scalar copy with a bounds check per element, where rustc and clang turn the same loop into one `memmove` | — |
 
 ### Relocated
 
@@ -2361,6 +2361,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-3 | typecheck | medium | A type-qualified call of a number's method is refused: `i32.max(a, b)`, `i64.abs(x)`, `i32.pow(a, 2)` and `f64.sqrt(x)` are each 'no associated funct… | 2099ac467c |
 | B-2026-11-26-4 | typecheck | low | Remainder of the kata 1401 row: a type-qualified call of a native method on `Vec` or `bool` is still refused (`Vec.len(v)`, `bool.then(c, f)`: 'no as… | fa93f3af83 |
 | B-2026-11-26-5 | mir | medium | `String.from(s)` with `s` the item of a `for` over a local collection of strings is refused as a move out of a borrowed place (E0516), though the sam… | 9143203959 |
+| B-2026-11-26-7 | mir-llvm | low | `s.rotate_right(k)` and `rotate_left` turn a slice by three reversals of element swaps, where Rust's `rotate_right(1)` moves the elements once with a… | e00bb89a87 |
 | B-2026-11-26-8 | typecheck | low | `.map(\|x\| { sum += x; sum }).fold(0, \|low, s\| low.min(s))`, with `let mut sum = 0` summing `i32`s, is fixed by suffixing the seed `0i32`, after which… | c47aab0607 |
 | B-2026-11-26-11 | mir | medium | A nested `par` that reads a field of an outer local is refused by `karac check` with the internal E0516 "the capture of `t` is not lowered yet" | 8b95195de9 |
 | B-2026-11-26-12 | typecheck | low | `SortedSet` has no `clear`, though Vec, VecDeque, Map, Set, SortedMap and PriorityQueue all have one | 4f5cd67ae9 |
