@@ -34870,19 +34870,19 @@ impl BorrowSummary {
 /// [`build_source`] up to the MIR checks: the program with the library,
 /// parsed, checked and lowered, with §3.7's forbidden moves refused.
 /// `KARAC_MIR_TIME=1` prints each build phase's wall time to stderr.
-pub fn phase_time(label: &str, t: &mut std::time::Instant) {
+pub fn phase_time(label: &str, t: &mut crate::clock::Instant) {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     let ms = t.elapsed().as_secs_f64() * 1e3;
     if *ON.get_or_init(|| std::env::var("KARAC_MIR_TIME").as_deref() == Ok("1")) {
         eprintln!("[mir-time] {label:<24} {ms:8.1} ms");
     }
     record_timing(label, ms);
-    *t = std::time::Instant::now();
+    *t = crate::clock::Instant::now();
 }
 
 /// `--emit-timings=<file>`: where the phase timings go, and the ones so far.
 /// The file, when it was asked for, and the phases so far.
-type Timings = (String, std::time::Instant, Vec<(String, f64)>);
+type Timings = (String, crate::clock::Instant, Vec<(String, f64)>);
 static TIMINGS: std::sync::Mutex<Option<Timings>> = std::sync::Mutex::new(None);
 
 /// Send every phase's wall time to `path` as JSON (design.md §17 rule 1:
@@ -34891,7 +34891,7 @@ static TIMINGS: std::sync::Mutex<Option<Timings>> = std::sync::Mutex::new(None);
 /// the process ends.
 pub fn set_timings_file(path: &str) -> std::io::Result<()> {
     let mut slot = TIMINGS.lock().unwrap_or_else(|e| e.into_inner());
-    *slot = Some((path.to_string(), std::time::Instant::now(), Vec::new()));
+    *slot = Some((path.to_string(), crate::clock::Instant::now(), Vec::new()));
     write_timings(path, &[], 0.0)
 }
 
@@ -35104,7 +35104,7 @@ struct DefsRes {
 
 impl DefsRes {
     fn build(program: &ast::Program, r: &ResolveResult, tc: &TypeCheckResult) -> DefsRes {
-        let mut t = std::time::Instant::now();
+        let mut t = crate::clock::Instant::now();
         let defs = ProgramDefs::build_for_program(program);
         let mut res = crate::node_res::node_res(r, &defs, 0, None);
         crate::node_res::add_variant_patterns(&mut res, &defs, 0, &tc.variant_patterns);
@@ -35136,7 +35136,7 @@ impl Frontend {
 }
 
 fn frontend(src: &str, check_only: bool) -> Result<Frontend, String> {
-    let mut t = std::time::Instant::now();
+    let mut t = crate::clock::Instant::now();
     let (src, user_len) = library_source(src);
     phase_time("library_source", &mut t);
     let (parsed, code) = crate::parse_with_code_text(&src);
@@ -35490,7 +35490,7 @@ fn lower_typed_parts(
             &own
         }
     };
-    let mut t = std::time::Instant::now();
+    let mut t = crate::clock::Instant::now();
     let hir = crate::typed_hir::build(tc, &crate::typed_hir::ProgramHirDefs::new(defs, 0, res));
     phase_time("typed_hir", &mut t);
     let lower = |hir, cancel_at| {
@@ -35575,7 +35575,7 @@ fn lower_typed_parts(
 /// The rest of [`build_source`]: each body's move and borrow checks, drop
 /// elaboration and the passes after it.
 fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
-    let mut t = std::time::Instant::now();
+    let mut t = crate::clock::Instant::now();
     // `KARAC_MIR_DUMP=built` or `=elaborated` prints every body to stderr.
     let dump = std::env::var("KARAC_MIR_DUMP").ok();
     let names: FxHashSet<String> = lowered.program.bodies.keys().cloned().collect();

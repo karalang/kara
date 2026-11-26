@@ -1,7 +1,6 @@
 pub mod ast;
 pub mod attribute_validator;
 pub mod binding_rename;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod binding_use;
 pub mod build_cache;
 pub mod call_graph;
@@ -18,6 +17,7 @@ pub mod backend;
 pub mod block_consts;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cli;
+pub mod clock;
 pub mod closure_escape;
 pub mod codegen_queries;
 pub mod comptime;
@@ -147,12 +147,12 @@ pub mod registry_proxy;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod repl;
 pub mod resolver;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod result_escape;
 pub mod scaffold;
 pub mod simd_report;
 pub mod span_visitor;
 pub mod specialization_queries;
+pub mod stack_grow;
 pub mod style_lints;
 pub mod target;
 pub mod token;

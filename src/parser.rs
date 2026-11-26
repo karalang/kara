@@ -520,7 +520,7 @@ const RESERVED_FFI_ABIS: &[&str] = &["stdcall", "fastcall", "win64", "sysv64"];
 /// SEMANTIC ceiling: far deeper than any human- or machine-written program
 /// nests, so hitting it means pathological input, not a real program.
 /// Overflow safety no longer depends on it: the three descent entries wrap
-/// their recursion in `stacker::maybe_grow` (512 KiB red zone, 16 MiB
+/// their recursion in `crate::stack_grow::maybe_grow` (512 KiB red zone, 16 MiB
 /// chunks — one level costs ≤~85 KiB in a debug build), so parsing survives
 /// any thread size, including Rust's default 2 MiB spawned threads that a
 /// debug build used to overflow at ~24 levels. The regression tests in

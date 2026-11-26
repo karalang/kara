@@ -257,7 +257,8 @@ impl super::Parser {
             return None;
         }
         // Red-zone stack growth — see parse_expr_bp_with_ctx for sizing.
-        let result = stacker::maybe_grow(512 * 1024, 16 * 1024 * 1024, || self.parse_type_inner());
+        let result =
+            crate::stack_grow::maybe_grow(512 * 1024, 16 * 1024 * 1024, || self.parse_type_inner());
         self.exit_recursion();
         result
     }

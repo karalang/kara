@@ -447,7 +447,7 @@ impl super::Parser {
         // 512 KiB red zone at every guarded entry leaves a wide margin, and
         // parsing survives small embedder threads without the caller sizing
         // its stack. MAX_RECURSION_DEPTH stays as the semantic ceiling.
-        let result = stacker::maybe_grow(512 * 1024, 16 * 1024 * 1024, || {
+        let result = crate::stack_grow::maybe_grow(512 * 1024, 16 * 1024 * 1024, || {
             self.parse_expr_bp_with_ctx_inner(min_bp, stmt_ctx)
         });
         self.exit_recursion();

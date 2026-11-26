@@ -167,8 +167,10 @@ extern "C" {
     fn c_acosh(x: f64) -> f64;
     #[link_name = "acoshf"]
     fn c_acoshf(x: f32) -> f32;
+    #[cfg(not(target_arch = "wasm32"))]
     #[link_name = "atanh"]
     fn c_atanh(x: f64) -> f64;
+    #[cfg(not(target_arch = "wasm32"))]
     #[link_name = "atanhf"]
     fn c_atanhf(x: f32) -> f32;
     // B-2026-08-30-4 — `cbrt`, on the weaker footing described above: not a
@@ -197,12 +199,27 @@ pub fn acosh_f32(x: f32) -> f32 {
     unsafe { c_acoshf(x) }
 }
 /// `atanh` at f64, from libm — the symbol codegen calls.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn atanh_f64(x: f64) -> f64 {
     unsafe { c_atanh(x) }
 }
 /// `atanhf` at f32, from libm — the symbol codegen calls.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn atanh_f32(x: f32) -> f32 {
     unsafe { c_atanhf(x) }
+}
+/// wasm32-unknown-unknown has no libm, and `compiler_builtins` ships no
+/// `atanh`/`atanhf` there (the other six it does), so the browser
+/// playground's interpreter takes Rust's formula, which can differ from
+/// libm's in the last place (B-2026-11-25-57). No compiled lane runs here.
+#[cfg(target_arch = "wasm32")]
+pub fn atanh_f64(x: f64) -> f64 {
+    x.atanh()
+}
+/// `atanhf` on wasm32: Rust's formula, as `atanh_f64` there.
+#[cfg(target_arch = "wasm32")]
+pub fn atanh_f32(x: f32) -> f32 {
+    x.atanh()
 }
 
 /// `cbrt` at f64, from libm — the symbol codegen calls (B-2026-08-30-4).

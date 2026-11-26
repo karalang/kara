@@ -1091,6 +1091,35 @@ jobs:
           fi
           echo "${{ matrix.name }}: known-unsupported, as documented — ring's ARM-mode asm (x25519-asm-arm.S) cannot assemble for the Thumb-only ${{ matrix.target }}. See phase-10 'Embedded TLS provider decision'."
 
+  # The browser playground (`playground/`, the MIR interpreter in wasm) and
+  # examples/cartographer's studio build karac for wasm32-unknown-unknown.
+  # No job built it, and it drifted to ~45 errors unseen (B-2026-11-25-57):
+  # a native-only dependency reached from an always-on module fails here.
+  playground-wasm:
+    name: Playground builds for wasm32
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      # The pinned toolchain needs the target too (see `tls-cross`).
+      - name: Add target to pinned toolchain
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: playground-wasm32
+
+      # A build, not a check: a missing libm symbol (atanh) is a LINK error
+      # on this target, which `cargo check` never reaches.
+      - name: Build the playground for wasm32
+        run: cargo build -p karac-playground --target wasm32-unknown-unknown
+
   # Phase-8 line 48 (public-CA trust default). Proves the runtime's
   # `Client.get("https://...")` validates a real CA-signed peer cert
   # using the embedded `webpki-roots` bundle — without relying on a

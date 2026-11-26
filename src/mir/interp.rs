@@ -1043,8 +1043,8 @@ fn run_with(
         limiters: Vec::new(),
         statics: Vec::new(),
         caps: Default::default(),
-        rand: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        rand: crate::clock::SystemTime::now()
+            .duration_since(crate::clock::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos() as u64)
             | 1,
         sorted_tables: Default::default(),
@@ -2236,7 +2236,7 @@ impl<'a> Interp<'a> {
         }
         // A deep recursion outgrows any fixed thread stack: the body runs
         // on a fresh segment once this one runs low.
-        let result = stacker::maybe_grow(256 * 1024, 16 * 1024 * 1024, || {
+        let result = crate::stack_grow::maybe_grow(256 * 1024, 16 * 1024 * 1024, || {
             self.run_body(body, decoded)
         });
         let mut frame = self.frames.pop().expect("frame");
@@ -2752,16 +2752,16 @@ impl<'a> Interp<'a> {
                 }
             }
             ("Clock", "now") => Ok(Value::Int(
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
+                crate::clock::SystemTime::now()
+                    .duration_since(crate::clock::UNIX_EPOCH)
                     .map_or(0, |d| i128::from(d.as_secs())),
             )),
             // As the runtime's `karac_runtime_clock_monotonic_ns` /
             // `_wall_ns`: the origin is the first reading.
             ("Clock", "monotonic_ns") => Ok(Value::Int(i128::from(monotonic_ns()))),
             ("Clock", "wall_ns") => Ok(Value::Int(
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
+                crate::clock::SystemTime::now()
+                    .duration_since(crate::clock::UNIX_EPOCH)
                     .map_or(0, |d| d.as_nanos() as i64 as i128),
             )),
             ("RandomSource", "next_u64") => {
@@ -6110,7 +6110,7 @@ impl<'a> Interp<'a> {
                 else {
                     return Ok(Value::Bool(false));
                 };
-                let now = std::time::Instant::now();
+                let now = crate::clock::Instant::now();
                 let (rate, cap) = (l.rate, l.capacity);
                 let (tokens, last) = l.buckets.entry(k).or_insert((cap, now));
                 let elapsed = now.saturating_duration_since(*last).as_secs_f64();
@@ -7864,7 +7864,7 @@ impl<'a> Interp<'a> {
             .sockets
             .tls_timeouts
             .get(&fd)
-            .map(|d| std::time::Instant::now() + *d);
+            .map(|d| crate::clock::Instant::now() + *d);
         let (Some(c), Some(s)) = (
             self.sockets.tls.get_mut(&fd),
             self.sockets.streams.get_mut(&fd),
@@ -9123,7 +9123,7 @@ impl<'a> Interp<'a> {
                         let (at, lo, len) = self.view_of(buf)?;
                         let mut bytes = vec![0u8; len as usize];
                         let timeout = self.sockets.tls_timeouts.get(&fd).copied();
-                        let deadline = timeout.map(|d| std::time::Instant::now() + d);
+                        let deadline = timeout.map(|d| crate::clock::Instant::now() + d);
                         let timed = self.sockets.timed_out.remove(&fd);
                         let got = match (
                             self.sockets.tls.get_mut(&fd),
@@ -9455,7 +9455,7 @@ impl<'a> Interp<'a> {
     /// between tasks, so no task is the running one: the last to run is
     /// suspended too, and is torn down now like the rest.
     fn fire_deadlines(&mut self) -> R<()> {
-        let now = std::time::Instant::now();
+        let now = crate::clock::Instant::now();
         let ran = std::mem::replace(&mut self.cur_task, usize::MAX);
         let mut fired = Ok(());
         for g in 1..=self.groups.len() {
@@ -15478,12 +15478,12 @@ impl<'a> Interp<'a> {
     fn pause(&mut self, d: std::time::Duration) -> R<()> {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let end = std::time::Instant::now() + d;
+            let end = crate::clock::Instant::now() + d;
             loop {
                 if interrupt_asked() && !self.panic_unwinding() {
                     return Err(self.interrupted());
                 }
-                let left = end.saturating_duration_since(std::time::Instant::now());
+                let left = end.saturating_duration_since(crate::clock::Instant::now());
                 if left.is_zero() {
                     return Ok(());
                 }
@@ -18377,9 +18377,9 @@ impl<'a> Interp<'a> {
             // A shape the loop does not take (a tree's first child, a node
             // with a `Drop` body) still recurses; it gets a fresh stack
             // segment once this one runs low, as a call does.
-            if let Err(e) =
-                stacker::maybe_grow(256 * 1024, 16 * 1024 * 1024, || self.drop_adt(&root, ty, a))
-            {
+            if let Err(e) = crate::stack_grow::maybe_grow(256 * 1024, 16 * 1024 * 1024, || {
+                self.drop_adt(&root, ty, a)
+            }) {
                 result = Err(e);
                 next = None;
             }
@@ -18895,7 +18895,7 @@ impl<'a> Interp<'a> {
     fn wait_for(&mut self, parked: &[(usize, Wait)]) -> R<()> {
         let mut io = false;
         // A group's deadline cancels its tasks (§11.10).
-        let mut nearest: Option<std::time::Instant> =
+        let mut nearest: Option<crate::clock::Instant> =
             self.groups.iter().filter_map(|g| g.deadline).min();
         for (_, w) in parked {
             match w {
@@ -18960,7 +18960,7 @@ impl<'a> Interp<'a> {
             }
             (None, true) => step,
             (Some(at), io) => {
-                let left = at.saturating_duration_since(std::time::Instant::now());
+                let left = at.saturating_duration_since(crate::clock::Instant::now());
                 if io {
                     left.min(step)
                 } else {
@@ -19039,12 +19039,12 @@ impl<'a> Interp<'a> {
                     // pause is already over, so a zero sleep lets the other
                     // tasks run.
                     if t.deadline.is_none() {
-                        let at = std::time::Instant::now() + pause;
+                        let at = crate::clock::Instant::now() + pause;
                         t.deadline = Some(at);
                         self.wait = Some(Wait::Until(at));
                         return Ok(Value::Bool(false));
                     }
-                    let at = t.deadline.unwrap_or_else(std::time::Instant::now);
+                    let at = t.deadline.unwrap_or_else(crate::clock::Instant::now);
                     Some(Wait::Until(at))
                 }
                 #[cfg(target_arch = "wasm32")]
@@ -19189,7 +19189,7 @@ impl<'a> Interp<'a> {
     /// needs (`need` as [`Self::buffered_wait`] has it), reading what the
     /// socket has without waiting. A failure is kept for the read to report,
     /// and the deadline passing makes it a timeout.
-    fn buffered_holds(&mut self, id: i128, need: u8, at: Option<std::time::Instant>) -> bool {
+    fn buffered_holds(&mut self, id: i128, need: u8, at: Option<crate::clock::Instant>) -> bool {
         use std::io::{ErrorKind::WouldBlock, Read};
         let Some(Some(Buf::Provided {
             file,
@@ -19266,12 +19266,12 @@ impl<'a> Interp<'a> {
     fn read_deadline(
         &mut self,
         timeout: Option<std::time::Duration>,
-    ) -> Option<std::time::Instant> {
+    ) -> Option<crate::clock::Instant> {
         let d = timeout?;
         let t = &mut self.tasks[self.cur_task];
         Some(
             *t.deadline
-                .get_or_insert_with(|| std::time::Instant::now() + d),
+                .get_or_insert_with(|| crate::clock::Instant::now() + d),
         )
     }
 
@@ -19298,7 +19298,7 @@ impl<'a> Interp<'a> {
             leave(self);
             return Ok(None);
         }
-        let now = std::time::Instant::now();
+        let now = crate::clock::Instant::now();
         let at = match waiting {
             Some(_) => self.tasks[cur].deadline.unwrap_or(now),
             None => {
@@ -19334,7 +19334,7 @@ impl<'a> Interp<'a> {
             self.tasks[cur].deadline = None;
             return Ok(None);
         }
-        let now = std::time::Instant::now();
+        let now = crate::clock::Instant::now();
         let at = *self.tasks[cur].deadline.get_or_insert_with(|| {
             now + std::time::Duration::from_millis(ms.clamp(0, i128::from(u64::MAX)) as u64)
         });
@@ -19383,7 +19383,7 @@ impl<'a> Interp<'a> {
                 let c = self.chan_mut(*id, "send")?;
                 c.cap == 0 || c.queue.len() < c.cap || c.receivers == 0
             }
-            Wait::Until(at) => std::time::Instant::now() >= *at,
+            Wait::Until(at) => crate::clock::Instant::now() >= *at,
             Wait::Select(epoch, until) => {
                 self.chan_epoch != *epoch || (*until >= 0 && monotonic_ns() >= *until)
             }
@@ -19487,9 +19487,9 @@ impl<'a> Interp<'a> {
                 }
             }
             Wait::Pool(id, at) => {
-                std::time::Instant::now() >= *at || self.pool(*id).is_none_or(|p| pool_free(p))
+                crate::clock::Instant::now() >= *at || self.pool(*id).is_none_or(|p| pool_free(p))
             }
-            Wait::Sem(id, at) => std::time::Instant::now() >= *at || self.sem_free(*id),
+            Wait::Sem(id, at) => crate::clock::Instant::now() >= *at || self.sem_free(*id),
             Wait::Http(t) => t.done(),
             Wait::Pipe(id, drain) => self.procs.pipe_ready(*id, *drain),
             Wait::Buffered(id, need, at) => self.buffered_holds(*id, *need, *at),
@@ -22123,7 +22123,7 @@ struct TaskSlot {
     group: usize,
     handle: usize,
     /// The deadline a `sleep_ms` waits for, once its `__ready` has asked.
-    deadline: Option<std::time::Instant>,
+    deadline: Option<crate::clock::Instant>,
     /// Its `__ready` waited the pause out, so the `sleep_ms` after it
     /// returns at once.
     slept: bool,
@@ -22190,7 +22190,7 @@ struct GroupSlot {
     /// The task that made it, whose teardown cancels it (§11.9).
     owner: usize,
     /// When it is cancelled (`with_deadline`, §11.10), until then.
-    deadline: Option<std::time::Instant>,
+    deadline: Option<crate::clock::Instant>,
     /// It contains its tasks' panics (`TaskGroup.isolating`, §11.12).
     isolating: bool,
     /// Auto-par made it (`TaskGroup.__hidden`, B-2026-10-27-22): its tasks
@@ -22242,18 +22242,18 @@ enum Wait {
     Recv(i128),
     /// Room in the channel, or no receiver left.
     Send(i128),
-    Until(std::time::Instant),
+    Until(crate::clock::Instant),
     /// A connection to accept, or bytes (or the end) to read. A read on a
     /// socket with a read timeout also ends at its deadline (§11.10).
     Accept(i64),
-    Read(i64, Option<std::time::Instant>),
+    Read(i64, Option<crate::clock::Instant>),
     /// Room to write some of the bytes, which `__ready` then writes.
     Write(i64, Vec<u8>),
     /// A datagram to receive, or the read timeout's deadline to pass.
-    Datagram(i64, Option<std::time::Instant>),
+    Datagram(i64, Option<crate::clock::Instant>),
     /// A TLS stream's read (`false`) or write to be able to complete, as
     /// `TlsConn::ready` says, or a read's timeout deadline to pass.
-    Tls(i64, bool, Option<std::time::Instant>),
+    Tls(i64, bool, Option<crate::clock::Instant>),
     /// A child, by its `ChildProcess` id, to exit.
     Child(i128),
     /// An HTTP request on a helper to end.
@@ -22263,14 +22263,14 @@ enum Wait {
     /// for the `read_to_end` that follows.
     Pipe(i128, bool),
     /// A pool, by id, to have a value to lend, or the deadline to pass.
-    Pool(i128, std::time::Instant),
+    Pool(i128, crate::clock::Instant),
     /// A semaphore, by id, to have a free permit, or the deadline to pass
     /// (B-2026-11-11-34).
-    Sem(i128, std::time::Instant),
+    Sem(i128, crate::clock::Instant),
     /// A buffered reader over a connection, by id, to hold some bytes (0),
     /// a line (1) or the end (2), or its read timeout's deadline to pass
     /// (B-2026-11-10-14).
-    Buffered(i128, u8, Option<std::time::Instant>),
+    Buffered(i128, u8, Option<crate::clock::Instant>),
     /// A spawned task to return, by handle id.
     Join(usize),
     /// Room under a group's limit, or (`true`) all its tasks returned.
@@ -22301,7 +22301,7 @@ struct Sockets {
     /// reset, or a refused datagram), which that read then reports.
     failed: rustc_hash::FxHashMap<i64, std::io::Error>,
     /// A TLS listener's config, by its descriptor.
-    tls_configs: rustc_hash::FxHashMap<i64, std::sync::Arc<rustls::ServerConfig>>,
+    tls_configs: rustc_hash::FxHashMap<i64, std::sync::Arc<crate::tls_conn::ServerConfig>>,
     /// An accepted TLS stream's connection, by its descriptor.
     tls: rustc_hash::FxHashMap<i64, crate::tls_conn::TlsConn>,
     /// A TLS stream's read timeout: its socket is non-blocking, so the
@@ -22323,8 +22323,8 @@ impl Sockets {
         self.timed_out.remove(&fd);
     }
 
-    fn past(&mut self, fd: i64, at: Option<std::time::Instant>) -> bool {
-        let past = at.is_some_and(|at| std::time::Instant::now() >= at);
+    fn past(&mut self, fd: i64, at: Option<crate::clock::Instant>) -> bool {
+        let past = at.is_some_and(|at| crate::clock::Instant::now() >= at);
         if past {
             self.timed_out.insert(fd);
         }
@@ -22349,13 +22349,13 @@ impl Sockets {
 /// Whether `e` is a read timeout expiring (the runtime's `timed_out`).
 /// Waits until `s`, non-blocking, has bytes (or the end) to read, or
 /// `deadline` passes: whether it has.
-fn wait_readable(s: &std::net::TcpStream, deadline: Option<std::time::Instant>) -> bool {
+fn wait_readable(s: &std::net::TcpStream, deadline: Option<crate::clock::Instant>) -> bool {
     loop {
         match s.peek(&mut [0u8; 1]) {
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
             _ => return true,
         }
-        if deadline.is_some_and(|at| std::time::Instant::now() >= at) {
+        if deadline.is_some_and(|at| crate::clock::Instant::now() >= at) {
             return false;
         }
         std::thread::sleep(std::time::Duration::from_millis(1));
@@ -22480,7 +22480,7 @@ const VEC_MORE_METHODS: &[&str] = &[
 struct Limiter {
     rate: f64,
     capacity: f64,
-    buckets: rustc_hash::FxHashMap<String, (f64, std::time::Instant)>,
+    buckets: rustc_hash::FxHashMap<String, (f64, crate::clock::Instant)>,
 }
 
 /// The `conn_id` of a `PooledConnection` whose value `release` has moved
@@ -22490,14 +22490,14 @@ const RELEASED: i128 = -1;
 /// `Clock.monotonic_ns()`: nanoseconds since the first reading, as the
 /// runtime's `karac_runtime_clock_monotonic_ns`.
 fn monotonic_ns() -> i64 {
-    static ORIGIN: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
-    let origin = ORIGIN.get_or_init(std::time::Instant::now);
+    static ORIGIN: std::sync::OnceLock<crate::clock::Instant> = std::sync::OnceLock::new();
+    let origin = ORIGIN.get_or_init(crate::clock::Instant::now);
     origin.elapsed().as_nanos() as i64
 }
 
 /// The `Instant` the monotonic clock reads `ns` at.
-fn instant_at(ns: i64) -> std::time::Instant {
-    let now = std::time::Instant::now();
+fn instant_at(ns: i64) -> crate::clock::Instant {
+    let now = crate::clock::Instant::now();
     now + std::time::Duration::from_nanos((ns - monotonic_ns()).max(0) as u64)
 }
 
@@ -23192,7 +23192,7 @@ fn main() -> () {
 ";
         let m = crate::mir::parse_module(src).unwrap();
         let prog = Program::from_module(&m);
-        let t0 = std::time::Instant::now();
+        let t0 = crate::clock::Instant::now();
         let tasks = run_coroutines(&prog, &m.tys, "main", vec![]);
         let took = t0.elapsed();
         assert_eq!(tasks.output, "slept\n", "{:?}", tasks.outcome);

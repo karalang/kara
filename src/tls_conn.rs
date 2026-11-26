@@ -11,9 +11,19 @@
 //! [`TlsConn::ready`], which makes progress without waiting, and the call
 //! after it then finds its bytes, or a read waits through `wait`.
 
-use std::io::{self, ErrorKind, Read, Write};
+use std::io::{self, ErrorKind};
+#[cfg(not(target_arch = "wasm32"))]
+use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::Arc;
+
+/// A listener's server config: rustls's, or on wasm32 (the browser
+/// playground's interpreter, which has no sockets and no rustls) a type
+/// no config is ever built for (B-2026-11-25-57).
+#[cfg(not(target_arch = "wasm32"))]
+pub type ServerConfig = rustls::ServerConfig;
+#[cfg(target_arch = "wasm32")]
+pub struct ServerConfig;
 
 /// A TLS failure, `NetError.Tls`'s payload, in `TlsFailure`'s order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,7 +92,8 @@ impl Error {
 /// A server config from PEM text: the certificate chain, then the
 /// private key (PKCS#8, PKCS#1 or SEC1). `None` when either does not
 /// parse or they do not match.
-pub fn server_config(cert_pem: &[u8], key_pem: &[u8]) -> Option<Arc<rustls::ServerConfig>> {
+#[cfg(not(target_arch = "wasm32"))]
+pub fn server_config(cert_pem: &[u8], key_pem: &[u8]) -> Option<Arc<ServerConfig>> {
     let certs: Vec<_> = rustls_pemfile::certs(&mut &cert_pem[..])
         .collect::<Result<_, _>>()
         .ok()?;
@@ -101,6 +112,7 @@ pub fn server_config(cert_pem: &[u8], key_pem: &[u8]) -> Option<Arc<rustls::Serv
 }
 
 /// One accepted connection's TLS state.
+#[cfg(not(target_arch = "wasm32"))]
 pub struct TlsConn {
     conn: rustls::ServerConnection,
     /// The peer sent `close_notify`: reads give 0 from now on.
@@ -109,8 +121,9 @@ pub struct TlsConn {
     failed: Option<Failure>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl TlsConn {
-    pub fn new(config: &Arc<rustls::ServerConfig>) -> Option<TlsConn> {
+    pub fn new(config: &Arc<ServerConfig>) -> Option<TlsConn> {
         Some(TlsConn {
             conn: rustls::ServerConnection::new(config.clone()).ok()?,
             closed: false,
@@ -274,6 +287,7 @@ impl TlsConn {
 }
 
 /// The `TlsFailure` a rustls error is.
+#[cfg(not(target_arch = "wasm32"))]
 fn failure(e: &rustls::Error, handshaking: bool) -> Failure {
     use rustls::Error as E;
     match e {
@@ -288,5 +302,48 @@ fn failure(e: &rustls::Error, handshaking: bool) -> Failure {
         ) => Failure::BadCertificate,
         _ if handshaking => Failure::Handshake,
         _ => Failure::Protocol,
+    }
+}
+
+/// wasm32 has no TLS: no config parses, so no connection is ever made,
+/// and `TlsConn` has no values (B-2026-11-25-57).
+#[cfg(target_arch = "wasm32")]
+pub fn server_config(_cert_pem: &[u8], _key_pem: &[u8]) -> Option<Arc<ServerConfig>> {
+    None
+}
+
+#[cfg(target_arch = "wasm32")]
+pub enum TlsConn {}
+
+#[cfg(target_arch = "wasm32")]
+impl TlsConn {
+    pub fn new(_config: &Arc<ServerConfig>) -> Option<TlsConn> {
+        None
+    }
+
+    pub fn ready(&mut self, _sock: &mut TcpStream, _write: bool) -> (bool, bool) {
+        match *self {}
+    }
+
+    pub fn read(
+        &mut self,
+        _sock: &mut TcpStream,
+        _buf: &mut [u8],
+        _wait: &mut dyn FnMut(bool) -> io::Result<bool>,
+    ) -> Result<usize, Error> {
+        match *self {}
+    }
+
+    pub fn write(
+        &mut self,
+        _sock: &mut TcpStream,
+        _buf: &[u8],
+        _wait: &mut dyn FnMut(bool) -> io::Result<bool>,
+    ) -> Result<usize, Error> {
+        match *self {}
+    }
+
+    pub fn close(&mut self, _sock: &mut TcpStream) {
+        match *self {}
     }
 }
