@@ -173,11 +173,14 @@ fn parse_fix_profile_string_value_becomes_a_name() {
         "E_PROFILE_STRING_VALUE",
         "#[profile = \"embedded\"]\nfn one() -> i64 {\n    1\n}\n\nfn main() {\n    println(one());\n}\n",
     );
-    assert_mended(
-        &m,
-        "#[profile(embedded)]\nfn one() -> i64 {\n    1\n}\n\nfn main() {\n    println(one());\n}\n",
-        Some("1\n"),
+    // The fix still writes the call form; `#[profile]` itself is deferred
+    // (B-2026-11-25-61), so the fixed text is refused for that instead.
+    assert!(m.fixable, "no edit on the first record:\n{}", m.first);
+    assert_eq!(
+        m.text,
+        "#[profile(embedded)]\nfn one() -> i64 {\n    1\n}\n\nfn main() {\n    println(one());\n}\n"
     );
+    assert!(m.after.contains("E_ATTRIBUTE_DEFERRED"), "{}", m.after);
 }
 
 #[test]
@@ -187,11 +190,14 @@ fn parse_fix_profile_string_argument_becomes_a_name() {
         "E_PROFILE_STRING_VALUE",
         "#[profile(\"embedded\", kernel)]\nfn one() -> i64 {\n    1\n}\n\nfn main() {\n    println(one());\n}\n",
     );
-    assert_mended(
-        &m,
-        "#[profile(embedded, kernel)]\nfn one() -> i64 {\n    1\n}\n\nfn main() {\n    println(one());\n}\n",
-        Some("1\n"),
+    // The fix still writes the call form; `#[profile]` itself is deferred
+    // (B-2026-11-25-61), so the fixed text is refused for that instead.
+    assert!(m.fixable, "no edit on the first record:\n{}", m.first);
+    assert_eq!(
+        m.text,
+        "#[profile(embedded, kernel)]\nfn one() -> i64 {\n    1\n}\n\nfn main() {\n    println(one());\n}\n"
     );
+    assert!(m.after.contains("E_ATTRIBUTE_DEFERRED"), "{}", m.after);
 }
 
 #[test]

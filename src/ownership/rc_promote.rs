@@ -1145,7 +1145,7 @@ impl<'a> super::OwnershipChecker<'a> {
                 if no_rc_types.contains(ty) {
                     self.errors.push(OwnershipError {
                         message: format!(
-                            "type '{}' is declared @no_rc but value '{}' would require RC fallback ({})",
+                            "type '{}' is declared `#[no_rc]` but value '{}' would require RC fallback ({})",
                             ty,
                             binding,
                             entry.trigger.label(),
@@ -1153,7 +1153,7 @@ impl<'a> super::OwnershipChecker<'a> {
                         span: entry.other_use_span,
                         kind: OwnershipErrorKind::NoRcViolation,
                         suggestion: Some(format!(
-                            "restructure to keep '{}' on a single ownership path, or drop @no_rc on '{}'",
+                            "restructure to keep '{}' on a single ownership path, or drop `#[no_rc]` on '{}'",
                             binding, ty
                         )),
                         replacement: None,

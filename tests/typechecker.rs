@@ -10097,7 +10097,7 @@ fn test_f16_bf16_wrapper_types_resolve() {
 fn test_no_rc_struct_parsed() {
     // @no_rc attribute on struct is accepted by parser and typechecker
     typecheck_ok(
-        "@no_rc\n\
+        "#[no_rc]\n\
          struct Particle { x: f64, y: f64 }\n\
          fn main() { let p = Particle { x: 1.0, y: 2.0 }; }",
     );
@@ -10107,7 +10107,7 @@ fn test_no_rc_struct_parsed() {
 fn test_no_rc_flag_recorded() {
     // Verify the no_rc flag is recorded in StructInfo
     let result = typecheck_ok(
-        "@no_rc\n\
+        "#[no_rc]\n\
          struct Particle { x: f64, y: f64 }\n\
          fn main() {}",
     );

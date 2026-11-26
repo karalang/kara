@@ -159,7 +159,7 @@ Resolutions are source attributes, reviewed and versioned like code. A clean cod
 2. a `queries` list on every phase's result, empty by default;
 3. the `karac query queries` command.
 
-**Planned queries** (none implemented): generic specialization (`#[specialize(T = i64)]`), inlining and branch hints (`#[inline]`, `#[likely]`; the hint attributes are deferred with the systems track), and effect-set narrowing at a public boundary.
+**Planned queries**: generic specialization, inlining and branch hints, and effect-set narrowing at a public boundary. `#[specialize(T: i64)]`, `#[no_rc]` / `#[prefer_rc]`, `#[fork_at(n)]`, `#[inline]` and `#[cold]` are experimental in 0.8; the branch hints `#[likely]` / `#[unlikely]` are deferred and refused ([§ Attributes](#attributes)).
 
 **What the channel is not.** Not compiler remarks (those have no response surface and no stable ids). Not a schedule language. Not a model inside the compile loop: the author acts between compiles and every resolution is committed source. Not a lint pass.
 
@@ -7034,7 +7034,7 @@ An unknown CPU name for the active target is a hard error listing the supported 
 - Every token needs an explicit `+` or `-` and must name a feature in LLVM's registry for the active target; anything else is a hard error with the supported list. `karac build --target-features=help` prints it.
 - The two knobs compose: `--target-cpu=neoverse-v1 --target-features=-sve` builds the Neoverse baseline with SVE code generation suppressed.
 
-The baseline is the floor every function compiles against. Per-function feature dispatch (multiversioning) is deferred to the systems track.
+The baseline is the floor every function compiles against. Per-function feature dispatch (`#[target_feature]`, `#[multiversion]`) is specified with the systems track and experimental in 0.8 ([§ Attributes](#attributes)).
 
 ### Concurrency across targets
 
@@ -7674,8 +7674,26 @@ The v1 core set:
 | `#[no_effect(...)]` | Forbid an effect in a function and everything it calls. | [§12](#no_effect) |
 | `#[kara_name("...")]` | Give a foreign function or type a Kāra name that follows the case rules. | [§3](#rules) |
 | `#[compiler_builtin]` | A standard-library declaration implemented by the compiler. Standard library only. | [Intrinsics](#intrinsics) |
+| `#[observability]` | A library function transparent to effects (`dbg`, logging). Standard library only; `E0115` in a program. | [Observability](#observability) |
+| `#[test(...)]` | Configure a `test "name" { }` block: `requires: [R]`, `timeout_seconds: n`. | [§14](#14-testing) |
+| `#[with_provider(R, e)]` | Substitute provider `e` for resource `R` in one `test` block. | [§14](#14-testing) |
+| `#![rc_budget(max: N)]` | Module-level. Accepted and counts nothing, since the compiler inserts no reference counts ([core semantics §6.4](core-semantics.md#6-sharing-c7)). | [Lint levels](#lint-levels) |
 
-Tests are `test "name" { }` blocks, not an attribute ([§14](#14-testing)).
+Tests are `test "name" { }` blocks, not an attribute ([§14](#14-testing)); `#[test]` and `#[with_provider]` configure one, and on a `fn` either is `error[E_TEST_ATTR_INVALID_TARGET]`.
+
+**Experimental in 0.8.** These are accepted by `karac check` and act in a program that runs, but their specification is in [deferred.md](deferred.md), so they may change. Each is listed so the registry and this table stay one list.
+
+| Attribute | Purpose | Section |
+|---|---|---|
+| `#[inline]`, `#[inline(always)]`, `#[inline(never)]`, `#[cold]` | Codegen hints, lowered to LLVM function attributes; a conflicting pair is `E_INLINE_HINT_CONFLICT`. | [deferred.md](deferred.md#codegen-hint-attributes-inline-cold) |
+| `#[target_feature(enable: "...")]`, `#[multiversion(baseline, "...")]` | CPU features above the baseline for one `unsafe fn`, and per-feature variants with a runtime dispatch. | [deferred.md](deferred.md#multiversioning-cpu-baseline-and-multiversion) |
+| `#[require_simd]` | A scalar fallback of a `Vector[T, N]` operation in the function is a build error. | [deferred.md](deferred.md#portable-simd--vectort-n) |
+| `#[specialize(T: i64)]`, `#[no_rc]`, `#[prefer_rc]`, `#[fork_at(n)]` | Answer a compiler query (specialization, RC fallback, fork threshold), which then draws no note; `#[no_rc]` with `#[prefer_rc]` on one item is `E_QUERY_RESOLUTION_CONFLICT`. | [§2](#compiler-queries) |
+| `#[link_name("sym")]` | Bind a foreign function to a symbol of another name. | [§15](#15-unsafe-ffi-and-layout-control) |
+| `#[used]` | Keep a symbol that nothing in the program references. | [deferred.md](deferred.md#linker-control-attributes) |
+| `#[gpu]` | A GPU kernel. On the later track: the kernel draws a later-track note and its dispatch is `E_ARCHIVED`. | [deferred.md](deferred.md#gpu) |
+
+**Deferred attributes are refused.** An attribute that [deferred.md](deferred.md) specifies and 0.8 does not have is `error[E_ATTRIBUTE_DEFERRED]`, naming its section: `#[unsafe(no_mangle)]`, `#[unsafe(link_section(..))]`, `#[profile(..)]`, `#[interrupt]`, `#[max_stack]`, `#[thread_local]`, `#[property]`, `#[snapshot]`, `#[likely]`, `#[unlikely]`, `#[tailrec]`, `#[should_panic]`, `#[zeroize]`, `#[no_std]`, `#[checked]` and `#[example]`. `@name` is not attribute syntax: it is an error whose fix writes `#[name]`.
 
 **Arguments are written like a call's.** An attribute is a bare name (`#[non_exhaustive]`), or a name with a parenthesized list of positional arguments and `key: value` arguments, the same shape as a call with named arguments ([§7](#named-and-default-parameters)): `#[repr(C)]`, `#[kara_name("CFile")]`, `#[serde(rename: "server_name")]`, `#[deprecated(since: "1.2.0", note: "...")]`. There is no `#[name = value]` form and no `key = value` argument. Inside `#[cfg(...)]` each condition is `key: value` (`target: "native"`, `target_os: "linux"`), and `not`, `any` and `all` take conditions as positional arguments, so `any(target_os: "linux", target_os: "macos")` may repeat a key.
 

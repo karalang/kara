@@ -1599,6 +1599,28 @@ impl<'a> Resolver<'a> {
                 Item::Function(f) => (&f.attributes, f.name.starts_with("__test_")),
                 _ => continue,
             };
+            // `#[with_provider(R, e)]` substitutes a provider for one test
+            // block, so on a plain `fn` it is refused as `#[test]` is
+            // (B-2026-11-25-61).
+            if !is_test {
+                for attr in attrs.iter().filter(|a| a.is_bare("with_provider")) {
+                    self.errors.push(ResolveError {
+                        message: "`#[with_provider]` is not valid on a `fn`: it substitutes a \
+                                  provider for one `test \"name\" { .. }` block (design.md §14 \
+                                  Testing)"
+                            .to_string(),
+                        span: attr.span,
+                        kind: ResolveErrorKind::TestAttributeInvalidTarget,
+                        suggestion: Some(
+                            "put the attribute on a `test \"name\" { .. }` block, or use \
+                             `with_provider[R](value, || body)` in the function"
+                                .to_string(),
+                        ),
+                        replacement: None,
+                        stub_hint: None,
+                    });
+                }
+            }
             for attr in attrs.iter().filter(|a| a.is_bare("test")) {
                 if !is_test {
                     self.errors.push(ResolveError {

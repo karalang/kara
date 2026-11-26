@@ -1,0 +1,4 @@
+// B-2026-11-25-61: `#[unsafe(no_mangle)]` is deferred (Linker Control Attributes).
+#[unsafe(no_mangle)]
+pub fn kara_entry() -> i64 { 1 }
+fn main() { println(kara_entry()); }

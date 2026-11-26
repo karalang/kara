@@ -68,14 +68,27 @@ impl super::Parser {
         attrs
     }
 
-    /// Parse `@name` shorthand attribute (e.g. `@no_rc`). The
-    /// `@`-form is a Kāra compiler shorthand for bare-name attributes; it
-    /// never carries a namespace path, so the resulting `path` is always a
-    /// single segment.
+    /// `@name` is not Kāra's attribute syntax (design.md § Attributes
+    /// writes `#[name]`, B-2026-11-25-61). It is refused with a
+    /// machine-applicable fix to `#[name]`, and still parsed as that
+    /// attribute so the rest of the file checks.
     fn parse_at_attribute(&mut self) -> Option<Attribute> {
         let start = self.current_span();
         self.expect(&Token::At)?;
         let name = self.expect_identifier()?;
+        let span = self.span_from(&start);
+        self.error_at(
+            &format!("`@{name}` is not an attribute: write `#[{name}]` (design.md § Attributes)"),
+            span,
+        );
+        self.fix_diffs.insert(
+            crate::resolver::SpanKey::from_span(&span),
+            vec![crate::resolver::TextEdit {
+                offset: span.offset,
+                length: span.length,
+                replacement: format!("#[{name}]"),
+            }],
+        );
         Some(Attribute {
             span: self.span_from(&start),
             path: vec![name],

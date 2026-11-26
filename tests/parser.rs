@@ -4244,9 +4244,10 @@ fn attr_path_slice1_namespaced_path_does_not_trigger_bare_name_guards() {
 
 #[test]
 fn attr_path_slice1_at_attribute_stays_single_segment() {
-    // The `@name` shorthand is a Kāra compiler convenience for bare
-    // attributes; it has no namespace form by design.
-    let prog = parse_ok("@no_rc\nstruct S { x: i64 }");
+    // `@name` is refused (B-2026-11-25-61) but still parsed as the
+    // single-segment attribute it names, so the rest of the file checks.
+    let (prog, errors) = parse_with_errors("@no_rc\nstruct S { x: i64 }");
+    assert!(errors_contain(&errors, "write `#[no_rc]`"), "{errors:?}");
     let Item::StructDef(s) = &prog.items[0] else {
         panic!("Expected StructDef");
     };
@@ -4851,7 +4852,7 @@ fn test_unsafe_extern_block_keeps_block_level_attribute_separate() {
     // sets explicitly and union them per item.
     let prog = parse_ok(
         r#"
-        @noblock
+        #[noblock]
         unsafe extern "C" {
             fn abs(x: i32) -> i32;
             fn sqrt(x: f64) -> f64;
@@ -4883,7 +4884,7 @@ fn test_unsafe_extern_block_per_item_attribute_stays_per_item() {
     let prog = parse_ok(
         r#"
         unsafe extern "C" {
-            @noblock
+            #[noblock]
             fn abs(x: i32) -> i32;
             fn sqrt(x: f64) -> f64;
         }
@@ -8647,11 +8648,17 @@ fn test_effect_group_with_verbs() {
 
 #[test]
 fn test_at_attribute_on_struct() {
-    let prog = parse_ok("@no_rc\nstruct Particle { x: f64, y: f64 }");
+    // `@name` is not attribute syntax (B-2026-11-25-61): an error whose fix
+    // writes `#[name]`, with the attribute still applied for the rest of
+    // the file.
+    let (prog, errors) = parse_with_errors("@no_rc\nstruct Particle { x: f64, y: f64 }");
+    assert!(
+        errors_contain(&errors, "`@no_rc` is not an attribute"),
+        "{errors:?}"
+    );
     if let Item::StructDef(s) = &prog.items[0] {
-        assert!(s.no_rc, "@no_rc should set no_rc = true");
+        assert!(s.no_rc, "@no_rc should still set no_rc = true");
         assert_eq!(s.name, "Particle");
-        assert!(s.attributes.iter().any(|a| a.is_bare("no_rc")));
     } else {
         panic!("Expected StructDef");
     }
@@ -8659,11 +8666,11 @@ fn test_at_attribute_on_struct() {
 
 #[test]
 fn test_at_attribute_with_pound_attribute() {
-    // Both @ and #[] attributes can coexist
-    let prog = parse_ok("@no_rc\n#[derive(Copy)]\nstruct Particle { x: f64 }");
+    // One `@` error, and both attributes still on the struct.
+    let (prog, errors) = parse_with_errors("@no_rc\n#[derive(Copy)]\nstruct Particle { x: f64 }");
+    assert_eq!(errors.len(), 1, "{errors:?}");
     if let Item::StructDef(s) = &prog.items[0] {
         assert!(s.no_rc);
-        assert!(s.attributes.iter().any(|a| a.is_bare("no_rc")));
         assert!(s.attributes.iter().any(|a| a.is_bare("derive")));
     } else {
         panic!("Expected StructDef");

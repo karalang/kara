@@ -1264,7 +1264,7 @@ fn test_representations_populated() {
 fn test_no_rc_struct_passes_ownership() {
     // @no_rc struct should pass ownership check normally
     ownership_ok(
-        "@no_rc\n\
+        "#[no_rc]\n\
          struct Particle { x: f64, y: f64 }\n\
          fn main() { let p = Particle { x: 1.0, y: 2.0 }; }",
     );

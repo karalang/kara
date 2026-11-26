@@ -43,42 +43,27 @@ use crate::ast::*;
 use crate::resolver::{ResolveError, ResolveErrorKind};
 use crate::token::Span;
 
-/// The closed v1 list of bare-name attributes the compiler recognises.
-/// Any single-segment attribute path whose name is not in this list
-/// emits `error[E_UNKNOWN_ATTRIBUTE]` during validation.
+/// The closed list of bare-name attributes 0.8 accepts. Every entry is a
+/// row of design.md § Attributes' table, the experimental ones marked so
+/// (B-2026-11-25-61: listed only when `karac check` accepts it and a
+/// program that uses it runs); `attribute_registry_matches_design_md`
+/// holds the two together. A single-segment attribute not here is
+/// `error[E_UNKNOWN_ATTRIBUTE]`, or `error[E_ATTRIBUTE_DEFERRED]` when
+/// [`DEFERRED_ATTRIBUTES`] names it.
 ///
-/// Entries fall into three groups: (1) attributes the current compiler
-/// acts on (deprecated, derive, must_use, …) — the canonical source is
-/// the `attr.is_bare("...")` lookups across the pipeline; (2) attributes
-/// the v1 spec reserves but the current compiler does not yet wire (gpu,
-/// cyclic, interrupt, thread_local, repr, …) — accepting them at the
-/// attribute-check layer keeps v1-conformant code compiling while the
-/// per-attribute semantics ship in their own entries; (3) the four
-/// lint-level attributes (allow / warn / deny / expect) plus `forbid`,
-/// which are handled by `scan_lint_level_attrs` in the parser but still
-/// need to be in this list so the attribute-check pass does not flag
-/// them.
-///
-/// Keep this list synced with `docs/book/src/appendix-d-attributes.md`
-/// and the `is_bare(...)` lookup sites; adding a new compiler-recognised
-/// attribute requires an entry here so the recognition layer keeps up
-/// with the consumer layer.
+/// The `is_bare("...")` lookups across the pipeline are the consumers; a
+/// new attribute needs an entry here, and a row in the table.
 const RECOGNIZED_BARE_ATTRIBUTES: &[&str] = &[
-    // Lint-level attributes — `scan_lint_level_attrs` in the parser
-    // turns these into `lint_overrides`. `forbid` is the CLI-only
-    // sibling; it never appears as a source-level attribute today but
-    // is reserved for symmetry with the CLI's `-F NAME`.
+    // Lint levels: `scan_lint_level_attrs` in the parser turns these into
+    // `lint_overrides`.
     "allow",
     "warn",
     "deny",
     "expect",
-    "forbid",
-    // Compiler-internal markers — `compiler_builtin` gates stdlib
-    // source; `no_rc` opts a `shared struct` out of RC.
+    // Standard library only: `compiler_builtin` marks a declaration the
+    // compiler implements; `observability` a library function transparent
+    // to effects (design.md § Observability; E0115 in user code).
     "compiler_builtin",
-    "no_rc",
-    // `#[observability]`: a library function transparent to effects
-    // (design.md § Observability); stdlib source only.
     "observability",
     // General item annotations.
     "derive",
@@ -86,121 +71,84 @@ const RECOGNIZED_BARE_ATTRIBUTES: &[&str] = &[
     "deprecated",
     "non_exhaustive",
     "track_caller",
-    // Phase-8 stdlib-floor — `#[default]` marks the unit enum variant a
-    // `#[derive(Default)]` enum constructs in its synthesized `default()`.
-    // Recognised here so it does not trip `E_UNKNOWN_ATTRIBUTE`; placement
-    // and arg-shape are enforced by `validate_default_attribute`.
+    // `#[default]` marks the unit variant a `#[derive(Default)]` enum
+    // builds; placement and shape are `validate_default_attribute`'s.
     "default",
-    // The custom panic handler (design.md § Panic handler, core semantics
-    // §10.2); its placement and signature are checked by
-    // `validate_panic_handler`.
+    // The custom panic handler, checked by `validate_panic_handler`.
     "panic_handler",
-    // Derive helper for `#[derive(Serialize, Deserialize)]` (design.md
-    // § Serialize and Deserialize): `rename`, `skip`, `skip_serializing`,
-    // `skip_deserializing`, `default`. Read by the comptime derive in
-    // `runtime/stdlib/source/serde.kara` off the field's rendered attributes.
+    // The `#[derive(Serialize, Deserialize)]` helper, read by the comptime
+    // derive in `runtime/stdlib/source/serde.kara`.
     "serde",
-    // Phase-8 line 49 — stdlib API stability marker. Use-site
-    // emission of the `unstable_api` lint reads the symbol-table
-    // payload populated from this attribute. At v1 the spec
-    // restricts placement to stdlib items (user-side use is a
-    // future RFC), but the parser/recogniser accepts it
-    // anywhere so user-side experiments compile silently — the
-    // lint emission is what enforces the gating.
+    // Stdlib API stability marker; the `unstable_api` lint enforces it.
     "unstable",
-    // FFI / linker.
-    "no_mangle",
+    // FFI and linking: `kara_name`; experimental `link_name` (bind a
+    // foreign symbol of another name) and `used` (keep a symbol nothing
+    // references).
     "used",
-    "link_section",
     "link_name",
     "kara_name",
-    // Testing.
+    // A `test "name" { }` block's configuration (`#[test(requires: ..)]`)
+    // and its provider substitution (`#[with_provider(R, e)]`); on a `fn`
+    // both are E_TEST_ATTR_INVALID_TARGET.
     "test",
     "with_provider",
-    "property",
-    "snapshot",
-    // Memory layout / placement.
+    // ABI layout.
     "repr",
-    "thread_local",
-    // Embedded targets — recognised at v1 even before the embedded
-    // profile's semantic handling ships.
-    "interrupt",
-    "max_stack",
-    // GPU compute / shared types.
+    // A GPU kernel: on the later track, its dispatch is E_ARCHIVED and the
+    // kernel itself draws the later-track note (core/ok_later_track_gpu).
     "gpu",
-    "cyclic",
-    // Phase-10 cross-target gating — `#[target(...)]` with the closed
-    // v1 name set (`src/target.rs::V1_TARGETS`). Argument-shape and
-    // name-set validation is parse-level (`parser/attributes.rs`);
-    // absence semantics live in `target::filter_inactive_items`.
+    // Single-target gating until `#[cfg]`; shape checked in the parser.
     "target",
-    // Profile compatibility — `#[profile(P1, P2, ...)]` on a function
-    // asserts its effect set satisfies the intersection of the listed
-    // profiles' constraints (phase-5-diagnostics.md line 510). Parsed by
-    // `parser/items.rs::scan_profile_attr` into `Function.profile_compat`;
-    // placement/name validation in `resolver/collect.rs`; enforcement in
-    // `effectchecker/profile_compat.rs`.
-    "profile",
-    // Per-function effect exclusion — `#[no_effect(allocates(Heap))]` on a
-    // function asserts the named effects are ABSENT from its transitive
-    // effect set (design.md § No-Effect Attribute). The verbs are keywords,
-    // so they are parsed in `parser/attributes.rs` rather than through the
-    // generic arg path and collected by `parser/items.rs::scan_no_effect_attr`
-    // into `Function.no_effect`; placement validation in
-    // `resolver/collect.rs`; enforcement in `effectchecker/no_effect.rs`.
-    // Sibling of `profile` — that one names profiles whose forbidden sets are
-    // looked up, this one names the forbidden effects directly.
+    // `#[no_effect(..)]` forbids effects in a function and its callees.
     "no_effect",
-    // Portable SIMD — `#[require_simd]` on a function makes scalar
-    // fallback for any `Vector[T, N]` op in its body a hard build error
-    // (phase-7-codegen.md line 308). Read by `simd_report::require_simd_errors`;
-    // takes no arguments.
+    // Experimental: `#[require_simd]` makes a scalar fallback of a
+    // `Vector[T, N]` op a build error (`simd_report::require_simd_errors`).
     "require_simd",
-    // Reserved for the eventual `#[rc_budget(max: N)]` knob; the
-    // parser already accepts the syntactic shape (one of the test
-    // fixtures uses it as a generic two-arg attribute example).
+    // `#![rc_budget(max: N)]` is accepted and counts nothing: the compiler
+    // inserts no reference counts (B-2026-11-21-76).
     "rc_budget",
-    // Phase-8 stdlib-floor § Compiler queries channel sub-item 4 —
-    // future query-resolving attributes reserved at v1 freeze.
-    // Recognized so they propagate through resolver / typechecker /
-    // ownership without information loss; per-attribute semantics
-    // land alongside their P1.x catalogue entries:
-    //   * `prefer_rc` — P1.1 (resolution surface for the RC fallback
-    //     query at `src/ownership.rs:360`). Companion to `no_rc`.
-    //   * `specialize` — P1.2 (resolution surface for generic
-    //     specialization on monomorphization tuple).
-    //   * `fork_at` — P1.6 (resolution surface for auto-concurrency
-    //     fork threshold).
-    "prefer_rc",
+    // Experimental query answers (design.md § Compiler queries): each
+    // suppresses its query's note. `#[specialize(T: i64)]` the
+    // specialization query, `#[no_rc]` / `#[prefer_rc]` the RC-fallback
+    // query (a pair on one item is E_QUERY_RESOLUTION_CONFLICT), and
+    // `#[fork_at(n)]` the auto-concurrency fork threshold.
     "specialize",
+    "no_rc",
+    "prefer_rc",
     "fork_at",
-    // Codegen hint attributes (design.md § Codegen Hint Attributes;
-    // phase-8-stdlib-floor.md "Codegen hint attributes"). `inline` /
-    // `cold` carry real semantics now: the parser resolves them into
-    // `Function::inline_hint` / `Function::is_cold`, the resolver gates
-    // placement, and codegen lowers them to the LLVM `inlinehint` /
-    // `alwaysinline` / `noinline` / `cold` function attributes. Their
-    // conflict rules (`E_INLINE_HINT_CONFLICT` / `E_COLD_INLINE_ALWAYS_CONFLICT`)
-    // live in the parser scan and supersede the old reserved
-    // `cold`↔`inline` query-conflict entry — `#[cold]` + `#[inline]` is
-    // a legal combination. `likely` / `unlikely` (branch hints) remain
-    // reserved-only at v1.
+    // Experimental codegen hints, lowered to LLVM function attributes.
     "inline",
     "cold",
-    "likely",
-    "unlikely",
-    // `#[target_feature(enable = "avx2")]` — widen one function's CPU-feature
-    // set above the module baseline (design.md § Multiversioning, floor/ceiling
-    // composition). Placement (`unsafe fn` requirement + non-empty feature list)
-    // is validated in the parser scan; codegen lowers it to the LLVM per-function
-    // `target-features` string attribute. The `#[multiversion(...)]` sugar over
-    // it is a later slice.
+    // Experimental: a function's CPU features above the baseline, and the
+    // per-feature variants with a runtime dispatch (`desugar.rs`).
     "target_feature",
-    // `#[multiversion(baseline, "avx2", "avx512f")]` — sugar over per-feature
-    // `#[target_feature]` variants + a runtime `cpu.supports` dispatch thunk
-    // (design.md § Multiversioning). Desugared in `desugar.rs`; placement
-    // (non-empty feature list, free non-generic fn) is validated in the parser.
     "multiversion",
+];
+
+/// Attributes that docs/deferred.md specifies and 0.8 does not have, with
+/// the section that holds each. One is refused with
+/// `error[E_ATTRIBUTE_DEFERRED]`, naming the section, rather than as an
+/// unknown name: it is scheduled, not misspelled (B-2026-11-25-61).
+pub(crate) const DEFERRED_ATTRIBUTES: &[(&str, &str)] = &[
+    ("no_mangle", "Linker Control Attributes"),
+    ("link_section", "Linker Control Attributes"),
+    ("profile", "Project Profiles"),
+    ("interrupt", "Interrupt Handler ABI (`#[interrupt]`)"),
+    ("max_stack", "Static Stack Depth Analysis"),
+    ("thread_local", "Module-Level Mutable State"),
+    ("property", "Property tests"),
+    ("snapshot", "Snapshot tests"),
+    ("likely", "Codegen Hint Attributes (`#[inline]`, `#[cold]`)"),
+    (
+        "unlikely",
+        "Codegen Hint Attributes (`#[inline]`, `#[cold]`)",
+    ),
+    ("tailrec", "Tail-Call Optimization (`#[tailrec]`)"),
+    ("should_panic", "Expected-panic tests (`should_panic`)"),
+    ("zeroize", "Generalized `#[zeroize]` Attribute"),
+    ("no_std", "`#[no_std]` / Bare Metal Support"),
+    ("checked", "Production Contract Checking (`#[checked]`)"),
+    ("example", "Doctests as `#[example]` Blocks on `pub` Items"),
 ];
 
 /// Phase-8 stdlib-floor § Compiler queries channel sub-item 5.
@@ -895,7 +843,19 @@ fn visit_attrs(attrs: &[Attribute], errors: &mut Vec<ResolveError>) {
         if attr.path.len() == 1 {
             let name = &attr.path[0];
             // `#[cfg]` is refused by the parser, with its fix.
-            if name != "cfg" && !is_recognized_bare_attribute(name) {
+            if let Some((_, section)) = DEFERRED_ATTRIBUTES.iter().find(|(a, _)| a == name) {
+                errors.push(ResolveError {
+                    message: format!(
+                        "error[E_ATTRIBUTE_DEFERRED]: `#[{name}]` is deferred (docs/deferred.md \
+                         § {section}) and not in 0.8"
+                    ),
+                    span: attr.span,
+                    kind: ResolveErrorKind::UnknownAttribute,
+                    suggestion: None,
+                    replacement: None,
+                    stub_hint: None,
+                });
+            } else if name != "cfg" && !is_recognized_bare_attribute(name) {
                 errors.push(ResolveError {
                     message: format!(
                         "error[E_UNKNOWN_ATTRIBUTE]: unknown attribute `{name}` — the \
@@ -1122,5 +1082,88 @@ fn visit_item(item: &Item, errors: &mut Vec<ResolveError>) {
         | Item::Import(_)
         | Item::AliasDecl(_)
         | Item::IndependentDecl(_) => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// design.md § Attributes, through the start of the `diagnostic::`
+    /// namespace: the tables and the deferred list.
+    fn design_attributes_section() -> &'static str {
+        let design = include_str!("../docs/design.md");
+        let start = design
+            .find("\n### Attributes\n")
+            .expect("design.md § Attributes");
+        let end = design[start..]
+            .find("#### The `diagnostic::` namespace")
+            .expect("the diagnostic:: subsection");
+        &design[start..start + end]
+    }
+
+    fn table_attribute_names(section: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        for line in section.lines().filter(|l| l.starts_with("| `#")) {
+            let cell = line.split('|').nth(1).unwrap_or("");
+            for part in cell.split('`').skip(1).step_by(2) {
+                let name = part
+                    .trim_start_matches("#!")
+                    .trim_start_matches('#')
+                    .trim_start_matches('[');
+                let name: String = name
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                    .collect();
+                if !name.is_empty() {
+                    out.push(name);
+                }
+            }
+        }
+        out
+    }
+
+    /// The "cannot drift" claim of design.md § Attributes, enforced
+    /// (B-2026-11-25-61): every registry entry is a row of its tables,
+    /// every row names a registry entry, and every deferred attribute is
+    /// in its deferred list and names a deferred.md heading.
+    #[test]
+    fn attribute_registry_matches_design_md() {
+        let section = design_attributes_section();
+        let listed = table_attribute_names(section);
+        for name in RECOGNIZED_BARE_ATTRIBUTES {
+            assert!(
+                listed.iter().any(|l| l == name),
+                "`#[{name}]` is in the registry but not in design.md § Attributes' tables"
+            );
+        }
+        for name in &listed {
+            // `#[cfg]` is listed with its refusal; the parser refuses it.
+            assert!(
+                name == "cfg" || is_recognized_bare_attribute(name),
+                "design.md § Attributes lists `#[{name}]`, which the registry does not have"
+            );
+        }
+        let deferred = include_str!("../docs/deferred.md");
+        let refused = section
+            .split("**Deferred attributes are refused.**")
+            .nth(1)
+            .expect("the deferred-attributes paragraph");
+        for (name, heading) in DEFERRED_ATTRIBUTES {
+            assert!(
+                !is_recognized_bare_attribute(name),
+                "`#[{name}]` is both registered and deferred"
+            );
+            assert!(
+                refused.contains(&format!("`#[{name}")) || refused.contains(&format!("({name}")),
+                "`#[{name}]` is refused but design.md § Attributes does not list it as deferred"
+            );
+            assert!(
+                deferred
+                    .lines()
+                    .any(|l| l.starts_with('#') && l.trim_start_matches('#').trim() == *heading),
+                "deferred.md has no heading `{heading}` for `#[{name}]`"
+            );
+        }
     }
 }

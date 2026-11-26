@@ -822,6 +822,7 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
     // number, so `karac explain` answers both spellings (B-2026-11-05-17).
     ("E_DUPLICATE_LINT_LEVEL", parse("DuplicateLintLevel")),
     ("E_UNKNOWN_ATTRIBUTE", res("UnknownAttribute", None)),
+    ("E_ATTRIBUTE_DEFERRED", res("UnknownAttribute", None)),
     (
         "E_FORBIDDEN_LINT_ALLOW",
         ty("ForbiddenLintAllow", Some(DiagnosticClass::LintWarning)),
@@ -4894,6 +4895,10 @@ const DEFERRED_CODES: &[(&str, &str)] = &[
     (
         "E_MULTIVERSION_ON_ASSOC",
         "`#[multiversion]` is deferred (docs/deferred.md § Multiversioning: `cpu-baseline` and `#[multiversion]`); the attribute is parsed and checked but no per-CPU variants are built.",
+    ),
+    (
+        "E_ATTRIBUTE_DEFERRED",
+        "The attribute is specified in docs/deferred.md and is not in 0.8; the message names its section. It is refused rather than ignored, so a program never relies on behaviour 0.8 does not have. design.md § Attributes lists the attributes 0.8 accepts, the experimental ones marked.",
     ),
     (
         "E_REPR_DEFERRED",

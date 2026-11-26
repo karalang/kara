@@ -129,10 +129,12 @@ fn noblock_is_an_unknown_attribute() {
         5,
         "unknown attribute `noblock`",
     );
+    // `@noblock` is not attribute syntax (B-2026-11-25-61): the one error
+    // is that, with its fix to `#[noblock]`.
     one_error(
         "unsafe extern \"C\" {\n    @noblock\n    fn abs(x: i32) -> i32;\n}\nfn main() {}\n",
         2,
         5,
-        "unknown attribute `noblock`",
+        "`@noblock` is not an attribute: write `#[noblock]`",
     );
 }

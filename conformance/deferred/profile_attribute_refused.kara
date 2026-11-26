@@ -1,0 +1,4 @@
+// B-2026-11-25-61: `#[profile(..)]` is deferred (Project Profiles), though its checks exist.
+#[profile(embedded)]
+fn f() -> i64 { 1 }
+fn main() { println(f()); }

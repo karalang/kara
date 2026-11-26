@@ -1,0 +1,4 @@
+// B-2026-11-25-61: `#[with_provider]` configures a test block, so on a fn it is refused as `#[test]` is.
+#[with_provider(Clock, 1)]
+fn g() {}
+fn main() { g(); }

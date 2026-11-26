@@ -518,7 +518,7 @@ fn rc_fallback_without_a_drop_body_is_still_inserted() {
 
 #[test]
 fn at_no_rc_struct_blocks_trigger() {
-    let src = "@no_rc\n\
+    let src = "#[no_rc]\n\
                struct Particle { x: i64 }\n\
                fn consume(p: Particle) { }\n\
                fn use_p(p: Particle) { }\n\
@@ -536,7 +536,7 @@ fn at_no_rc_struct_blocks_trigger() {
         .iter()
         .any(|e| e.kind == OwnershipErrorKind::NoRcViolation
             && e.message.contains("Particle")
-            && e.message.contains("@no_rc")));
+            && e.message.contains("#[no_rc]")));
 }
 
 // ── #[no_rc] on function ───────────────────────────────────────

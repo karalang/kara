@@ -2360,6 +2360,8 @@ Profiles, interrupts, volatile access, inline assembly, linker control, the expo
 
 ### Project Profiles
 
+**Status (0.8, B-2026-11-25-61):** not in 0.8. The per-function `#[profile(..)]` attribute is refused with `E_ATTRIBUTE_DEFERRED`, as the manifest's `[profile]` key is refused; the `E_PROFILE_*` checks behind it stay in the compiler for when this track lands.
+
 > Project profiles return under a manifest key other than `[profile]`: in v1 that table holds the build profiles `[profile.dev]` and `[profile.release]` ([design.md §16](design.md#build-profiles)). A custom panic handler is the `#[panic_handler]` attribute alone ([design.md §16](design.md#panic-handler)), so profiles carry no handler setting.
 
 Project-wide constraints declared in `kara.toml`. Profiles map to sets of effect restrictions enforced by the compiler across the entire project — no per-function annotations needed.
@@ -3256,6 +3258,8 @@ from the platform package's `Interrupt` enum.
 
 #### Codegen Hint Attributes (`#[inline]`, `#[cold]`)
 
+**Status (0.8, B-2026-11-25-61):** `#[inline]` and `#[cold]` are experimental: `karac check` accepts them and codegen lowers them to LLVM function attributes ([design.md § Attributes](design.md#attributes)). `#[likely]` and `#[unlikely]` are not in 0.8 and are refused with `E_ATTRIBUTE_DEFERRED`.
+
 Four attributes hint at code-generation choices the optimizer would otherwise make on its own. None of them changes program semantics — every program compiles to functionally identical output regardless of which subset is present. They influence performance characteristics only: code placement, call-site lowering, and inlining decisions. The hints are recorded on the function symbol and lowered to the corresponding LLVM function attribute (`alwaysinline`, `noinline`, `inlinehint`, `cold`).
 
 | Attribute | Effect on the optimizer |
@@ -3306,6 +3310,8 @@ Repeating the same attribute on one function is `error[E_DUPLICATE_ATTRIBUTE]` (
 **Diagnostic for misapplication on bodies whose inlining never happens.** When a `#[inline(always)]` function's only call sites are dynamic (every call is through a `fn`-pointer), the compiler emits no diagnostic — the silent-leave-out-of-line rule applies. Future tooling (`karac build --perf-report`) will surface "`#[inline(always)]` had no inlining sites" as a hint, but the build itself never fails on it.
 
 #### Linker Control Attributes
+
+**Status (0.8, B-2026-11-25-61):** `#[used]` is experimental: `karac check` accepts it and the symbol is kept ([design.md § Attributes](design.md#attributes)). `#[unsafe(no_mangle)]` and `#[unsafe(link_section(..))]` are not in 0.8 and are refused with `E_ATTRIBUTE_DEFERRED`.
 
 Three attributes control how symbols appear in the linker's view of the binary.
 Two of them — the ones that pick a symbol name or place a symbol at a

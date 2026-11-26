@@ -1,0 +1,4 @@
+// B-2026-11-25-61: `#[property]` is deferred (Property tests).
+#[property]
+fn p() {}
+fn main() {}

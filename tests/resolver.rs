@@ -3742,14 +3742,33 @@ fn attr_slice2_recognised_bare_attributes_accepted() {
 
 #[test]
 fn attr_slice2_profile_attribute_recognised() {
-    // `#[profile(...)]` is a fully-wired attribute (parser scan →
-    // `Function.profile_compat` → effect-checker enforcement in
-    // `effectchecker/profile_compat.rs`) but was missing from
-    // `RECOGNIZED_BARE_ATTRIBUTES`, so every use also emitted a bogus
-    // E_UNKNOWN_ATTRIBUTE alongside the real profile diagnostics.
-    // B-2026-07-02-32.
-    assert_no_unknown_attribute("#[profile(embedded)]\nfn f() { }");
-    assert_no_unknown_attribute("#[profile(embedded, kernel)]\nfn g() { }");
+    // `#[profile(...)]` is deferred (docs/deferred.md § Project Profiles):
+    // one E_ATTRIBUTE_DEFERRED naming the section, never the bare
+    // E_UNKNOWN_ATTRIBUTE wording (B-2026-07-02-32, B-2026-11-25-61).
+    for src in [
+        "#[profile(embedded)]\nfn f() { }",
+        "#[profile(embedded, kernel)]\nfn g() { }",
+    ] {
+        let parsed = parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let errs = resolve(&parsed.program).errors;
+        let msgs: Vec<&String> = errs.iter().map(|e| &e.message).collect();
+        assert_eq!(
+            msgs.iter()
+                .filter(|m| m.contains("E_ATTRIBUTE_DEFERRED"))
+                .count(),
+            1,
+            "{msgs:?}"
+        );
+        assert!(
+            msgs.iter().any(|m| m.contains("§ Project Profiles")),
+            "{msgs:?}"
+        );
+        assert!(
+            !msgs.iter().any(|m| m.contains("E_UNKNOWN_ATTRIBUTE")),
+            "{msgs:?}"
+        );
+    }
 }
 
 #[test]

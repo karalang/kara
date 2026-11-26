@@ -1,0 +1,4 @@
+// B-2026-11-25-61: `@name` is not attribute syntax; `karac fix` writes `#[deprecated]`.
+#[deprecated]
+fn g() {}
+fn main() { g(); }

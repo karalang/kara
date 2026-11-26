@@ -1,0 +1,4 @@
+// B-2026-11-25-61: `#[used]` is experimental in 0.8 (design.md § Attributes): accepted, and the program runs.
+#[used]
+const V: Array[u32, 4] = [7; 4];
+fn main() { println(V[0]); }

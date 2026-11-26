@@ -406,7 +406,7 @@ fn parity_negative_at_no_rc_struct_blocks_trigger() {
     // pure dataflow — it doesn't know about @no_rc); that's expected.
     // Both passes refuse to record RC; legacy errors out, predicate
     // returns the dataflow shape without enforcement.
-    let src = "@no_rc\n\
+    let src = "#[no_rc]\n\
                struct Particle { x: i64 }\n\
                fn consume(p: Particle) { }\n\
                fn use_p(p: Particle) { }\n\

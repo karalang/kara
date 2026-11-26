@@ -5,6 +5,9 @@
 //! feature, so the refusal says the construct is scheduled rather than
 //! misspelled (conformance/deferred/SENTENCE_MAP.md).
 //!
+//! Deferred attributes are the attribute validator's own
+//! (`attribute_validator::DEFERRED_ATTRIBUTES`, E_ATTRIBUTE_DEFERRED).
+//!
 //! Only names that nothing in 0.8 declares belong here: the note is added to
 //! an error that already refused the program, never to an accepted one.
 
@@ -119,19 +122,6 @@ const METHODS: &[(&str, &str, &str)] = &[
     ),
 ];
 
-/// Attributes (`#[tailrec]`) that no 0.8 item takes.
-const ATTRIBUTES: &[(&str, &str)] = &[
-    ("tailrec", "Tail-Call Optimization (`#[tailrec]`)"),
-    ("should_panic", "Expected-panic tests (`should_panic`)"),
-    ("zeroize", "Generalized `#[zeroize]` Attribute"),
-    ("no_std", "`#[no_std]` / Bare Metal Support"),
-    ("checked", "Production Contract Checking (`#[checked]`)"),
-    ("example", "Doctests as `#[example]` Blocks on `pub` Items"),
-];
-
-/// The attribute validator's refusal of a bare name it does not know.
-const UNKNOWN_ATTRIBUTE: &str = "error[E_UNKNOWN_ATTRIBUTE]: unknown attribute `";
-
 fn note(section: &str) -> String {
     format!(": it is deferred (docs/deferred.md § {section}) and not in 0.8")
 }
@@ -182,17 +172,6 @@ fn section_for(message: &str) -> Option<&'static str> {
 /// misspelling of `std.net`.
 /// Says whether it did, so a caller drops any rename it had offered.
 pub(crate) fn annotate(message: &mut String) -> bool {
-    // An unknown attribute's own advice (write `#[diagnostic::..]`) does not
-    // fit one that is scheduled, so the section replaces it.
-    if let Some(name) = quoted(message, UNKNOWN_ATTRIBUTE, '`') {
-        if let Some((_, section)) = ATTRIBUTES.iter().find(|(a, _)| *a == name) {
-            let end = UNKNOWN_ATTRIBUTE.len() + name.len() + 1;
-            message.truncate(end);
-            message.push_str(&note(section));
-            return true;
-        }
-        return false;
-    }
     let Some(section) = section_for(message) else {
         return false;
     };
@@ -242,20 +221,6 @@ mod tests {
         );
         assert!(annotated("no method 'read_at' on type 'File'")
             .contains("§ Positional File I/O and Advisory Locking"));
-    }
-
-    #[test]
-    fn a_deferred_attribute_names_its_section_instead_of_the_diagnostic_hint() {
-        assert_eq!(
-            annotated(
-                "error[E_UNKNOWN_ATTRIBUTE]: unknown attribute `tailrec` — the compiler does \
-                 not recognise this bare-name attribute"
-            ),
-            "error[E_UNKNOWN_ATTRIBUTE]: unknown attribute `tailrec`: it is deferred \
-             (docs/deferred.md § Tail-Call Optimization (`#[tailrec]`)) and not in 0.8"
-        );
-        let other = "error[E_UNKNOWN_ATTRIBUTE]: unknown attribute `frob` — the compiler";
-        assert_eq!(annotated(other), other);
     }
 
     #[test]
