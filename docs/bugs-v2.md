@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 786 |
-| false-positive | 398 |
+| false-positive | 399 |
 | missing-feature | 267 |
 | perf | 206 |
 | other | 157 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 958 |
+| typecheck | 959 |
 | mir | 348 |
 | mir-llvm | 337 |
 | cli | 321 |
@@ -121,7 +121,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-2 | 2026-11-26 | typecheck | low | A `for` over an array literal settles the array's literals to `i64` before the loop body can fix them: `for (rider, start, end) in [(10, 3, 8), (5, 10, 16)] { b.check_in(rider, "Leyton", start) }` with `check_in(id: i32, .., t: i32)` is refused, as is `for a in [1, 2] { take_i32(a) }` and `for a in [1, 2].iter()`, while the same array bound first (`let pairs = [(1, 2)]; for (a, b) in pairs.iter() { take_i32(a) }`), `let (c, d) = (5, 6); take_i32(c)` and `let x = [1, 2][0]; take_i32(x)` all check | — |
 | B-2026-11-26-6 | 2026-11-26 | typecheck | low | `v.push([1, 2].to_vec())` with `v: Vec[Vec[i32]]` is refused as a `Vec[i64]`, with no fix, though the same literal through `.to_vec()` takes `i32` from a `let` annotation or a function's parameter | — |
 | B-2026-11-26-9 | 2026-11-26 | typecheck | low | `v.push(((0..3).map(|_| 1).collect(), 5))` with `v: Vec[(Vec[i32], i32)]` is refused, "expected '(Vec[i32], i32)', found '(C, i64)'", with no fix: the element type does not reach a `collect` inside a tuple argument, though it reaches a bare `v.push(it.collect())` and a `let p: (Vec[i32], i32) = (it.collect(), 5)` | — |
-| B-2026-11-26-69 | 2026-11-26 | typecheck+runtime | low | `Array[T, N]` has no `Serialize` / `Deserialize`: the ruling is a JSON array of `N` elements, read back from exactly `N` with an error naming the expected and actual length, nested arrays alike; B-2026-11-25-49 refuses the field at the derive until then | — |
 | B-2026-11-26-73 | 2026-11-26 | interp | medium | `Vector[T, N]` lane arithmetic that wraps stops the MIR interpreter with the internal "unchecked Add overflowed; the builder must use CheckedBinaryOp", where JIT and build wrap each lane (`Vector[u8, 4].splat(200) + itself` gives 144) | — |
 | B-2026-11-26-75 | 2026-11-26 | typecheck+mir | low | `[]` as a method receiver (`let n = [].len();`, `let v: Vec[i64] = [].iter().map(|x| *x).collect();`) gets only the internal E0516 "a type that failed to check is not lowered yet", not the element-type diagnostic `let mut w = [];` gets | — |
 | B-2026-11-26-77 | 2026-11-26 | typecheck+mir | low | Three refusals with the right verdict print an internal E0516 instead of the user diagnostic: a `ref` binding of a `Vec[Vector[..]]` element as a receiver, a `break` aimed through a `with_provider` closure body, and a let-bound closure's `collect()` with no target type | — |
@@ -129,6 +128,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-80 | 2026-11-26 | ownership+cli | low | E0516 on a temporary argument that a view result borrows (`let f = make("abc".to_string(), 1);` with `make` returning a closure over its bare parameter) has the bind-it-first help but no machine-applicable fix, so `karac fix` stops on it | — |
 | B-2026-11-26-81 | 2026-11-26 | typecheck | low | After "no method 'fold' on type 'Slice'" (`s.bytes().fold(0, |c, b| c * 31 + b as i64)`, the `.iter()` left out), the closure's parameter stays an open type and its cast adds a second error naming an internal variable, "cannot cast '?T1' to 'i64'" | — |
 | B-2026-11-26-82 | 2026-11-26 | typecheck | low | The fix for `a + b.as_str()` (a `String` plus a `Str`, as Rust writes it) appends `.to_string()`, giving `a + b.as_str().to_string()`, a view copied back into a new `String`, where `a + ref b` checks with no copy and is what `karac fix` makes of Rust's `a + &b` | — |
+| B-2026-11-26-83 | 2026-11-26 | typecheck | low | `Ok(Array.from_fn(n, f))` (or `Some(..)`) where the expected type is `Result[Array[T, N], E]` is refused "Array.from_fn needs the array's length": the variant constructor does not hand its payload slot's `Array[T, N]` to `from_fn` | — |
 
 ### Relocated
 
@@ -2377,6 +2377,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-66 | typecheck+mir | medium | `Some` / `Ok` / `Err` named as a function value (`parse_message(raw).map(Some)`) passed `karac check` and failed to build with "a call to this functi… | ba41739764 |
 | B-2026-11-26-67 | interp+mir-llvm | medium | The deprecated `String.slice(a, b)` checks neither bounds nor code-point boundaries: `"héllo".slice(1, 2)` gives a `Str` holding half of `é` (invalid… | d9f4226b4b |
 | B-2026-11-26-68 | typecheck | medium | A trait impl on a const-generic `Array[T, N]` never resolves: `impl[T: Tally, const N: i64] Tally for Array[T, N]` then `a.tally()` on an `Array[i64,… | 06de4537e8 |
+| B-2026-11-26-69 | typecheck+runtime | low | `Array[T, N]` has no `Serialize` / `Deserialize`: the ruling is a JSON array of `N` elements, read back from exactly `N` with an error naming the exp… | 5dfe733aad |
 | B-2026-11-26-70 | ownership | medium | Native methods' argument modes disagree with collections.md: `a.union(b)` (and `intersection` / `difference`, on `Set` and `SortedSet`) and `a.cmp(b)… | f2de56079e |
 | B-2026-11-26-71 | typecheck | low | Remainder of B-2026-11-26-17: built-in methods no family covers are still refused as values: those taking a closure (`Vec.sort_by`, `sort_by_key`, `V… | f2de56079e |
 | B-2026-11-26-72 | typecheck | low | E0200's annotation suggestion for an untyped `.try_into()` writes `let r: Result[Target, _] = v.try_into();`, which does not parse (E0001 "Expected t… | c46b0b1b30 |
