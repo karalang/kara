@@ -282,9 +282,7 @@ fn desugar_multiversion_fn(f: &mut Function, host: MvHost) -> Vec<Function> {
     baseline_fn
         .attributes
         .retain(|a| !a.is_bare("multiversion"));
-    baseline_fn
-        .attributes
-        .push(mv_allow_undocumented_unsafe_attr(sp));
+    mv_allow_undocumented_unsafe(&mut baseline_fn, sp);
     synthesized.push(baseline_fn);
 
     // Per-feature clone: unsafe + `#[target_feature(enable = "<feat>")]`.
@@ -294,7 +292,7 @@ fn desugar_multiversion_fn(f: &mut Function, host: MvHost) -> Vec<Function> {
         vf.is_unsafe = true;
         vf.attributes.retain(|a| !a.is_bare("multiversion"));
         vf.attributes.push(mv_target_feature_attr(feat, sp));
-        vf.attributes.push(mv_allow_undocumented_unsafe_attr(sp));
+        mv_allow_undocumented_unsafe(&mut vf, sp);
         synthesized.push(vf);
     }
 
@@ -303,7 +301,7 @@ fn desugar_multiversion_fn(f: &mut Function, host: MvHost) -> Vec<Function> {
     // listed order) wraps the accumulator, so the LAST-listed feature ends
     // up outermost = checked first (list narrowest→widest per the design).
     f.attributes.retain(|a| !a.is_bare("multiversion"));
-    f.attributes.push(mv_allow_undocumented_unsafe_attr(sp));
+    mv_allow_undocumented_unsafe(f, sp);
     let variant_call = |name: &str| -> Expr {
         match host {
             MvHost::Free => mv_call(name, &fwd, sp),
@@ -435,6 +433,19 @@ fn mv_cpu_supports(feat: &str, span: Span) -> Expr {
 /// noise. Placed on every clone + the thunk. (A user's own `unsafe { }` inside a
 /// `#[multiversion]` body is thereby also un-linted — an accepted trade for a hot
 /// kernel whose whole point is the unsafe SIMD path.)
+///
+/// The lint reads a function's level from its `lint_overrides`, which the
+/// parser fills from the attributes it parsed, so the override goes there
+/// too: the attribute alone left both warnings in place (B-2026-11-25-69).
+fn mv_allow_undocumented_unsafe(f: &mut Function, span: Span) {
+    f.attributes.push(mv_allow_undocumented_unsafe_attr(span));
+    f.lint_overrides.push(crate::lints::LintLevelOverride {
+        span,
+        level: crate::lints::LintLevel::Allow,
+        lint: "undocumented_unsafe".to_string(),
+    });
+}
+
 fn mv_allow_undocumented_unsafe_attr(span: Span) -> Attribute {
     Attribute {
         span,
