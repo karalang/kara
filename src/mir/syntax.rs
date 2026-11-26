@@ -111,6 +111,12 @@ pub struct ParRegion {
     pub kind: ParKind,
     pub span: Span,
     pub branches: Vec<Vec<BasicBlock>>,
+    /// A branch task's `mut` borrow of a whole binding (the local it is
+    /// assigned to) that the task writes only at these places: the `par`
+    /// check reads it as a read of the binding and a `mut` borrow of each
+    /// (core semantics §11.2, B-2026-11-26-10). Empty when unknown, which
+    /// is the whole `mut` borrow.
+    pub narrowed: Vec<(Local, Vec<Place>)>,
 }
 
 /// A `providers { R => p } in { body }` block (core semantics §14.8): in

@@ -940,7 +940,7 @@ fn place_accesses(
             }
         }
     };
-    for (b, how, p) in branch_uses(body, &set) {
+    for (b, how, p) in branch_uses(body, &set, &r.narrowed) {
         add(b, how, &p);
     }
     out
@@ -1032,7 +1032,14 @@ fn leaving_blocks(body: &Body, set: &BTreeSet<BasicBlock>) -> BTreeSet<BasicBloc
 /// Every use of a place by the blocks `set`, in block order and, within a
 /// block, in the order its statements and terminator make them, leaving
 /// out what the blocks on the branch's way out of the function do to leave.
-fn branch_uses(body: &Body, set: &BTreeSet<BasicBlock>) -> Vec<(BasicBlock, Use, Place)> {
+/// `narrowed` is the region's [`ParRegion::narrowed`]: a whole `mut`
+/// borrow listed there is a read of its place and a `mut` borrow of each
+/// place it writes.
+fn branch_uses(
+    body: &Body,
+    set: &BTreeSet<BasicBlock>,
+    narrowed: &[(Local, Vec<Place>)],
+) -> Vec<(BasicBlock, Use, Place)> {
     let mut out = Vec::new();
     let leaves = leaving_blocks(body, set);
     let operand = |o: &Operand| match o {
@@ -1056,7 +1063,18 @@ fn branch_uses(body: &Body, set: &BTreeSet<BasicBlock>) -> Vec<(BasicBlock, Use,
                             uses.extend(operand(y));
                         }
                         Rvalue::Aggregate(_, ops) => uses.extend(ops.iter().filter_map(operand)),
-                        Rvalue::Ref(BorrowKind::Mut, p) => uses.push((Use::MutBorrow, p.clone())),
+                        Rvalue::Ref(BorrowKind::Mut, p) => {
+                            let writes = narrowed
+                                .iter()
+                                .find(|(l, _)| dst.projection.is_empty() && *l == dst.local);
+                            match writes {
+                                Some((_, at)) => {
+                                    uses.push((Use::Read, p.clone()));
+                                    uses.extend(at.iter().map(|w| (Use::MutBorrow, w.clone())));
+                                }
+                                None => uses.push((Use::MutBorrow, p.clone())),
+                            }
+                        }
                         Rvalue::Ref(BorrowKind::Shared, p)
                         | Rvalue::Retain(p)
                         | Rvalue::Discriminant(p)

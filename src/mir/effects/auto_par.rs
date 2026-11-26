@@ -1112,7 +1112,7 @@ pub(super) fn verdict(
             let mentions: Vec<BTreeSet<u32>> = sets
                 .iter()
                 .map(|set| {
-                    branch_uses(body, set)
+                    branch_uses(body, set, &[])
                         .iter()
                         .flat_map(|(_, _, p)| {
                             std::iter::once(p.local.0).chain(p.projection.iter().filter_map(|e| {
@@ -1242,7 +1242,7 @@ fn reductions(body: &Body, set: &BTreeSet<BasicBlock>, touched: &[PlaceAccess]) 
     // How often the body reads each local, leaving out a checked
     // operation's overflow flag (field 1), which only its assert reads.
     let mut reads: BTreeMap<Local, usize> = BTreeMap::new();
-    for (_, how, p) in branch_uses(body, set) {
+    for (_, how, p) in branch_uses(body, set, &[]) {
         let flag = matches!(p.projection.first(), Some(ProjElem::Field(f, _)) if f.0 == 1);
         if matches!(how, Use::Read | Use::Move) && !flag {
             *reads.entry(p.local).or_default() += 1;
@@ -1558,6 +1558,7 @@ mod tests {
             kind,
             span: body.span,
             branches: out,
+            narrowed: Vec::new(),
         }];
         let mut v = analyze_with(&l.program, &l.tys, false).auto_par;
         assert_eq!(v.len(), 1);

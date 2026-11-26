@@ -1015,6 +1015,7 @@ impl Parser {
             kind,
             span: SourceInfo::dummy().span,
             branches,
+            narrowed: Vec::new(),
         })
     }
 

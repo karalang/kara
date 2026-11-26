@@ -2836,6 +2836,8 @@ impl<'a> Resume<'a> {
                         .iter()
                         .map(|br| br.iter().map(|&x| b(x)).collect())
                         .collect(),
+                    // The coroutine's locals are renumbered: no narrowing.
+                    narrowed: Vec::new(),
                 })
                 .collect(),
             suspends: false,

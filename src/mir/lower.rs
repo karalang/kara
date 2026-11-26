@@ -4408,6 +4408,10 @@ struct Bx<'l, 'a> {
     /// the reversal of a `par for`'s `Vec` on an early exit, which touches
     /// only the loop's own result.
     par_exempt: FxHashSet<u32>,
+    /// The whole-binding `mut` borrows a `par` branch's task took that
+    /// write only at these places ([`ParRegion::narrowed`]), moved onto
+    /// the region as each branch ends.
+    par_narrowed: Vec<(Local, Vec<Place>)>,
     /// When that `par for`'s iterations run as tasks: their group and the
     /// `Vec` of their handles.
     par_for_tasks: Option<ParForTasks>,
@@ -4531,6 +4535,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             par_acc: None,
             par_for_accs: Vec::new(),
             par_exempt: FxHashSet::default(),
+            par_narrowed: Vec::new(),
             par_for_tasks: None,
             closure_by_value: FxHashSet::default(),
             auto_par_candidate: None,
@@ -6716,6 +6721,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             kind: ParKind::Block,
             span: block.span,
             branches: Vec::new(),
+            narrowed: Vec::new(),
         });
         for s in &block.stmts {
             let entry = self.branch_begin();
@@ -14824,6 +14830,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             kind,
             span,
             branches: Vec::new(),
+            narrowed: Vec::new(),
         });
         self.b.par_regions.len() - 1
     }
@@ -14853,6 +14860,8 @@ impl<'l, 'a> Bx<'l, 'a> {
             .map(BasicBlock)
             .collect();
         self.b.par_regions[region].branches.push(blocks);
+        let narrowed = std::mem::take(&mut self.par_narrowed);
+        self.b.par_regions[region].narrowed.extend(narrowed);
         self.goto(after);
         self.cur = after;
     }
@@ -16361,6 +16370,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             kind: ParKind::For { limit: None },
             span,
             branches: Vec::new(),
+            narrowed: Vec::new(),
         });
         let t = self.unit();
         let tmp = self.temp(t);
@@ -29125,6 +29135,177 @@ impl<'l, 'a> Bx<'l, 'a> {
         })
     }
 
+    /// Whether the method call `e` (`object.method(..)`) may write its
+    /// receiver: a definition's `mut ref self`, or a library method that
+    /// mutates its collection or string.
+    fn method_writes_receiver(&self, e: &Expr, method: &str) -> bool {
+        match self.lcx.calls.get(&e.id).map(|c| &c.callee) {
+            Some(Callee::Def(d)) if self.lcx.fns.contains_key(d) => {
+                matches!(self.lcx.fns[d].f.self_param, Some(SelfParam::MutRef))
+            }
+            _ => {
+                crate::ast::is_mutating_collection_method(method)
+                    || matches!(method, "push_str" | "set" | "entry" | "split_at_mut")
+            }
+        }
+    }
+
+    /// Whether `callee` is a local function value whose call writes it: a
+    /// closure of `MutFn` kind, or a value typed `MutFn(..)`.
+    fn calls_mut_fn_value(&self, callee: &Expr) -> bool {
+        let Some(Res::Local(sym)) = self.lcx.res.get(&callee.id) else {
+            return false;
+        };
+        // The binding's own slot type: a `let mut f = || ..` slot holds the
+        // closure itself, whose environment mode the expression's `Fn` type
+        // does not carry.
+        let t = match self.locals.get(sym) {
+            Some(&l) => self.b.local_ty(l),
+            None => match self.lcx.node_types.get(&callee.id) {
+                Some(&t) => t,
+                None => return false,
+            },
+        };
+        let tcx = self.tys().tcx();
+        match tcx.kind(t) {
+            HK::Fn { mutable, once, .. } => mutable && !once,
+            HK::Closure { def, .. } => {
+                matches!(self.lcx.closures.get(&def).map(|c| c.1), Some(EnvMode::Mut))
+            }
+            _ => false,
+        }
+    }
+
+    /// The field paths of `sym` (a plain struct or tuple of type `t`) that
+    /// `body` writes, when every write is at a field path and nothing in
+    /// `body` can write the binding another way: no closure of its own, no
+    /// write of the whole binding, and no call of a method that might
+    /// write its receiver unless it is a field's. `None` when that is not
+    /// certain. Each path is cut where a part is not a plain struct, so it
+    /// covers every write under it ([`ParRegion::narrowed`]).
+    #[allow(clippy::type_complexity)]
+    fn task_written_paths(&self, body: &Expr, sym: SymbolId, t: Ty) -> Option<Vec<Vec<(u32, Ty)>>> {
+        let plain_struct = |t: Ty| {
+            matches!(self.tys().tcx().kind(t), HK::Tuple(_))
+                || self.tys().tcx().adt_of(t).is_some_and(|(adt, _)| {
+                    !adt.is_enum && !matches!(self.tys().tcx().kind(t), HK::Shared { .. })
+                })
+        };
+        if !plain_struct(t) {
+            return None;
+        }
+        let res = &self.lcx.res;
+        // The names from `sym` to the place `e` writes, cut at an index;
+        // `Some(empty)` is the whole binding.
+        let path_of = |e: &Expr| -> Option<Vec<String>> {
+            let mut e = e;
+            let mut names: Vec<String> = Vec::new();
+            loop {
+                match &e.kind {
+                    ExprKind::FieldAccess { object, field: f } => {
+                        names.push(f.clone());
+                        e = object;
+                    }
+                    ExprKind::TupleIndex { object, index } => {
+                        names.push(index.to_string());
+                        e = object;
+                    }
+                    ExprKind::Index { object, .. } => {
+                        names.clear();
+                        e = object;
+                    }
+                    _ => break,
+                }
+            }
+            let is_sym = matches!(e.kind, ExprKind::Identifier(_) | ExprKind::SelfValue)
+                && matches!(res.get(&e.id), Some(Res::Local(s)) if *s == sym);
+            is_sym.then(|| {
+                names.reverse();
+                names
+            })
+        };
+        // A path that is empty is the whole binding.
+        let mut paths = Vec::<Vec<String>>::new();
+        let mut note = |e: &Expr| {
+            if let Some(names) = path_of(e) {
+                paths.push(names);
+            }
+        };
+        let mut closure = false;
+        crate::span_visitor::for_each_expr(body, &mut |x| match &x.kind {
+            ExprKind::Closure { .. } => closure = true,
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } => {
+                let writes = match self.lcx.calls.get(&x.id).map(|c| &c.callee) {
+                    Some(Callee::Def(d)) if self.lcx.fns.contains_key(d) => {
+                        !matches!(self.lcx.fns[d].f.self_param, Some(SelfParam::Ref))
+                    }
+                    Some(Callee::Def(_)) | Some(Callee::Builtin(_)) => {
+                        self.method_writes_receiver(x, method)
+                    }
+                    Some(Callee::Value) | None => true,
+                };
+                if writes {
+                    note(object);
+                }
+                for a in args.iter().filter(|a| a.mut_marker) {
+                    note(&a.value);
+                }
+            }
+            ExprKind::Call { args, .. } => {
+                for a in args.iter().filter(|a| a.mut_marker) {
+                    note(&a.value);
+                }
+            }
+            ExprKind::Unary {
+                op: crate::ast::UnaryOp::Deref,
+                operand,
+            } => note(operand),
+            ExprKind::Match { scrutinee, .. } => note(scrutinee),
+            ExprKind::IfLet { value, .. } | ExprKind::WhileLet { value, .. } => note(value),
+            ExprKind::For { iterable, .. } => note(iterable),
+            _ => {}
+        });
+        crate::span_visitor::for_each_stmt(body, &mut |st| match &st.kind {
+            StmtKind::Assign { target, .. } | StmtKind::CompoundAssign { target, .. } => {
+                note(target)
+            }
+            StmtKind::MultiAssign { targets, .. } => {
+                for t in targets {
+                    note(t);
+                }
+            }
+            _ => {}
+        });
+        if closure || paths.is_empty() || paths.iter().any(|p| p.is_empty()) {
+            return None;
+        }
+        let mut out = Vec::new();
+        for names in paths {
+            let (mut cur, mut proj) = (t, Vec::new());
+            for n in names {
+                if !plain_struct(cur) {
+                    break;
+                }
+                let (i, ft) = match self.tys().tcx().kind(cur) {
+                    HK::Tuple(_) => {
+                        let i: u32 = n.parse().ok()?;
+                        (i, self.tys().field_ty(cur, None, i)?)
+                    }
+                    _ => self.field_of(cur, None, &n)?,
+                };
+                proj.push((i, ft));
+                cur = ft;
+            }
+            out.push(proj);
+        }
+        Some(out)
+    }
+
     /// Whether `object.method(..)`, called through a trait with no body of
     /// its own to read (a `dyn W` value, or a `T: W` bound), takes an owned
     /// receiver: the trait declares `own self` and the receiver is a value,
@@ -29209,13 +29390,22 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
         };
         crate::span_visitor::for_each_expr(body, &mut |x| match &x.kind {
-            ExprKind::MethodCall { object, args, .. } => {
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } => {
+                // Only a method that writes its receiver changes it: a
+                // branch that writes `t.j` still only reads `t.k` in
+                // `t.k.len()`, so a sibling may read `t.k` (core semantics
+                // §11.2, B-2026-11-26-10).
                 let copy = self
                     .lcx
                     .node_types
                     .get(&object.id)
                     .is_some_and(|&t| self.is_copy(t));
-                if !copy {
+                if !copy && self.method_writes_receiver(x, method) {
                     note(object, &mut out);
                 }
                 for a in args.iter().filter(|a| a.mut_marker) {
@@ -29351,6 +29541,12 @@ impl<'l, 'a> Bx<'l, 'a> {
                     }),
                     Some(_) => None,
                 };
+                // Calling a `MutFn` local (`let mut f = || n += 1; f()`)
+                // writes it, so the closure that calls it lends it by `mut
+                // ref` (core semantics §9.1, §11.2; B-2026-11-26-10).
+                if def.is_none() && self.calls_mut_fn_value(callee) {
+                    self.note_assigned(callee, caps);
+                }
                 go(callee, false, out);
                 for (i, a) in args.iter().enumerate() {
                     let owned = variant
@@ -29400,17 +29596,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 };
                 // A method that writes its receiver mutates the capture
                 // it is rooted at.
-                let writes = match def {
-                    Some(d) => matches!(self.lcx.fns[&d].f.self_param, Some(SelfParam::MutRef)),
-                    None => {
-                        crate::ast::is_mutating_collection_method(method)
-                            || matches!(
-                                method.as_str(),
-                                "push_str" | "set" | "entry" | "split_at_mut"
-                            )
-                    }
-                };
-                if writes {
+                if self.method_writes_receiver(e, method) {
                     self.note_assigned(object, caps);
                 }
                 go(object, recv_owned, out);
@@ -29851,7 +30037,11 @@ impl<'l, 'a> Bx<'l, 'a> {
             if cm == CapMode::Value
                 && self.locals.contains_key(&sym)
                 && !matches!(self.tys().tcx().kind(t), HK::Ref(_) | HK::MutRef(_))
-                && !self.is_copy(t)
+                // A task copies a `Copy` binding in; through its fields
+                // only, it copies just those, so a sibling `par` branch
+                // that writes another field does not conflict with it
+                // (`par { { p.0 = 5; 0 }, p.1 }`, B-2026-11-26-10).
+                && (!self.is_copy(t) || task)
             {
                 let whole = self.is_handle_aggregate(t)
                     || self
@@ -29980,6 +30170,24 @@ impl<'l, 'a> Bx<'l, 'a> {
                     } else {
                         BorrowKind::Shared
                     };
+                    // A task that uses the whole binding but writes only
+                    // some of its fields (`{ t.m.n += 1; peek(t) }`) still
+                    // takes it by one `mut` borrow; the `par` check reads
+                    // that borrow as a read of the rest, so a sibling
+                    // branch may read another field (core semantics
+                    // §11.2, B-2026-11-26-10).
+                    if mutable && task && self.locals.contains_key(&sym) {
+                        if let Some(paths) = self.task_written_paths(body, sym, t) {
+                            let places = paths
+                                .into_iter()
+                                .map(|proj| {
+                                    proj.iter()
+                                        .fold(place.clone(), |p, &(idx, ft)| p.field(idx, ft))
+                                })
+                                .collect();
+                            self.par_narrowed.push((r, places));
+                        }
+                    }
                     self.assign(r, Rvalue::Ref(kind, place));
                     (rt, Operand::Move(Place::local(r)))
                 }
