@@ -1,6 +1,7 @@
 //! `#[derive(Serialize, Deserialize)]` refuses a field whose type, or a
-//! part of it, has no impl in the library: `i128`, `u128`, `Array[T, N]`
-//! and `Result[T, E]`, alone or inside `Vec` / `Option` (B-2026-11-25-49).
+//! part of it, has no impl in the library: `i128`, `u128` and `Result[T,
+//! E]`, alone or inside `Vec` / `Option` (B-2026-11-25-49). `Array[T, N]`
+//! was refused too until the library implemented it (B-2026-11-26-69).
 //! `karac check` accepted them and every backend then stopped at "no method
 //! 'serialize' on type 'i128'"; a direct `Json.serialize` of one was
 //! already refused. Field types the library does implement still derive.
@@ -41,7 +42,6 @@ fn serde_derive_refuses_a_field_without_a_library_impl() {
     for (field, missing) in [
         ("i128", "i128"),
         ("u128", "u128"),
-        ("Array[i64, 2]", "Array"),
         ("Result[i64, String]", "Result"),
         ("Vec[i128]", "i128"),
         ("Option[u128]", "u128"),
@@ -70,6 +70,9 @@ fn serde_derive_accepts_fields_the_library_implements() {
         "SortedSet[i64]",
         "(i64, bool)",
         "Map[String, Vec[u8]]",
+        "Array[i64, 2]",
+        "Array[Array[String, 2], 3]",
+        "Vec[Array[u8, 4]]",
     ] {
         let src = format!(
             "import std.json.{{Json}};\n#[derive(Serialize, Deserialize)]\nstruct A {{ x: {field} }}\nfn main() {{ println(1); }}\n"

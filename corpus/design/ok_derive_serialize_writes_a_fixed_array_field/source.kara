@@ -1,0 +1,25 @@
+// A fixed array is a JSON array of its `N` elements, and reads back from
+// exactly `N`: any other length is refused, naming both. Nested arrays are
+// arrays of arrays, and an element that is not `Copy` moves in.
+import std.json.{Json};
+
+#[derive(Serialize, Deserialize)]
+struct Grid { cells: Array[Array[i64, 3], 2], names: Array[String, 2], tag: Option[Array[bool, 2]] }
+
+fn main() {
+    let g = Grid { cells: [[1, 2, 3], [4, 5, 6]], names: ["ab".to_string(), "cd".to_string()], tag: Some([true, false]) };
+    let text = Json.serialize(g);
+    println(text);
+    let back: Result[Grid, DeserializeError] = Json.deserialize(text);
+    match back { Ok(v) => println(Json.serialize(v)), Err(e) => println(f"err {e}") }
+    let a: Array[i64, 3] = [7, 8, 9];
+    println(Json.serialize(a));
+    let r: Result[Array[String, 2], DeserializeError] = Json.deserialize("[\"x\",\"y\"]");
+    match r { Ok(v) => println(f"{v[0]} {v[1]}"), Err(e) => println(f"err {e}") }
+    let short: Result[Array[i64, 3], DeserializeError] = Json.deserialize("[1,2]");
+    match short { Ok(v) => println(Json.serialize(v)), Err(e) => println(f"err {e}") }
+    let long: Result[Array[i64, 3], DeserializeError] = Json.deserialize("[1,2,3,4]");
+    match long { Ok(v) => println(Json.serialize(v)), Err(e) => println(f"err {e}") }
+    let inner: Result[Grid, DeserializeError] = Json.deserialize("{\"cells\":[[1,2,3],[4,5]],\"names\":[\"a\",\"b\"],\"tag\":null}");
+    match inner { Ok(v) => println(Json.serialize(v)), Err(e) => println(f"err {e}") }
+}

@@ -1,0 +1,7 @@
+{"cells":[[1,2,3],[4,5,6]],"names":["ab","cd"],"tag":[true,false]}
+{"cells":[[1,2,3],[4,5,6]],"names":["ab","cd"],"tag":[true,false]}
+[7,8,9]
+x y
+err expected an array of 3 elements, found 2 at line 1 column 5
+err expected an array of 3 elements, found 4 at line 1 column 9
+err cells: expected an array of 3 elements, found 2 at line 1 column 23

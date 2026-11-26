@@ -1,0 +1,9 @@
+source = "B-2026-11-26-69"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["design", "serde", "json", "derive"]
+expected_from = "spec"
+backends = []
+env = {}
+note = "docs/library/json.md Fixed arrays (review-thread ruling 2026-11-26 on B-2026-11-25-49): an Array[T, N] is a JSON array of N elements, nested arrays nest, and reading wants exactly N, refused otherwise with both lengths named, at the array's last character as other refused values are. The serialized lines checked against Python json.dumps(separators=(\",\", \":\"))."

@@ -38,10 +38,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   internal move check, runs when nothing was moved out and is refused at
   `karac check` when an element was (B-2026-11-25-44).
 - `#[derive(Serialize, Deserialize)]` refuses a field whose type, or a
-  part of it, has no impl in the library: `i128`, `u128`, `Array[T, N]`
-  and `Result[T, E]`, alone or in a `Vec` or `Option`. `karac check`
-  accepted them and every backend stopped at "no method 'serialize'"
-  (B-2026-11-25-49).
+  part of it, has no impl in the library: `i128`, `u128` and `Result[T,
+  E]`, alone or in a `Vec` or `Option`. `karac check` accepted them and
+  every backend stopped at "no method 'serialize'" (B-2026-11-25-49).
+  `Array[T, N]` is implemented now (see Added).
 - `#[no_effect(allocates(Heap))]` refuses a `.clone()` that copies a heap
   buffer: a `String`, a `Vec` or other collection, a `Box`, or an
   `Option`, `Result`, tuple, array or derived-`Clone` type holding one,
@@ -610,6 +610,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   (design.md § Vec; B-2026-11-11-51, tracker B-2026-11-11-81).
 
 ### Added
+
+- `Array[T, N]` implements `Serialize` and `Deserialize`: it is a JSON
+  array of its `N` elements, nested arrays nest, and reading wants exactly
+  `N`, refusing any other length with both named (`expected an array of 3
+  elements, found 2`). A derived struct with an array field round-trips
+  (docs/library/json.md, B-2026-11-26-69). `Array.from_fn(N, f)` builds
+  an array whose length is a `const` parameter, which it refused.
 
 - A `par` nested in a `par` branch can use the fields of an outer local
   the branch captured (core-semantics §11.1, §9.1): each nested branch

@@ -4824,12 +4824,17 @@ impl<'a> super::TypeChecker<'a> {
             if let ExprKind::Path { segments, .. } = &callee.kind {
                 if segments.len() == 2 && segments[0] == "Array" && segments[1] == "from_fn" {
                     let resolved = resolve_type_var_top(expected, &self.env.substitutions);
+                    // At a `const` parameter's length too (B-2026-11-26-69).
                     if let Type::Array {
                         element,
-                        size: ConstArg::Literal(n),
+                        size: size @ (ConstArg::Literal(_) | ConstArg::ConstParam(_)),
                     } = &resolved
                     {
-                        return self.check_array_from_fn(args, Some((element, *n)), &expr.span);
+                        return self.check_array_from_fn(
+                            args,
+                            Some((element, size.clone())),
+                            &expr.span,
+                        );
                     }
                 }
             }

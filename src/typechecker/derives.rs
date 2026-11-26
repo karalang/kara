@@ -1610,9 +1610,6 @@ impl<'a> super::TypeChecker<'a> {
                     "Result" => "a `Result` has no canonical JSON shape; write an enum \
                          with the variants meant, tagged with `#[serde(..)]`"
                         .to_string(),
-                    "Array" => "`Array` support is planned (docs/library/json.md); write \
-                         the field as a `Vec` for now"
-                        .to_string(),
                     _ => format!(
                         "write the field as a type that has one, or as a program type with \
                          its own `impl {trait_name}`"

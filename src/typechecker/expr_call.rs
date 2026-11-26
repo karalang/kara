@@ -115,10 +115,13 @@ impl<'a> super::TypeChecker<'a> {
     /// `Array.from_fn(n, f)` against `expected`, an `Array[T, N]` when the
     /// call has one: `f` is `Fn(i64) -> T` and `n` must be `N`. Without one
     /// `n` is an integer literal, which is the length (B-2026-10-21-30).
+    /// The expected length may be a `const` parameter (`Array[T, N]` in
+    /// `impl[T, const N: i64]`), which the instance fixes; `n` is checked
+    /// against it when the program runs, as for any length.
     pub(super) fn check_array_from_fn(
         &mut self,
         args: &[CallArg],
-        expected: Option<(&Type, i64)>,
+        expected: Option<(&Type, ConstArg)>,
         span: &Span,
     ) -> Type {
         if args.len() != 2 {
@@ -138,8 +141,8 @@ impl<'a> super::TypeChecker<'a> {
         let n_ty = self.infer_expr(&args[0].value);
         self.check_i64_arg(&args[0].value, &n_ty);
         let literal = super::TypeChecker::unsuffixed_int_literal_value(&args[0].value);
-        let len = match (expected, literal) {
-            (Some((_, n)), Some(k)) if k != n as i128 => {
+        let len = match (&expected, literal) {
+            (Some((_, ConstArg::Literal(n))), Some(k)) if k != *n as i128 => {
                 self.type_error(
                     format!("Array.from_fn builds {k} elements, but the array has {n}"),
                     args[0].value.span,
@@ -147,8 +150,8 @@ impl<'a> super::TypeChecker<'a> {
                 );
                 return Type::Error;
             }
-            (Some((_, n)), _) => n,
-            (None, Some(k)) if (0..=i64::MAX as i128).contains(&k) => k as i64,
+            (Some((_, n)), _) => n.clone(),
+            (None, Some(k)) if (0..=i64::MAX as i128).contains(&k) => ConstArg::Literal(k as i64),
             (None, _) => {
                 self.type_error(
                     "Array.from_fn needs the array's length: write `n` as an integer \
@@ -211,7 +214,7 @@ impl<'a> super::TypeChecker<'a> {
         };
         let ty = Type::Array {
             element: Box::new(elem),
-            size: ConstArg::Literal(len),
+            size: len,
         };
         self.record_expr_type(span, &ty);
         ty

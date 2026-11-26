@@ -331,6 +331,18 @@ impl[K: Serialize, V: Serialize] Serialize for SortedMap[K, V] {
     }
 }
 
+// A fixed array is a JSON array of exactly `N` elements (B-2026-11-26-69).
+impl[T: Serialize, const N: i64] Serialize for Array[T, N] {
+    fn serialize[S: Serializer](ref self, s: mut ref S) {
+        s.serialize_seq_begin(N);
+        for x in self.iter() {
+            s.serialize_element();
+            x.serialize(s);
+        }
+        s.serialize_seq_end();
+    }
+}
+
 impl Deserialize for bool {
     fn deserialize[D: Deserializer](d: mut ref D) -> Result[bool, DeserializeError] {
         d.deserialize_bool()
@@ -528,6 +540,27 @@ impl[K: Deserialize + Ord, V: Deserialize] Deserialize for SortedMap[K, V] {
             let v = V.deserialize(d)?;
             out.insert(k, v);
         }
+        Ok(out)
+    }
+}
+
+// A sequence of any other length is refused, naming both lengths. The
+// elements are read into a `Vec` first and moved into the array from it, so
+// an element type that is not `Copy` needs no copy.
+impl[T: Deserialize, const N: i64] Deserialize for Array[T, N] {
+    fn deserialize[D: Deserializer](d: mut ref D) -> Result[Array[T, N], DeserializeError] {
+        d.deserialize_seq_begin()?;
+        let mut items: Vec[T] = Vec.new();
+        while d.deserialize_element()? {
+            items.push(T.deserialize(d)?);
+        }
+        if items.len() != N {
+            return Err(d.deserialize_invalid(
+                f"expected an array of {N} elements, found {items.len()}",
+            ));
+        }
+        let mut it = items.into_iter();
+        let out: Array[T, N] = Array.from_fn(N, |_| it.next().unwrap());
         Ok(out)
     }
 }
