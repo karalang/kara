@@ -1711,7 +1711,17 @@ impl<'a> UseClassifier<'a> {
             } => {
                 self.walk_core_value_tails(expr, mode);
                 self.walk_expr(condition, Mode::Reading);
-                self.walk_block(then_block, mode);
+                // §3.1: a branch's tail is a block tail value, which moves,
+                // as the `else` block's already did through the `Block` arm;
+                // the `then` block took the enclosing mode, so a place there
+                // was only borrowed under a borrowing receiver (`if c { b }
+                // else { mk() }.len()`, B-2026-11-26-14).
+                let then_mode = if crate::ownership::core_rules() {
+                    Mode::Consuming
+                } else {
+                    mode
+                };
+                self.walk_block(then_block, then_mode);
                 if let Some(eb) = else_branch {
                     self.walk_expr(eb, mode);
                 }
@@ -1805,7 +1815,14 @@ impl<'a> UseClassifier<'a> {
                     let bound = crate::cfg::pattern_bindings(&arm.pattern);
                     self.note_closure_locals(&arm.pattern);
                     self.arm_consumed_names.push(HashSet::new());
-                    self.walk_expr(&arm.body, mode);
+                    // §3.1: an arm's value is a tail value, which moves
+                    // (B-2026-11-26-14).
+                    let arm_mode = if crate::ownership::core_rules() {
+                        Mode::Consuming
+                    } else {
+                        mode
+                    };
+                    self.walk_expr(&arm.body, arm_mode);
                     self.unshadow_locals(shadowed);
                     let consumed = self.arm_consumed_names.pop().unwrap_or_default();
                     if bound.iter().any(|n| consumed.contains(n.as_str())) {
