@@ -1472,6 +1472,18 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     fn extend_item_type(&mut self, src: &Type) -> Option<Type> {
+        // A type parameter bounded `I: IntoIterator[Item = T]` (or
+        // `Iterator` / `Iterable`) yields its `T`, as collections.md's
+        // `fn extend[I: IntoIterator[Item = T]]` takes (B-2026-11-26-71).
+        if let Some(param) = self.type_param_name(src).cloned() {
+            for tr in ["IntoIterator", "Iterator", "Iterable"] {
+                let key = (param.clone(), "Item".to_string(), Some(tr.to_string()));
+                if let Some(te) = self.enclosing_assoc_eqs.get(&key).cloned() {
+                    let scope: Vec<String> = self.enclosing_bounds.keys().cloned().collect();
+                    return Some(self.lower_type_expr(&te, &scope));
+                }
+            }
+        }
         match src {
             Type::Named { name, args } if name == "Iterator" && args.len() == 1 => {
                 Some(args[0].clone())

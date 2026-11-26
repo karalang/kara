@@ -32449,6 +32449,32 @@ impl<'l, 'a> Bx<'l, 'a> {
                         continue;
                     }
                     let at = self.expr_ty(&a.value)?;
+                    // `v.fill(val)` borrows `val` and clones it into each
+                    // slot under `T: Clone` (collections.md): a value with a
+                    // holder is cloned once and the copy handed in, so the
+                    // holder keeps it (B-2026-11-26-70).
+                    // A container of references stores the reference.
+                    let ref_elems = || {
+                        self.lib_param_tys(base, method)
+                            .and_then(|s| s.first().copied())
+                            .is_some_and(|t| {
+                                matches!(self.tys().tcx().kind(t), HK::Ref(_) | HK::MutRef(_))
+                            })
+                    };
+                    if method == "fill"
+                        && args.len() == 1
+                        && self.is_place(&a.value)
+                        && !ref_elems()
+                    {
+                        let p = self.expr_place(&a.value, false)?;
+                        let (p, t) = self.strip_refs(p);
+                        if !self.is_copy(t) {
+                            let l = self.scoped_temp(t);
+                            self.clone_into(p, t, Place::local(l));
+                            rest.push(Operand::Move(Place::local(l)));
+                            continue;
+                        }
+                    }
                     if a.mut_marker && self.is_place(&a.value) {
                         // `f.read(mut buf)`: a `mut Slice[T]` / `mut ref T`
                         // parameter lends the place mutably, even a `Copy`

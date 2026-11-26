@@ -13095,6 +13095,14 @@ impl<'a> super::TypeChecker<'a> {
                 return true;
             }
         }
+        // The checker's own `Iterator[X]`, what `iter_mut()` on a
+        // `VecDeque` or a map types as, is an iterator of `X`
+        // (B-2026-11-26-71).
+        if let Type::Named { name, args } = ty {
+            if name == "Iterator" && args.len() == 1 && trait_name == "Iterator" {
+                return true;
+            }
+        }
         // Built-in coverage via the type_supports_* helpers — these
         // recognize primitives implicitly + named types via
         // `#[derive(Trait)]` registration.

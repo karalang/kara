@@ -903,8 +903,12 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
             "union" | "intersection" | "difference" => {
+                // `other` is bare in collections.md, so a borrow under D5:
+                // a bare parameter's set is read as a local's is
+                // (B-2026-11-26-70).
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
+                    let at = crate::typechecker::peel_probe_ref(&at);
                     self.check_assignable(&sorted_set_elem, &at, arg.value.span);
                 }
                 sorted_set_elem
@@ -1199,7 +1203,9 @@ impl<'a> super::TypeChecker<'a> {
                     );
                 }
                 for arg in args {
+                    // The key is a probe: it borrows (B-2026-11-26-70).
                     let at = self.infer_expr(&arg.value);
+                    let at = crate::typechecker::peel_probe_ref(&at);
                     self.check_assignable(&k, &at, arg.value.span);
                 }
                 // A view of the entry, as `first` / `last` hand out
@@ -1373,8 +1379,12 @@ impl<'a> super::TypeChecker<'a> {
                 Type::Bool
             }
             "union" | "intersection" | "difference" => {
+                // `other` is bare in collections.md, so a borrow under D5:
+                // a bare parameter's set is read as a local's is
+                // (B-2026-11-26-70).
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
+                    let at = crate::typechecker::peel_probe_ref(&at);
                     self.check_assignable(&set_elem, &at, arg.value.span);
                 }
                 set_elem

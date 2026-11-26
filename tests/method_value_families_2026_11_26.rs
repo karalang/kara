@@ -231,56 +231,13 @@ fn methods_with_no_generated_value_are_the_listed_ones() {
         "usize.to_be_bytes",
         "usize.to_le_bytes",
         "usize.to_ne_bytes",
-        // An argument the call reads but a wrapper's bare parameter cannot
-        // hand on, or one the call takes though collections.md has it read
-        // (B-2026-11-26-70).
-        "Vec.binary_search",
-        "Vec.cmp",
-        "Vec.fill",
-        "Set.union",
-        "Set.intersection",
-        "Set.difference",
-        "SortedSet.union",
-        "SortedSet.intersection",
-        "SortedSet.difference",
-        "SortedMap.floor",
-        "SortedMap.ceiling",
-        "SortedMap.lower",
-        "SortedMap.higher",
-        // The rest have their own row (B-2026-11-26-71).
-        "String.slice",
-        "String.sorted",
-        "String.sorted_by",
-        "String.to_cstring",
-        "Str.slice",
-        "Str.sorted",
-        "Str.sorted_by",
-        "Str.to_cstring",
-        "Vec.clone_from_slice",
+        // An element-dependent result: `Vec[U]` for a sequence of
+        // sequences, `String` for text (collections.md).
         "Vec.concat",
-        "Vec.copy_from_slice",
-        "Vec.get_unchecked",
-        "Vec.into_iter",
-        "Vec.iter_mut",
-        "Vec.sort_by",
-        "Vec.sort_by_key",
-        "Vec.split_at_mut",
+        // A length the call site's expected type gives.
         "Vec.try_into_array",
-        "VecDeque.extend",
-        "VecDeque.into_iter",
-        "VecDeque.iter_mut",
-        "VecDeque.retain",
-        "VecDeque.to_string",
-        "VecDeque.try_insert",
-        "VecDeque.try_reserve",
-        "Map.entry",
-        "Map.get_or",
-        "Map.merge",
-        "Map.to_string",
-        "Set.to_string",
-        "SortedMap.entry",
-        "SortedMap.get_or",
-        "SortedMap.merge",
+        // An `unsafe fn`, called inside `unsafe { }`.
+        "Vec.get_unchecked",
     ];
     let mut want: Vec<String> = expected.iter().map(|s| s.to_string()).collect();
     let mut got = left.clone();
@@ -291,14 +248,11 @@ fn methods_with_no_generated_value_are_the_listed_ones() {
 
 #[test]
 fn a_method_with_no_family_is_still_refused_with_the_closure() {
-    let file = program(
-        "no-family",
-        "fn main() {\n    let f = Vec.sort_by_key;\n}\n",
-    );
+    let file = program("no-family", "fn main() {\n    let f = Vec.concat;\n}\n");
     let (ok, out) = karac(&["check", file.to_str().unwrap()]);
     assert!(!ok, "{out}");
     assert!(
-        out.contains("`Vec.sort_by_key` names a method of `Vec`, which has no function value yet"),
+        out.contains("`Vec.concat` names a method of `Vec`, which has no function value yet"),
         "{out}"
     );
 }

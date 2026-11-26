@@ -775,6 +775,11 @@ fn no_method_of(name: &str, method: &str) -> bool {
             method,
             "push" | "push_str" | "pop" | "clear" | "truncate" | "reserve"
         ),
+        // Rust's spelling, refused with `clone_from_slice` as the fix.
+        "Vec" => method == "copy_from_slice",
+        // A `VecDeque` has no `reserve` for the twin to derive from
+        // (collections.md § `VecDeque[T]`).
+        "VecDeque" => method == "try_reserve",
         "u8" => method == "is_ascii",
         "char" => method == "is_control",
         _ => false,

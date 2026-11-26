@@ -211,24 +211,26 @@ fn builtin_ufcs_receiver_of_another_type_is_refused() {
 
 #[test]
 fn builtin_method_with_no_function_value_names_the_closure() {
-    // `sort_by` (it takes a closure) and `floor` (B-2026-11-26-70) have no
-    // wrapper, hand-written or generated: the refusal is about the method,
-    // not "no associated constant" (the probe's wording). `i64.checked_add`
+    // `concat` (its result depends on the element) and `try_into_array`
+    // (its length comes from the call site) have no wrapper, hand-written or
+    // generated: the refusal is about the method, not "no associated
+    // constant" (the probe's wording). `sort_by` and `floor`, refused here
+    // before, are values since B-2026-11-26-71 and B-2026-11-26-70. `i64.checked_add`
     // and `Vec.windows`, refused here before, are values since
     // B-2026-11-26-17 (tests/method_value_families_2026_11_26.rs).
     let file = program(
         "no-value",
-        "fn main() {\n    let f = Vec.sort_by;\n    let g = SortedMap.floor;\n}\n",
+        "fn main() {\n    let f = Vec.concat;\n    let g = Vec.try_into_array;\n}\n",
     );
     let (ok, out) = karac(&["check", file.to_str().unwrap()]);
     assert!(!ok, "{out}");
     assert!(!out.contains("associated constant"), "{out}");
     assert!(
-        out.contains("`Vec.sort_by` names a method of `Vec`"),
+        out.contains("`Vec.concat` names a method of `Vec`"),
         "{out}"
     );
     assert!(
-        out.contains("`SortedMap.floor` names a method of `SortedMap`"),
+        out.contains("`Vec.try_into_array` names a method of `Vec`"),
         "{out}"
     );
 }

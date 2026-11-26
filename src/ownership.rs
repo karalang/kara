@@ -5527,6 +5527,22 @@ pub(crate) fn collect_method_param_modes(
         "Vec.binary_search",
         "Slice.binary_search",
         "Array.binary_search",
+        // The ordered lookups compare `key: K` with the keys, bare in
+        // collections.md and so a borrow (D5); `fill(val: T)` clones `val`
+        // into each slot under its `T: Clone` bound, so the caller keeps
+        // it (review ruling 2026-11-26, B-2026-11-26-70).
+        "SortedMap.floor",
+        "SortedMap.ceiling",
+        "SortedMap.lower",
+        "SortedMap.higher",
+        "SortedSet.floor",
+        "SortedSet.ceiling",
+        "SortedSet.lower",
+        "SortedSet.higher",
+        "Vec.fill",
+        "Slice.fill",
+        "Array.fill",
+        "VecDeque.fill",
     ] {
         map.insert(key.to_string(), vec![OwnershipMode::Ref]);
     }

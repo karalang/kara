@@ -5477,6 +5477,36 @@ impl<'a> Interp<'a> {
                     taken: false,
                 })
             }
+            // An erased function value handed over by value: a closure that
+            // reached a function-typed parameter through a function value
+            // (`let sb = Vec.sort_by; sb(mut v, |a, b| b.cmp(a))`,
+            // B-2026-11-26-71). Held in a box the call goes through, and
+            // dropped with it.
+            (v @ Value::Erased { .. }, _) => {
+                let Value::Erased { body: fname, .. } = &v else {
+                    unreachable!()
+                };
+                let body = program
+                    .bodies
+                    .get(fname)
+                    .ok_or_else(|| Stop::Error(format!("{name}: no body for {fname}")))?;
+                let slot = self.alloc(HeapObj {
+                    count: 1,
+                    weak: 0,
+                    value: v,
+                });
+                Ok(Callee {
+                    body,
+                    env: Some(slot),
+                    lent: None,
+                    erased_at: Some(Addr {
+                        root: Root::Heap(slot),
+                        path: Path::new(),
+                    }),
+                    by_value: false,
+                    taken: false,
+                })
+            }
             (v, _) => err(format!("{name}: cannot call {v:?}")),
         }
     }

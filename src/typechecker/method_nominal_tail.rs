@@ -131,7 +131,11 @@ impl<'a> super::TypeChecker<'a> {
                         self.infer_expr(&arg.value);
                     }
                 } else {
+                    // `other` is read (`fn cmp(ref self, other: ref Self)`,
+                    // ord.kara): a bare parameter is compared as a local is
+                    // (B-2026-11-26-70).
                     let arg_ty = self.infer_expr(&args[0].value);
+                    let arg_ty = crate::typechecker::peel_probe_ref(&arg_ty);
                     self.check_assignable(receiver_for_lookup, &arg_ty, args[0].value.span);
                 }
                 return Some(Type::Named {
@@ -162,6 +166,7 @@ impl<'a> super::TypeChecker<'a> {
             };
             if claims {
                 let arg_ty = self.infer_expr(&other.value);
+                let arg_ty = crate::typechecker::peel_probe_ref(&arg_ty);
                 self.check_assignable(receiver_for_lookup, &arg_ty, other.value.span);
                 return Some(match method {
                     "eq" => Type::Bool,

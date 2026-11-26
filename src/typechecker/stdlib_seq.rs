@@ -1671,7 +1671,10 @@ impl<'a> super::TypeChecker<'a> {
                     self.read_only_slice_method_error("fill", object, span);
                 }
                 for arg in args {
+                    // `fill` clones its argument into every slot, so it
+                    // borrows it (collections.md; B-2026-11-26-70).
                     let at = self.infer_expr(&arg.value);
+                    let at = crate::typechecker::peel_probe_ref(&at);
                     // B-2026-08-14-1 — reject an implicit NARROWING into the
                     // element slot. See the `Set` arms in `stdlib_map.rs` for
                     // why infer-then-compare misses it.
@@ -2195,7 +2198,10 @@ impl<'a> super::TypeChecker<'a> {
             }
             "fill" => {
                 for arg in args {
+                    // `fill` clones its argument into every slot, so it
+                    // borrows it (collections.md; B-2026-11-26-70).
                     let at = self.infer_expr(&arg.value);
+                    let at = crate::typechecker::peel_probe_ref(&at);
                     // B-2026-08-14-1 — reject an implicit NARROWING into the
                     // element slot. See the `Set` arms in `stdlib_map.rs` for
                     // why infer-then-compare misses it.

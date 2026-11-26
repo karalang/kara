@@ -137,6 +137,25 @@ const fn rm(
     }
 }
 
+/// [`r`] for a method that consumes its receiver, which the wrapper takes
+/// as `own`: `Vec.into_iter` is `fn(own Vec[T]) -> impl Iterator[Item = T]`.
+const fn ro(
+    methods: &'static str,
+    on: On,
+    generics: &'static str,
+    params: &'static str,
+    ret: &'static str,
+) -> Rule {
+    Rule {
+        methods,
+        on,
+        recv: "own ",
+        generics,
+        params,
+        ret,
+    }
+}
+
 /// The families (docs/library/core-types.md § Integers and floats,
 /// strings.md, collections.md).
 const RULES: &[Rule] = &[
@@ -310,6 +329,17 @@ const RULES: &[Rule] = &[
     ),
     r("cmp", On::Text, "", "o: Str", "Ordering"),
     r("substring", On::Text, "", "a: i64, b: i64", "String"),
+    r("sorted", On::Text, "", "", "String"),
+    r(
+        "sorted_by",
+        On::Text,
+        "",
+        "cmp: own Fn(char, char) -> Ordering",
+        "String",
+    ),
+    r("to_cstring", On::Text, "", "", "Result[CString, NulError]"),
+    // Deprecated (strings.md): `s[a..b]`, until it goes in the 0.9 cycle.
+    r("slice", On::Text, "", "a: i64, b: i64", "Str"),
     rm("push", On::String, "", "c: char", ""),
     rm("push_str", On::String, "", "t: Str", ""),
     rm("pop", On::String, "", "", "Option[char]"),
@@ -334,6 +364,49 @@ const RULES: &[Rule] = &[
     rm("reverse", On::Vec, "[T]", "", ""),
     rm("rotate_left rotate_right", On::Vec, "[T]", "n: i64", ""),
     rm("sort", On::Vec, "[T: Ord]", "", ""),
+    // The arguments these read (collections.md: bare, a borrow under D5;
+    // B-2026-11-26-70).
+    r("binary_search", On::Vec, "[T: Ord]", "v: T", "Option[i64]"),
+    r("cmp", On::Vec, "[T: Ord]", "o: Vec[T]", "Ordering"),
+    rm("fill", On::Vec, "[T: Clone]", "v: T", ""),
+    // The closure-taking, mutable-view and consuming methods
+    // (B-2026-11-26-71).
+    rm(
+        "sort_by",
+        On::Vec,
+        "[T]",
+        "cmp: own MutFn(T, T) -> Ordering",
+        "",
+    ),
+    rm(
+        "sort_by_key",
+        On::Vec,
+        "[T, K: Ord]",
+        "key: own MutFn(T) -> K",
+        "",
+    ),
+    rm(
+        "iter_mut",
+        On::Vec,
+        "[T]",
+        "",
+        "impl Iterator[Item = mut ref T]",
+    ),
+    rm(
+        "split_at_mut",
+        On::Vec,
+        "[T]",
+        "mid: i64",
+        "(mut Slice[T], mut Slice[T])",
+    ),
+    ro("into_iter", On::Vec, "[T]", "", "impl Iterator[Item = T]"),
+    rm(
+        "clone_from_slice",
+        On::Vec,
+        "[T: Clone]",
+        "src: Slice[T]",
+        "",
+    ),
     // VecDeque.
     r("front back", On::Deque, "[T]", "", "Option[ref T]"),
     r("get", On::Deque, "[T]", "i: i64", "Option[ref T]"),
@@ -346,6 +419,30 @@ const RULES: &[Rule] = &[
     rm("truncate", On::Deque, "[T]", "n: i64", ""),
     rm("swap", On::Deque, "[T]", "i: i64, j: i64", ""),
     rm("clear", On::Deque, "[T]", "", ""),
+    rm(
+        "extend",
+        On::Deque,
+        "[T, I: IntoIterator[Item = T]]",
+        "items: own I",
+        "",
+    ),
+    rm(
+        "iter_mut",
+        On::Deque,
+        "[T]",
+        "",
+        "impl Iterator[Item = mut ref T]",
+    ),
+    ro("into_iter", On::Deque, "[T]", "", "impl Iterator[Item = T]"),
+    rm("retain", On::Deque, "[T]", "pred: own MutFn(T) -> bool", ""),
+    rm(
+        "try_insert",
+        On::Deque,
+        "[T]",
+        "i: i64, v: own T",
+        "Result[(), AllocError]",
+    ),
+    r("to_string", On::Deque, "[T: Display]", "", "String"),
     // Map.
     r("get", On::Map, "[K: Hash + Eq, V]", "k: K", "Option[ref V]"),
     r(
@@ -373,6 +470,34 @@ const RULES: &[Rule] = &[
     rm("remove", On::Map, "[K: Hash + Eq, V]", "k: K", "Option[V]"),
     rm("clear", On::Map, "[K: Hash + Eq, V]", "", ""),
     rm("reserve", On::Map, "[K: Hash + Eq, V]", "n: i64", ""),
+    rm(
+        "entry",
+        On::Map,
+        "[K: Hash + Eq, V]",
+        "k: own K",
+        "Entry[K, V]",
+    ),
+    r(
+        "get_or",
+        On::Map,
+        "[K: Hash + Eq, V: Clone]",
+        "k: K, d: own V",
+        "V",
+    ),
+    rm(
+        "merge",
+        On::Map,
+        "[K: Hash + Eq, V]",
+        "o: own Map[K, V]",
+        "Map[K, V]",
+    ),
+    r(
+        "to_string",
+        On::Map,
+        "[K: Hash + Eq + Display, V: Display]",
+        "",
+        "String",
+    ),
     // Set.
     r(
         "iter",
@@ -386,11 +511,25 @@ const RULES: &[Rule] = &[
     rm("clear", On::Set, "[T: Hash + Eq]", "", ""),
     rm("reserve", On::Set, "[T: Hash + Eq]", "n: i64", ""),
     r(
+        "to_string",
+        On::Set,
+        "[T: Hash + Eq + Display]",
+        "",
+        "String",
+    ),
+    r(
         "is_disjoint is_subset is_superset",
         On::Set,
         "[T: Hash + Eq]",
         "o: Set[T]",
         "bool",
+    ),
+    r(
+        "union intersection difference",
+        On::Set,
+        "[T: Hash + Eq]",
+        "o: Set[T]",
+        "Set[T]",
     ),
     // SortedMap.
     r(
@@ -432,6 +571,34 @@ const RULES: &[Rule] = &[
     ),
     rm("remove", On::SortedMap, "[K: Ord, V]", "k: K", "Option[V]"),
     rm("clear", On::SortedMap, "[K: Ord, V]", "", ""),
+    rm(
+        "entry",
+        On::SortedMap,
+        "[K: Ord, V]",
+        "k: own K",
+        "Entry[K, V]",
+    ),
+    r(
+        "get_or",
+        On::SortedMap,
+        "[K: Ord, V: Clone]",
+        "k: K, d: own V",
+        "V",
+    ),
+    rm(
+        "merge",
+        On::SortedMap,
+        "[K: Ord, V]",
+        "o: own SortedMap[K, V]",
+        "SortedMap[K, V]",
+    ),
+    r(
+        "floor ceiling lower higher",
+        On::SortedMap,
+        "[K: Ord, V]",
+        "k: K",
+        "Option[(ref K, ref V)]",
+    ),
     // SortedSet.
     r(
         "range range_inclusive",
@@ -446,6 +613,13 @@ const RULES: &[Rule] = &[
         "[T: Ord]",
         "o: SortedSet[T]",
         "bool",
+    ),
+    r(
+        "union intersection difference",
+        On::SortedSet,
+        "[T: Ord]",
+        "o: SortedSet[T]",
+        "SortedSet[T]",
     ),
     rm("insert", On::SortedSet, "[T: Ord]", "v: own T", "bool"),
     rm("remove", On::SortedSet, "[T: Ord]", "v: T", "bool"),
@@ -512,6 +686,26 @@ fn fill(text: &str, ty: &str) -> String {
     out
 }
 
+/// `params` split at its top-level commas: a closure type's own
+/// (`cmp: own MutFn(T, T) -> Ordering`) stays in its parameter.
+fn top_level_params(params: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let (mut depth, mut start) = (0i32, 0);
+    for (i, c) in params.char_indices() {
+        match c {
+            '(' | '[' => depth += 1,
+            ')' | ']' => depth -= 1,
+            ',' if depth == 0 => {
+                out.push(&params[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    out.push(&params[start..]);
+    out
+}
+
 /// The rule that covers `ty.method`, if one does.
 fn rule(ty: &str, method: &str) -> Option<&'static Rule> {
     RULES
@@ -524,8 +718,8 @@ fn rule(ty: &str, method: &str) -> Option<&'static Rule> {
 pub fn wrapper_source(ty: &str, method: &str) -> Option<String> {
     let rule = rule(ty, method)?;
     let params = fill(rule.params, ty);
-    let names: Vec<&str> = params
-        .split(',')
+    let names: Vec<&str> = top_level_params(&params)
+        .into_iter()
         .filter_map(|p| p.split(':').next())
         .map(str::trim)
         .filter(|n| !n.is_empty())
