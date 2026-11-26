@@ -303,7 +303,7 @@ Pins:
 - a field of a `shared`, `sync` or `frozen` type;
 - a global;
 - a channel;
-- an escaping closure (§9.3), except one that is the function's result: a returned closure that captures a view is a view result, which §5.4 allows and which carries the view's origins, so `fn mk(s: Str) -> Fn() -> i64 { || s.len() }` is accepted and `mk(t.as_str())` may not outlive `t` (ruled 2026-11-13, probe);
+- an escaping closure (§9.3), except one that is the function's result: a returned closure that captures a view is a view result, which §5.4 allows and which carries the view's origins, so `fn mk(s: Str) -> Fn() -> i64 { || s.len() }` is accepted and `mk(t.as_str())` may not outlive `t` (ruled 2026-11-13, probe). A borrowed parameter (a bare non-`Copy` parameter or a `mut ref` one) counts as a view here: the returned closure captures the reference the parameter holds, so `fn mk(p: String) -> Fn(String) -> String { |s| f"{p}{s}" }` is accepted and `mk(name)` may not outlive `name`, exactly as when the capture reaches `p` through an inner closure. To return a closure that owns the value, take `own p` or clone it into a local first (review-thread ruling 2026-11-26, probe H14);
 - the function's result, except as §5.4 allows.
 
 A view **may** enter a branch of `par {}` or `par for`, or a `TaskGroup` task that joins inside the scope of every origin (§9.5).
@@ -527,7 +527,7 @@ A by-move capture of a `Copy` place copies it. A read-only capture of a `Copy` p
 - passed to an `escaping` function parameter;
 - sent through a channel.
 
-An escaping closure captures every place by move. A captured place is then moved (§3), and using it afterwards is E0500. The fix is to clone before creating the closure.
+An escaping closure captures every place by move. A captured place is then moved (§3), and using it afterwards is E0500. The fix is to clone before creating the closure. A borrowed parameter's place holds a reference, so moving it in moves the reference and makes the closure a view, which of the escapes above only a returned closure may be (§5.7).
 
 A field or a collection element of function type is escaping by nature (`design.md` § Escaping function values), so a closure stored in one escapes even when the struct, tuple or collection is a local: `let h = Holder { f: || s.len() }` moves `s` in, and a `Copy` capture such as a counter is copied, so the enclosing function's own `n` does not see the closure's writes. Re-affirmed 2026-11-02 against the pin below (B-2026-11-02-32).
 
