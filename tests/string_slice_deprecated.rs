@@ -59,3 +59,48 @@ fn a_user_types_own_slice_is_not_deprecated() {
     assert!(!err.contains("deprecated"), "{err}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// B-2026-11-26-67 (review ruling 2026-11-26): until it is removed,
+/// `s.slice(a, b)` is exactly `s[a..b]`, the same bounds and char-boundary
+/// checks and the same panic message on every lane. It used to clamp and
+/// cut inside a code point, so `"héllo".slice(1, 2)` was half of `é`.
+const PANICS: &str = "#[allow(deprecated)]\nfn main() {\n    let s = \"h\u{e9}llo\".to_string();\n    println(s.slice(0, 3));\n    println(s.slice(1, 2));\n}\n";
+
+#[test]
+fn string_slice_panics_as_the_range_index_on_the_interpreter() {
+    let dir = scratch("panic-interp", PANICS);
+    let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .current_dir(&dir)
+        .args(["run", "--interp", "m.kara"])
+        .output()
+        .expect("karac");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(out.status.code(), Some(101));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "h\u{e9}\n");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("byte index 2 is not a char boundary"), "{err}");
+}
+
+#[cfg(feature = "llvm")]
+#[test]
+fn string_slice_panics_as_the_range_index_when_built() {
+    let dir = scratch("panic-build", PANICS);
+    let built = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .current_dir(&dir)
+        .args(["build", "m.kara", "-o", "m"])
+        .output()
+        .expect("karac");
+    let berr = String::from_utf8_lossy(&built.stderr).into_owned();
+    if !built.status.success() && berr.contains("runtime archive") {
+        let _ = std::fs::remove_dir_all(&dir);
+        eprintln!("skipped: no runtime archive");
+        return;
+    }
+    assert!(built.status.success(), "{berr}");
+    let out = Command::new(dir.join("m")).output().expect("run");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(out.status.code(), Some(101));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "h\u{e9}\n");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("byte index 2 is not a char boundary"), "{err}");
+}

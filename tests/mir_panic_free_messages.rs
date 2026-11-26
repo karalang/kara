@@ -184,8 +184,8 @@ fn mir_substring_cut_reports_without_the_panic_hook() {
     );
 }
 
-/// `slice` cut inside a code point makes the text lossy; an index range
-/// past the end panics.
+/// `slice` cut inside a code point panics as `s[a..b]` does
+/// (B-2026-11-26-67), before the index range past the end is reached.
 #[test]
 fn mir_slice_and_index_range_report_without_the_panic_hook() {
     let src = "fn main() {\n    let s: String = f\"h\u{e9}llo{1}\";\n    let k = s.len() - 5;\n    let t = s.slice(1, k);\n    println(f\"{t.len()} {t}\");\n    let v = s[0..k + 9];\n    println(v);\n}\n";
@@ -193,6 +193,6 @@ fn mir_slice_and_index_range_report_without_the_panic_hook() {
         "slice",
         src,
         101,
-        "runtime error: string slice bounds 0..11 out of range (len 7)\n  at main.kara:6:13\n",
+        "runtime error: byte index 2 is not a char boundary\n  at main.kara:4:13\n",
     );
 }

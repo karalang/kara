@@ -2561,23 +2561,42 @@ impl<'a> Interp<'a> {
                 self.c_string_method(name, base, method, args, ret)
             }
             ("String", "slice") => {
-                // `slice(start, end) -> StringSlice`, held as a `String` of
-                // its own: the bytes `[start, end)`, saturating as legacy's
-                // (a start out of range is empty, `end` clamps).
+                // `slice(start, end) -> Str`, the deprecated spelling of
+                // `s[start..end]` and exactly it: out of range, inverted or
+                // off a char boundary panics with the range index's message
+                // (B-2026-11-26-67). Only the piece is copied, so a loop of
+                // short slices stays linear (B-2026-10-13-2).
                 let [recv, Value::Int(a), Value::Int(b)] = args.as_slice() else {
                     return err(format!("{name} takes a receiver and two indices"));
                 };
-                // Only the piece is copied, so a loop of short slices stays
-                // linear (B-2026-10-13-2).
-                let text = self.str_ref(recv)?;
-                let len = text.len() as i128;
-                let piece = if *a < 0 || *a > len {
-                    String::new()
-                } else {
-                    let end = (*b).clamp(*a, len);
-                    String::from_utf8_lossy(&text.as_bytes()[*a as usize..end as usize])
-                        .into_owned()
+                let (lo, hi) = (*a, *b);
+                let (msg, piece) = {
+                    let text = self.str_ref(recv)?;
+                    let len = text.len() as i128;
+                    let msg = if !(0 <= lo && lo <= hi && hi <= len) {
+                        Some(format!(
+                            "string slice bounds {lo}..{hi} out of range (len {len})"
+                        ))
+                    } else if !text.is_char_boundary(lo as usize) {
+                        Some(format!("byte index {lo} is not a char boundary"))
+                    } else if !text.is_char_boundary(hi as usize) {
+                        Some(format!("byte index {hi} is not a char boundary"))
+                    } else {
+                        None
+                    };
+                    let piece = match msg {
+                        None => text[lo as usize..hi as usize].to_string(),
+                        Some(_) => String::new(),
+                    };
+                    (msg, piece)
                 };
+                if let Some(msg) = msg {
+                    self.panic_message = Some(msg);
+                    if self.trace {
+                        self.events.push(Event::Abort(AbortReason::BoundsCheck));
+                    }
+                    return Err(Stop::Abort(AbortReason::BoundsCheck));
+                }
                 Ok(self.alloc_box("String", Value::Str(piece)))
             }
             ("F64" | "F32" | "F16" | "Bf16", "from") if args.len() == 1 => {

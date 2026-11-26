@@ -1764,15 +1764,17 @@ impl StrSplit {
     /// from either end and `rfind` finds it; one that can (`"aa"`) is
     /// searched from the front, as `next` searches.
     fn last_match(ref self) -> Option[i64] {
+        // A border (a proper prefix that is also a suffix) starts with the
+        // separator's first byte, a lead byte, so it ends on a char boundary
+        // at both ends: only those `k` need testing, and the cut is then a
+        // checked `s[a..b]` (B-2026-11-26-67).
         let m = self.sep.len();
         let mut border = false;
-        let mut k = 1;
-        while k < m {
-            if self.sep.as_str().slice(0, k) == self.sep.as_str().slice(m - k, m) {
+        for (k, _) in self.sep.as_str().char_indices() {
+            if k > 0 and self.sep.as_str().ends_with(self.sep.as_str()[0..k]) {
                 border = true;
                 break;
             }
-            k = k + 1;
         }
         if not border {
             return match self.s.slice(self.pos, self.back).rfind(self.sep.as_str()) {

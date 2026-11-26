@@ -1161,8 +1161,9 @@ fn main() {
 
 /// B-2026-10-03-10: a splitter's step scans for a one-byte separator in
 /// line, and `slice` cuts a view in line when both ends fall on char
-/// boundaries. Multi-byte separators, text with wide chars, and slices
-/// out of range or inside a char must print what the interpreter prints.
+/// boundaries. Multi-byte separators, text with wide chars, and slices on
+/// char boundaries must print what the interpreter prints; a slice out of
+/// range or inside a char panics as `s[a..b]` does (B-2026-11-26-67).
 #[test]
 fn mir_split_and_slice_cut_in_line() {
     const SRC: &str = r##"fn main() {
@@ -1181,7 +1182,7 @@ fn mir_split_and_slice_cut_in_line() {
     println("");
     let s = "héllo wörld";
     let v = s.as_str();
-    println(f"[{v.slice(0, 2)}] [{v.slice(1, 3)}] [{v.slice(3, 100)}] [{v.slice(-1, 2)}] [{v.slice(20, 30)}] [{v.slice(5, 2)}] [{v.slice(2, 3)}]");
+    println(f"[{v.slice(0, 1)}] [{v.slice(1, 3)}] [{v.slice(3, 11)}] [{v.slice(5, 5)}] [{v.slice(12, 13)}]");
     println(f"{"x".split(",").count()} {"".split(",").count()} {",".split(",").count()}");
 }
 "##;
@@ -1190,7 +1191,7 @@ fn mir_split_and_slice_cut_in_line() {
         .output;
     assert_eq!(
         want,
-        "[3][#][héllo][][wörld][#][] 7 2\n<a><b><><c>\n<α><γ>\n[h\u{fffd}] [é] [llo wörld] [] [] [] [\u{fffd}]\n1 1 2\n"
+        "[3][#][héllo][][wörld][#][] 7 2\n<a><b><><c>\n<α><γ>\n[h] [é] [llo wör] [] [d]\n1 1 2\n"
     );
     for opt in [0, 2] {
         if let Some(out) = build_and_run(SRC, opt) {

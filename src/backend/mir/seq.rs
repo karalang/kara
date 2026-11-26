@@ -1272,18 +1272,19 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             ("reserve" | "reserve_exact" | "shrink_to_fit", _) => {}
             ("slice", [s, lo, hi]) => {
-                // Saturating, as the interpreter's: a start out of range is
-                // empty and the end clamps; a cut inside a char is lossy.
+                // The deprecated spelling of `s[lo..hi]`, and exactly it:
+                // out of range, inverted or off a char boundary panics with
+                // the range index's message (B-2026-11-26-67).
                 let (p, n) = self.str_parts(s)?;
                 let lo = self.int_arg(lo)?;
                 let hi = self.int_arg(hi)?;
-                let mode = self.llcx.i32_type().const_int(2, false);
+                let mode = self.llcx.i32_type().const_int(1, false);
                 let d = self.place_ptr(dest)?;
                 if self.str_cut(dty) == "str_view" {
-                    self.str_view_inline(d, p, n, lo, hi, 2)?;
+                    self.str_view_inline(d, p, n, lo, hi, 1)?;
                     return Ok(Some(()));
                 }
-                self.rt_int(
+                let r = self.rt_int(
                     self.str_cut(dty),
                     &[
                         d.into(),
@@ -1295,6 +1296,7 @@ impl<'ctx> Cx<'ctx, '_> {
                     ],
                     8,
                 )?;
+                self.abort_on(r, "index out of bounds")?;
             }
             ("substring" | "index_range", [s, lo, rest @ ..]) => {
                 let (p, n) = self.str_parts(s)?;
