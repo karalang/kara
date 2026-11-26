@@ -65,7 +65,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | other | 157 |
 | soundness | 134 |
 | miscompile | 110 |
-| run-vs-build | 76 |
+| run-vs-build | 77 |
 | crash | 70 |
 | codegen-gap | 47 |
 | use-after-free | 13 |
@@ -81,7 +81,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | mir-llvm | 334 |
 | cli | 320 |
 | parser | 163 |
-| ownership | 138 |
+| ownership | 139 |
 | runtime | 114 |
 | interp | 112 |
 | effect | 70 |
@@ -151,6 +151,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-11 | 2026-11-26 | mir | medium | A nested `par` that reads a field of an outer local is refused by `karac check` with the internal E0516 "the capture of `t` is not lowered yet" | — |
 | B-2026-11-26-12 | 2026-11-26 | typecheck | low | `SortedSet` has no `clear`, though Vec, VecDeque, Map, Set, SortedMap and PriorityQueue all have one | — |
 | B-2026-11-26-13 | 2026-11-26 | typecheck | low | Remainder of B-2026-11-21-63: `(0..250).map(|i| f"{i % 10}q").collect()` into a `String` gets no fix, because the rewrite's span starts inside the `(` that opens the receiver chain, so the edit would leave a stray `(` and `karac fix`'s parse guard refuses it | — |
+| B-2026-11-26-14 | 2026-11-26 | ownership | medium | `karac check` misses the move of a place that is the FIRST branch of an `if` or `match` used as a method receiver: `if c { b1 } else { mk() }.len(); println(b1)` checks clean, and interp and JIT stop at the internal MIR move check | — |
 
 ### Relocated
 
