@@ -58,10 +58,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 771 |
-| false-positive | 384 |
-| missing-feature | 259 |
-| perf | 204 |
+| diagnostics | 772 |
+| false-positive | 389 |
+| missing-feature | 261 |
+| perf | 205 |
 | other | 153 |
 | soundness | 134 |
 | miscompile | 110 |
@@ -76,9 +76,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 930 |
-| mir | 342 |
-| mir-llvm | 333 |
+| typecheck | 937 |
+| mir | 343 |
+| mir-llvm | 334 |
 | cli | 318 |
 | parser | 162 |
 | ownership | 138 |
@@ -92,7 +92,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | lexer | 2 |
 ## Current state
 
-_Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-11-25). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-11-26). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -135,6 +135,15 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-25-61 | 2026-11-25 | typecheck | low | Attributes that design.md's attribute list does not have are accepted: `#[unsafe(no_mangle)]`, `#[unsafe(link_section(".."))]`, `#[used]` and `#[profile(..)]` (deferred.md's systems and embedded tracks) check with no diagnostic, `#[profile(kernel)]` is even enforced, the `@deprecated` shorthand works, and `#[with_provider(R, e)]` on a plain `fn` is silent; design.md says the list is generated from the registry and anything else is E_UNKNOWN_ATTRIBUTE | — |
 | B-2026-11-25-62 | 2026-11-25 | typecheck | low | An `impl` that leaves out a trait's required method reports E0203 and then a spurious E0236 `no method 'name' on type 'Rock'` at the trait's default method body that calls it | — |
 | B-2026-11-25-63 | 2026-11-25 | typecheck | low | `String.slice(a, b)` is accepted and returns a `Str` view, but library/strings.md has no `slice`: the documented view is `s[a..b]` (design.md §5) and the copy is `substring`; book ch09b taught `s.slice` (now `s[a..b]`) | — |
+| B-2026-11-26-1 | 2026-11-26 | typecheck | low | An `as` cast settles an unsuffixed literal binding to `i64` on the spot, so a later use cannot fix it: `let mid = 5; let x = mid as f64; mid` in a `-> i32` body is refused (and `let x = mid as i64` lints redundant_cast), while the same cast written after the fixing use (`take(mid); mid as f64`) and `let y = mid + 1; y` both check; the refusal blames an operator or a method | — |
+| B-2026-11-26-2 | 2026-11-26 | typecheck | low | A `for` over an array literal settles the array's literals to `i64` before the loop body can fix them: `for (rider, start, end) in [(10, 3, 8), (5, 10, 16)] { b.check_in(rider, "Leyton", start) }` with `check_in(id: i32, .., t: i32)` is refused, as is `for a in [1, 2] { take_i32(a) }` and `for a in [1, 2].iter()`, while the same array bound first (`let pairs = [(1, 2)]; for (a, b) in pairs.iter() { take_i32(a) }`), `let (c, d) = (5, 6); take_i32(c)` and `let x = [1, 2][0]; take_i32(x)` all check | — |
+| B-2026-11-26-3 | 2026-11-26 | typecheck | medium | A type-qualified call of a number's method is refused: `i32.max(a, b)`, `i64.abs(x)`, `i32.pow(a, 2)` and `f64.sqrt(x)` are each 'no associated function', though design.md §9 says `user.validate()` and `User.validate(user)` are the same call, and `karac fix` writes Rust's `i32::max(a, b)` as the refused `i32.max(a, b)` | — |
+| B-2026-11-26-4 | 2026-11-26 | typecheck | low | Remainder of the kata 1401 row: a type-qualified call of a native method on `Vec` or `bool` is still refused (`Vec.len(v)`, `bool.then(c, f)`: 'no associated function') while `Vec.contains(v, 1)` and `String.len(s)` check, and `Ord.max(a, b)` is refused at check with the lowering message 'a type that failed to check is not lowered yet' | — |
+| B-2026-11-26-5 | 2026-11-26 | mir | medium | `String.from(s)` with `s` the item of a `for` over a local collection of strings is refused as a move out of a borrowed place (E0516), though the same loop over a borrowed parameter's collection, or over `.iter()`, copies the item | — |
+| B-2026-11-26-6 | 2026-11-26 | typecheck | low | `v.push([1, 2].to_vec())` with `v: Vec[Vec[i32]]` is refused as a `Vec[i64]`, with no fix, though the same literal through `.to_vec()` takes `i32` from a `let` annotation or a function's parameter | — |
+| B-2026-11-26-7 | 2026-11-26 | mir-llvm | low | `s.rotate_right(k)` and `rotate_left` turn a slice by three reversals of element swaps, where Rust's `rotate_right(1)` moves the elements once with a `memmove`: kata 1409's bench, `p[..=at].rotate_right(1)` once a query, runs in 0.17-0.18 s against Rust's 0.046-0.058 s with overflow checks on and C's 0.071 s | — |
+| B-2026-11-26-8 | 2026-11-26 | typecheck | low | `.map(|x| { sum += x; sum }).fold(0, |low, s| low.min(s))`, with `let mut sum = 0` summing `i32`s, is fixed by suffixing the seed `0i32`, after which `low.min(s)` is refused as `i64` with no fix: the refusal does not trace `s` back through the closure to `sum`, which the same refusal on `sum` itself declares `sum: i32` | — |
+| B-2026-11-26-9 | 2026-11-26 | typecheck | low | `v.push(((0..3).map(|_| 1).collect(), 5))` with `v: Vec[(Vec[i32], i32)]` is refused, "expected '(Vec[i32], i32)', found '(C, i64)'", with no fix: the element type does not reach a `collect` inside a tuple argument, though it reaches a bare `v.push(it.collect())` and a `let p: (Vec[i32], i32) = (it.collect(), 5)` | — |
 
 ### Relocated
 
