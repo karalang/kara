@@ -1,1 +1,1 @@
-ERROR at line 1: module-level binding 'CACHE' is declared with type 'OnceCell[i64]', but `OnceCell[T]` is single-task; module-level bindings are visible to every task and must use the cross-task-safe `OnceLock[T]` instead. Replace `OnceCell` with `OnceLock` in the binding's type
+ERROR at line 3: module-level binding 'CACHE' is declared with type 'OnceCell[i64]', but `OnceCell[T]` is single-task; module-level bindings are visible to every task and must use the cross-task-safe `OnceLock[T]` instead. Replace `OnceCell` with `OnceLock` in the binding's type

@@ -1,5 +1,6 @@
 import std.log;
 import std.log.{info};
+import std.sync.{TaskGroup};
 
 fn work(i: i64) -> i64 {
     info("t", i: i);

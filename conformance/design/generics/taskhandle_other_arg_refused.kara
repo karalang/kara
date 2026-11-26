@@ -1,5 +1,7 @@
 // design.md §8 Subtyping and variance: control for `taskhandle_covariant`;
 // a `TaskHandle[String]` is no `TaskHandle[i64]`.
+import std.sync.{TaskGroup, TaskHandle};
+
 fn take(h: own TaskHandle[i64]) -> i64 { h.join() }
 fn wrong(g: ref TaskGroup) -> i64 {
     let s: TaskHandle[String] = g.spawn(|| "s".to_string());

@@ -1,4 +1,5 @@
 import std.time.{Duration, Instant, sleep};
+import std.sync.{TaskGroup};
 
 fn forever() -> i64 { sleep(Duration.ms(60000)); 0 }
 fn main() {

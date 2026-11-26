@@ -1,4 +1,4 @@
-
+import std.sync.{TaskFailed, TaskGroup};
 fn boom(n: i64) -> i64 { if n > 0 { panic(f"task {n}"); } n }
 fn main() {
     let iso = TaskGroup.isolating();

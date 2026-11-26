@@ -1,4 +1,6 @@
 // design.md §11: `sync enum WorkItem` from the page.
+import std.sync.{Atomic, Mutex};
+
 sync enum WorkItem { Task { id: u64, payload: Mutex[Vec[u8]] }, Control { cmd: Atomic[u32] }, Poison }
 fn main() {
     let w = WorkItem.Control { cmd: Atomic.new(3) };

@@ -1,3 +1,5 @@
+import std.hash.{FxBuildHasher};
+
 fn main() {
     let a: Set[i64, FxBuildHasher] = Set.new(); let b: Set[i64, FxBuildHasher] = Set.new(); println(f"{a.union(b).len()}");
 }

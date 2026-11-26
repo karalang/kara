@@ -28,7 +28,8 @@ fn scratch(tag: &str) -> std::path::PathBuf {
     dir
 }
 
-const PLAIN: &str = r#"struct Mute {}
+const PLAIN: &str = r#"import std.io.{StdoutProvider};
+struct Mute {}
 impl StdoutProvider for Mute {
     fn write(mut ref self, s: Str) { }
 }
@@ -48,7 +49,8 @@ fn main() {
 }
 "#;
 
-const OVERRIDDEN: &str = r#"struct Mute {}
+const OVERRIDDEN: &str = r#"import std.io.{StdoutProvider};
+struct Mute {}
 impl StdoutProvider for Mute {
     fn write(mut ref self, s: Str) { }
 }
@@ -94,7 +96,8 @@ fn a_stored_callback_is_refused_under_a_test_with_provider() {
     std::fs::write(dir.join("kara.toml"), "[package]\nname = \"demo\"\n").unwrap();
     std::fs::write(
         dir.join("src/main.kara"),
-        r#"struct FakeClock { t: i64 }
+        r#"import std.time.{ClockProvider};
+struct FakeClock { t: i64 }
 impl ClockProvider for FakeClock { fn now(ref self) -> i64 { self.t } }
 struct Bus[with E] { hs: Vec[Fn() -> i64 with E] }
 impl[with E] Bus[with E] {

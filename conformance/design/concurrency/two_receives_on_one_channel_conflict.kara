@@ -1,4 +1,6 @@
 // design.md §13 Channels: two branches that receive from one channel conflict.
+import std.sync.{Receiver, Sender};
+
 fn main() {
     let (tx, rx): (Sender[i64], Receiver[i64]) = channel(4);
     let _ = tx.send(1);

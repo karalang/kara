@@ -113,7 +113,7 @@ Everything else is imported from a `std.*` module:
 | `std.io` | `File`, `OpenOptions`, `SeekFrom`, `BufReader`, `BufWriter`, `Metadata`, `LinesIter`, `StdinLines`, `StdoutProvider`, `StderrProvider`, `StdinProvider`, `FileSystemProvider` |
 | `std.net` | `TcpListener`, `TcpStream`, `UdpSocket`, `NetError` (and its alias `TcpError`); HTTP: `Client`, `Request`, `RequestBuilder`, `Response`, `HttpError`, `Server`, `WebSocket`; TLS: `TlsConfig`, `TlsListener`, `TlsStream`, `TlsError` ([io.md](io.md)) |
 | `std.hash` | `Hasher`, `BuildHasher`, `SipHash13BuildHasher`, `FxBuildHasher`, `StableHash` |
-| `std.cmp` | `Reverse` ([core-types.md](core-types.md#reverse)), `F32`, `F64` (the totally ordered float keys) |
+| `std.cmp` | `Reverse` ([core-types.md](core-types.md#reverse)), `F32`, `F64`, `F16`, `Bf16` (the total-order float wrappers) |
 | `std.iter` | `DoubleEndedIterator`, `ExactSizeIterator`, `Extend`, the adapter structs |
 | `std.process` | `exit`, `Command`, `Stdio`, `Child`, `ChildStdin`, `ChildStdout`, `ChildStderr`, `ExitStatus`, `Output` |
 | `std.regex` | `Regex`, `RegexError`, `Match`, `Captures` |
@@ -140,6 +140,6 @@ Experimental modules: implemented in 0.8 and imported like any other, but their 
 | `std.tracing` (experimental) | `Span`, `LogEvent`, `SpanField`, `NoOpExporter`, `StdoutExporter`, `Log` |
 | `std.protobuf` (experimental) | `ProtoBuf`, `ProtoReader` |
 
-The data track (`Tensor`, `Column`, `DataFrame`, `LazyFrame`, `LazyExpr`, `LazyGroupBy`, `Stats`, `F16`, `Bf16`) is the post-v1 `kara-data` package and is not in 0.8 ([data.md](data.md), [deferred.md § M4c](../deferred.md)).
+The data track (`Tensor`, `Column`, `DataFrame`, `LazyFrame`, `LazyExpr`, `LazyGroupBy`, `Stats`) is the post-v1 `kara-data` package and is not in 0.8 ([data.md](data.md), [deferred.md § M4c](../deferred.md)).
 
 Domain names (an HTTP `Response`, a parser's `Parser` and `Span`, JSON types) live under `std.*` as well and are never in the prelude. A local binding may shadow any prelude name; a lint flags the likely-unintended cases.

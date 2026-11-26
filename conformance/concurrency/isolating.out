@@ -2,7 +2,7 @@ failing errdefer
 failing defer
 drop in failing task
 panicked: boom
-line 15 column 9
+line 16 column 9
 Ok(42)
 Ok(Err(not a number))
 failing errdefer

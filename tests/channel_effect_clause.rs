@@ -51,6 +51,7 @@ fn refused(src: &str) -> String {
 }
 
 const RECEIVES: &str = r#"
+import std.sync.{Channel, Receiver, Sender};
 struct Job { run: Fn(ref Receiver[String]) -> String + CrossTask with writes(Stdout) receives(Channel) blocks }
 
 fn take(rx: ref Receiver[String]) -> String {
@@ -70,6 +71,7 @@ fn main() {
 "#;
 
 const SENDS: &str = r#"
+import std.sync.{Channel, Receiver, Sender};
 struct Out { put: Fn(ref Sender[i64], i64) with sends(Channel) blocks }
 
 fn put(tx: ref Sender[i64], v: i64) {

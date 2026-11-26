@@ -1,1 +1,1 @@
-ERROR at line 26: public function 'high' performs effects [writes(Log)] but has no effect declaration
+ERROR at line 28: public function 'high' performs effects [writes(Log)] but has no effect declaration

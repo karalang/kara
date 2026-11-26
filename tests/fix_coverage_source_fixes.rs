@@ -168,11 +168,11 @@ fn fix_coverage_a_sync_types_mut_ref_receiver_becomes_bare() {
     let m = mend(
         "sync",
         "E0258",
-        "sync struct Counter {\n    n: Atomic[i64],\n}\n\nimpl Counter {\n    fn reset(mut ref self) {\n        self.n.store(0);\n    }\n}\n\nfn main() {\n    let c = Counter { n: Atomic.new(1) };\n    c.reset();\n    println(c.n.load());\n}\n",
+        "import std.sync.{Atomic};\nsync struct Counter {\n    n: Atomic[i64],\n}\n\nimpl Counter {\n    fn reset(mut ref self) {\n        self.n.store(0);\n    }\n}\n\nfn main() {\n    let c = Counter { n: Atomic.new(1) };\n    c.reset();\n    println(c.n.load());\n}\n",
     );
     assert_mended(
         &m,
-        "sync struct Counter {\n    n: Atomic[i64],\n}\n\nimpl Counter {\n    fn reset(self) {\n        self.n.store(0);\n    }\n}\n\nfn main() {\n    let c = Counter { n: Atomic.new(1) };\n    c.reset();\n    println(c.n.load());\n}\n",
+        "import std.sync.{Atomic};\nsync struct Counter {\n    n: Atomic[i64],\n}\n\nimpl Counter {\n    fn reset(self) {\n        self.n.store(0);\n    }\n}\n\nfn main() {\n    let c = Counter { n: Atomic.new(1) };\n    c.reset();\n    println(c.n.load());\n}\n",
         Some("0\n"),
     );
 }
@@ -310,11 +310,13 @@ fn fix_coverage_a_once_cell_field_of_a_sync_struct_becomes_a_once_lock() {
     let m = mend(
         "oncecell",
         "E_ONCE_CELL_IN_PAR_TYPE",
-        "sync struct S {\n    c: OnceCell[i64],\n}\n\nfn main() {\n    println(1);\n}\n",
+        "import std.sync.{OnceCell};\nsync struct S {\n    c: OnceCell[i64],\n}\n\nfn main() {\n    println(1);\n}\n",
     );
     assert_mended(
         &m,
-        "sync struct S {\n    c: OnceLock[i64],\n}\n\nfn main() {\n    println(1);\n}\n",
+        // The rename leaves the `OnceCell` import behind; the import fix adds
+        // `OnceLock`'s.
+        "import std.sync.{OnceCell};\nimport std.sync.{OnceLock};\nsync struct S {\n    c: OnceLock[i64],\n}\n\nfn main() {\n    println(1);\n}\n",
         Some("1\n"),
     );
 }
@@ -432,7 +434,9 @@ fn fix_coverage_a_once_cell_at_module_scope_becomes_a_once_lock() {
     assert!(m.fixable, "no edit on the first record:\n{}", m.first);
     assert_eq!(
         m.text,
-        "let CFG: Map[String, OnceLock[i64]] = Map.new();\n\nfn main() {\n    println(1);\n}\n"
+        // The bare `OnceCell` gets its import, then the rename leaves it
+        // behind and `OnceLock` gets its own.
+        "import std.sync.{OnceCell};\nimport std.sync.{OnceLock};\n\nlet CFG: Map[String, OnceLock[i64]] = Map.new();\n\nfn main() {\n    println(1);\n}\n"
     );
     let after: serde_json::Value =
         serde_json::from_str(m.after.lines().next().unwrap_or("")).expect("JSON");

@@ -1,5 +1,6 @@
 import std.pool.{Pool, PoolError, PooledConnection};
 import std.time.{Duration, Instant};
+import std.sync.{TaskGroup};
 
 struct Conn { id: i64 }
 

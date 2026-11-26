@@ -1,4 +1,5 @@
 import std.time.{Duration, Instant, sleep};
+import std.sync.{TaskGroup, TaskHandle};
 
 fn work() -> i64 { sleep(Duration.ms(20)); 42 }
 fn make() -> TaskHandle[i64] {

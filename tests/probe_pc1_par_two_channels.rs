@@ -30,7 +30,8 @@ fn check(name: &str, src: &str) -> (bool, String) {
     )
 }
 
-const SEND_AND_RECEIVE: &str = r#"fn main() {
+const SEND_AND_RECEIVE: &str = r#"import std.sync.{Receiver, Sender};
+fn main() {
     let (txa, rxa): (Sender[i64], Receiver[i64]) = channel(8);
     let (txb, rxb): (Sender[i64], Receiver[i64]) = channel(8);
     let _ = txa.send(5);
@@ -42,6 +43,7 @@ const SEND_AND_RECEIVE: &str = r#"fn main() {
 }
 "#;
 const RECEIVE_BOTH: &str = r#"
+import std.sync.{Receiver, Sender};
 fn main() {
     let (txa, rxa): (Sender[i64], Receiver[i64]) = channel(8);
     let (txb, rxb): (Sender[i64], Receiver[i64]) = channel(8);
@@ -53,7 +55,8 @@ fn main() {
     println(f"{a} {b} {0}");
 }
 "#;
-const SAME_CHANNEL: &str = r#"fn main() {
+const SAME_CHANNEL: &str = r#"import std.sync.{Receiver, Sender};
+fn main() {
     let (txa, rxa): (Sender[i64], Receiver[i64]) = channel(8);
     let (txb, rxb): (Sender[i64], Receiver[i64]) = channel(8);
     let (a, b) = par {
@@ -63,7 +66,8 @@ const SAME_CHANNEL: &str = r#"fn main() {
     println(f"{a} {b} {rxa.recv().unwrap()} {txb.send(0).is_ok()}");
 }
 "#;
-const CLONED_SENDER: &str = r#"fn main() {
+const CLONED_SENDER: &str = r#"import std.sync.{Receiver, Sender};
+fn main() {
     let (txa, rxa): (Sender[i64], Receiver[i64]) = channel(8);
     let (txb, rxb): (Sender[i64], Receiver[i64]) = channel(8);
     let t2 = txa.clone();

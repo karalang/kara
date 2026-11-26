@@ -194,7 +194,8 @@ fn dropping_an_identity_table_releases_its_handles() {
     }
 }
 
-const SYNC_TASK: &str = r#"import std.hash.Identity;
+const SYNC_TASK: &str = r#"import std.sync.{Atomic, TaskGroup};
+import std.hash.Identity;
 
 sync struct Counter {
     hits: Atomic[i64],
@@ -229,7 +230,8 @@ fn a_sync_identity_key_crosses_a_task() {
 fn a_shared_identity_key_does_not_cross_a_task() {
     let err = refused(
         "shared-task",
-        r#"import std.hash.Identity;
+        r#"import std.sync.{TaskGroup};
+import std.hash.Identity;
 
 shared struct Node {
     val: i64,

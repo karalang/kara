@@ -1,3 +1,5 @@
+import std.sync.{TaskGroup};
+
 fn run_in_task[T](v: own T) -> T {
     let g = TaskGroup.new();
     let h = g.spawn(|| v);

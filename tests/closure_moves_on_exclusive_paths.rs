@@ -31,7 +31,9 @@ fn check(name: &str, src: &str) -> (bool, String) {
 
 #[test]
 fn tasks_made_in_each_arm_of_an_if_in_a_loop() {
-    let src = r#"fn work(s: String, n: i64) -> i64 {
+    let src = r#"import std.sync.{TaskGroup};
+
+fn work(s: String, n: i64) -> i64 {
     s.len() + n
 }
 
@@ -62,7 +64,9 @@ fn main() {
 
 #[test]
 fn tasks_made_in_each_arm_of_an_if() {
-    let src = r#"fn work(s: String, n: i64) -> i64 {
+    let src = r#"import std.sync.{TaskGroup};
+
+fn work(s: String, n: i64) -> i64 {
     s.len() + n
 }
 

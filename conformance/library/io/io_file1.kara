@@ -1,4 +1,6 @@
 // File, OpenOptions, seek/set_len, BufReader/BufWriter.
+import std.io.{BufReader, BufWriter, File, SeekFrom};
+
 fn r(x: Result[(), IoError]) -> String {
     match x { Ok(_) => "ok".to_string(), Err(e) => f"err[{e}]" }
 }

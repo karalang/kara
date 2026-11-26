@@ -1,3 +1,5 @@
+import std.sync.{Receiver, Sender};
+
 fn main() {
     let (tx, rx): (Sender[i64], Receiver[i64]) = channel(4);
     let _ = par { tx.send(1), tx.send(2) };

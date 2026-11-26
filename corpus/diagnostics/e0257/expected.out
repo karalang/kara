@@ -1,1 +1,1 @@
-ERROR at line 2: field `count` of `sync struct Counter` is declared `mut`, but a `sync struct`'s fields are never `mut`: its `Atomic[i64]` changes through methods that borrow it. Drop `mut`
+ERROR at line 4: field `count` of `sync struct Counter` is declared `mut`, but a `sync struct`'s fields are never `mut`: its `Atomic[i64]` changes through methods that borrow it. Drop `mut`

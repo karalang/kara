@@ -1,4 +1,6 @@
 // design.md §13 Locks and atomics: `m.lock()` returns a guard whose `value` is a `mut ref T`; the lock is released when the guard drops.
+import std.sync.{Mutex, TaskGroup};
+
 struct Totals { requests: i64, bytes: i64 }
 fn add(totals: ref Mutex[Totals], n: i64) {
     let g = totals.lock();

@@ -1,5 +1,7 @@
 import std.random;
 import std.uuid;
+import std.env.{EnvProvider};
+import std.random.{RandomProvider};
 
 struct FakeEnv { vars: Vec[(String, String)] }
 

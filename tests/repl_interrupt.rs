@@ -31,7 +31,7 @@ fn interrupted_after(s: &mut karac::repl::Session, cell: &str, after_ms: u64) ->
 fn repl_interrupt_stops_a_cell_as_a_panic_does() {
     let mut s = karac::repl::Session::new();
     for cell in [
-        "struct R { id: i64 }",
+        "import std.sync.{TaskGroup};\nstruct R { id: i64 }",
         "impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\"); } }",
         "fn spin(n: i64) -> i64 { let mut i = n; loop { i = i + 1; if i < 0 { return i; } } }",
         "fn down(n: i64) -> i64 { if n < 0 { return n; } down(n + 1) }",

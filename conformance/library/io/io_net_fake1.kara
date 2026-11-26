@@ -1,3 +1,5 @@
+import std.net.{Client, HttpError, Request, Response, TcpListener, TcpStream};
+
 struct Fake {
     log: Vec[String],
     next: i64,

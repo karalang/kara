@@ -95,7 +95,7 @@ fn provider_supplies_only_inside_its_closure() {
 
 #[test]
 fn providers_sugar_supplies_its_resources() {
-    let src = "struct Fixed { t: i64 }\n\
+    let src = "import std.time.{ClockProvider};\nstruct Fixed { t: i64 }\n\
                impl ClockProvider for Fixed { fn now(ref self) -> i64 { self.t } }\n\
                pub fn noon() -> i64 { providers { Clock => Fixed { t: 43200 } } in { Clock.now() / 3600 } }\n\
                fn main() { println(f\"{noon()}\"); }\n";

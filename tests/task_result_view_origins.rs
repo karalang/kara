@@ -35,7 +35,8 @@ fn runs(src: &str, want: &str) {
     assert_eq!(r.stdout.concat(), want, "{src}");
 }
 
-const OUTLIVES: &str = "fn main() { let e = [0]; let mut r: Slice[i64] = e.as_slice(); \
+const OUTLIVES: &str =
+    "import std.sync.{TaskGroup};\nfn main() { let e = [0]; let mut r: Slice[i64] = e.as_slice(); \
      { let v = [1, 2, 3, 4, 5, 6, 7, 8]; let g = TaskGroup.new(); \
      let h = g.spawn(|| v.as_slice()); r = h.join(); } println(r[0]); }\n";
 
@@ -47,7 +48,7 @@ fn joined_slice_outliving_its_vec_is_refused() {
 #[test]
 fn joined_str_outliving_its_string_is_refused() {
     refused(
-        "fn main() { let mut r: Str = \"k\"; { let s = \"ab\".to_string(); \
+        "import std.sync.{TaskGroup};\nfn main() { let mut r: Str = \"k\"; { let s = \"ab\".to_string(); \
          let g = TaskGroup.new(); let h = g.spawn(|| s.as_str()); r = h.join(); } \
          println(r); }\n",
         "s",
@@ -57,7 +58,7 @@ fn joined_str_outliving_its_string_is_refused() {
 #[test]
 fn generic_task_body_view_outliving_its_string_is_refused() {
     refused(
-        "fn job[T: CrossTask](x: own T) -> T { x }\n\
+        "import std.sync.{TaskGroup};\nfn job[T: CrossTask](x: own T) -> T { x }\n\
          fn main() { let mut r: Str = \"k\"; { let s = \"ab\".to_string(); \
          let g = TaskGroup.new(); let h = g.spawn(|| job(s.as_str())); r = h.join(); } \
          println(r); }\n",
@@ -90,12 +91,12 @@ fn par_branch_ref_of_a_copy_place_borrows_the_place() {
 #[test]
 fn views_joined_while_their_source_lives_run() {
     runs(
-        "fn main() { let v = [1, 2, 3]; let r = { let g = TaskGroup.new(); \
+        "import std.sync.{TaskGroup};\nfn main() { let v = [1, 2, 3]; let r = { let g = TaskGroup.new(); \
          let h = g.spawn(|| v.as_slice()); h.join() }; println(r[0]); println(v.len()); }\n",
         "1\n3\n",
     );
     runs(
-        "fn main() { let s = \"ab\".to_string(); let g = TaskGroup.new(); \
+        "import std.sync.{TaskGroup};\nfn main() { let s = \"ab\".to_string(); let g = TaskGroup.new(); \
          let h = g.spawn(|| s.as_str()); let r = h.join(); println(r); }\n",
         "ab\n",
     );
@@ -108,7 +109,7 @@ fn views_joined_while_their_source_lives_run() {
 #[test]
 fn a_task_with_a_copy_capture_and_a_value_result_still_runs() {
     runs(
-        "fn main() { let g = TaskGroup.new(); let mut hs: Vec[TaskHandle[i64]] = Vec.new(); \
+        "import std.sync.{TaskGroup, TaskHandle};\nfn main() { let g = TaskGroup.new(); let mut hs: Vec[TaskHandle[i64]] = Vec.new(); \
          let mut i = 0; while i < 3 { let c = i; hs.push(g.spawn(|| c * 10)); i = i + 1; } \
          let mut t = 0; for h in hs.into_iter() { t = t + h.join(); } println(t); }\n",
         "30\n",

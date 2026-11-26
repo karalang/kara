@@ -2,6 +2,8 @@
 // yields a `T`), so a handle whose task never returns (`TaskHandle[Never]`)
 // goes where a `TaskHandle[i64]` is expected. `stalled` is never called; the
 // cell checks that it types.
+import std.sync.{TaskGroup, TaskHandle};
+
 fn pick(c: bool, a: own TaskHandle[i64], b: own TaskHandle[i64]) -> i64 {
     if c { a.join() } else { b.join() }
 }

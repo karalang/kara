@@ -83,15 +83,15 @@ fn closure_over_an_unbounded_parameter_returned_as_cross_task() {
 #[test]
 fn owned_values_and_bounded_parameters_still_cross() {
     accepted(
-        "fn f(g: TaskGroup, x: own String) -> i64 { g.spawn(|| { let y = x; 1 }).join() }\n\
+        "import std.sync.{TaskGroup};\nfn f(g: TaskGroup, x: own String) -> i64 { g.spawn(|| { let y = x; 1 }).join() }\n\
          fn main() { let g = TaskGroup.new(); println(f(g, \"ab\".to_string())); }\n",
     );
     accepted(
-        "fn f[T: CrossTask](g: TaskGroup, x: own T) -> i64 { g.spawn(|| { let y = x; 1 }).join() }\n\
+        "import std.sync.{TaskGroup};\nfn f[T: CrossTask](g: TaskGroup, x: own T) -> i64 { g.spawn(|| { let y = x; 1 }).join() }\n\
          fn main() { let g = TaskGroup.new(); println(f(g, \"ab\".to_string())); }\n",
     );
     accepted(
-        "fn hold[T: CrossTask](x: own T) -> Fn() -> i64 + CrossTask { || { let r = ref x; 1 } }\n\
+        "import std.sync.{TaskGroup};\nfn hold[T: CrossTask](x: own T) -> Fn() -> i64 + CrossTask { || { let r = ref x; 1 } }\n\
          fn main() { let f = hold(\"s\".to_string()); let g = TaskGroup.new(); println(g.spawn(|| f()).join()); }\n",
     );
     accepted(

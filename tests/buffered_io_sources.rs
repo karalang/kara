@@ -37,6 +37,8 @@ fn check(src: &str) -> (bool, String) {
 fn buffered_wrappers_take_files_and_child_pipes() {
     let (ok, out) = check(
         r#"import std.io.{BufReader, BufWriter};
+import std.io.{File};
+import std.process.{Command, Stdio};
 fn main() {
     let w = BufWriter.new(File.create("b.txt").unwrap());
     drop(w);
@@ -60,6 +62,7 @@ fn main() {
 fn buffered_wrappers_take_a_tcp_stream() {
     let (ok, out) = check(
         r#"import std.io.{BufReader, BufWriter};
+import std.net.{TcpListener, TcpStream};
 fn main() {
     let l = TcpListener.bind("127.0.0.1:0").unwrap();
     let c = TcpStream.connect(l.local_addr().unwrap()).unwrap();
@@ -78,6 +81,7 @@ fn main() {
 fn buffered_wrappers_take_a_tls_stream() {
     let (ok, out) = check(
         r#"import std.io.{BufReader, BufWriter};
+import std.net.{TlsStream};
 pub fn wrap(s: own TlsStream, t: own TlsStream) with sends(Network) receives(Network) blocks {
     let mut r = BufReader.new(s);
     let mut line = String.new();
@@ -99,7 +103,7 @@ fn main() {}
 #[test]
 fn a_generic_buffered_wrapper_is_judged_at_its_call() {
     let (ok, out) = check(
-        r#"import std.io.{BufReader};
+        r#"import std.io.{BufReader}; import std.io.{File};
 fn wrap[R](r: own R) -> BufReader[R] {
     BufReader.new(r)
 }
@@ -130,6 +134,7 @@ fn main() {
 fn a_socket_buffer_has_the_network_effects() {
     let (ok, out) = check(
         r#"import std.io.{BufReader, BufWriter};
+import std.net.{TcpStream};
 pub fn first_line(conn: own TcpStream) -> String with sends(Network) receives(Network) blocks {
     let mut r = BufReader.new(conn);
     let mut s = String.new();
@@ -150,6 +155,7 @@ fn main() {}
     assert!(ok, "{out}");
     let (ok, out) = check(
         r#"import std.io.{BufReader};
+import std.net.{TcpStream};
 pub fn first_line(conn: own TcpStream) -> String with reads(FileSystem) blocks {
     let mut r = BufReader.new(conn);
     let mut s = String.new();

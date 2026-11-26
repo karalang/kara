@@ -1,4 +1,5 @@
 import std.uuid;
+import std.random.{RandomProvider};
 struct Empty {}
 impl RandomProvider for Empty {}
 

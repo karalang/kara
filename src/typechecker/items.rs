@@ -7639,7 +7639,7 @@ impl<'a> super::TypeChecker<'a> {
                 // offset than the diagnostic, which points at the initializer.
                 //
                 // Same literal-initializer gate as the annotated branch, for the
-                // same reason: `let X = "lit";` → `let X: StringSlice = "lit";`
+                // same reason: `let X = "lit";` → `let X: Str = "lit";`
                 // hits the §1284 carve-out and typechecks.
                 if matches!(b.value.kind, ExprKind::StringLit(_)) {
                     self.type_error_with_fix_it(
@@ -7652,7 +7652,7 @@ impl<'a> super::TypeChecker<'a> {
                                 length: 0,
                                 ..b.name_span
                             },
-                            replacement: ": StringSlice".to_string(),
+                            replacement: ": Str".to_string(),
                         },
                     );
                 } else {
@@ -7718,7 +7718,9 @@ impl<'a> super::TypeChecker<'a> {
                     TypeErrorKind::ModuleBindingHeapType,
                     crate::typechecker::FixIt {
                         span: ty_expr.span,
-                        replacement: if is_const { "Str" } else { "StringSlice" }.to_string(),
+                        // `Str`, the spelling a program writes: `StringSlice` is
+                        // the library's internal name for it.
+                        replacement: "Str".to_string(),
                     },
                 );
             } else {

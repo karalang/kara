@@ -76,7 +76,8 @@ fn main() {
     println(f"{r1} {r2} {p.a} {p.b}");
 }
 "#;
-const TASK_READ_A_WRITE_B: &str = r#"struct P { a: i64, b: i64 }
+const TASK_READ_A_WRITE_B: &str = r#"import std.sync.{TaskGroup};
+struct P { a: i64, b: i64 }
 fn main() {
     let mut p = P { a: 1, b: 2 };
     {
@@ -88,7 +89,8 @@ fn main() {
     println(f"{p.a} {p.b}");
 }
 "#;
-const TASK_WRITE_A_BOTH: &str = r#"struct P { a: i64, b: i64 }
+const TASK_WRITE_A_BOTH: &str = r#"import std.sync.{TaskGroup};
+struct P { a: i64, b: i64 }
 fn main() {
     let mut p = P { a: 1, b: 2 };
     {
@@ -211,7 +213,9 @@ fn main() {
 
 #[test]
 fn probe_tk1_a_move_in_a_par_branch_inside_a_spawned_task_moves_the_capture() {
-    let src = r#"fn eat(s: own String) -> i64 { s.len() }
+    let src = r#"import std.sync.{TaskGroup};
+
+fn eat(s: own String) -> i64 { s.len() }
 fn main() {
     let s = "abc".to_string();
     let g = TaskGroup.new();

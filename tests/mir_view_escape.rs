@@ -307,7 +307,8 @@ fn main() { let x: Vec[i64] = [1, 2, 3]; println(f"{total(x[0..3], 2)} {label("a
     ),
     (
         "c7",
-        r#"fn main() { let x: Vec[i64] = [1, 2, 3]; let s = x[0..3]; let g = TaskGroup.new(); let h = g.spawn(|| s[0] + s[2]); drop(g); println(f"{h.join()}"); }
+        r#"import std.sync.{TaskGroup};
+fn main() { let x: Vec[i64] = [1, 2, 3]; let s = x[0..3]; let g = TaskGroup.new(); let h = g.spawn(|| s[0] + s[2]); drop(g); println(f"{h.join()}"); }
 "#,
     ),
 ];

@@ -1,1 +1,1 @@
-ERROR at line 32: function value has `writes(Log)`, outside the effect set of `E` (`{writes(OrderDb)}`), which was fixed at 31:35 by its type argument
+ERROR at line 34: function value has `writes(Log)`, outside the effect set of `E` (`{writes(OrderDb)}`), which was fixed at 31:35 by its type argument

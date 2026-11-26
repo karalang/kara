@@ -10,7 +10,7 @@
 
 use std::process::{Command, Output, Stdio};
 
-const CLK: &str = "effect resource Clk: ClkP;
+const CLK: &str = "import std.sync.{TaskGroup, TaskHandle}; effect resource Clk: ClkP;
 trait ClkP { fn now(ref self) -> i64; fn bump(mut ref self) {} }
 struct F { t: i64 }
 impl ClkP for F {
@@ -275,7 +275,8 @@ fn main() {
     }
 }
 
-const CAP: &str = "struct Cap { n: i64 }
+const CAP: &str =
+    "import std.io.{StdoutProvider}; import std.sync.{TaskGroup}; struct Cap { n: i64 }
 impl StdoutProvider for Cap {
     fn write(mut ref self, s: Str) { self.n = self.n + 1; }
     fn flush(mut ref self) {}

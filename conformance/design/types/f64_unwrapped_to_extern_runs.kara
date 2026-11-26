@@ -1,4 +1,6 @@
 // design.md §5 Floats: control, `f32` and `f64` cross `extern` boundaries directly.
+import std.cmp.{F64};
+
 /// # Safety
 /// `fabs` reads only its argument.
 unsafe extern "C" { fn fabs(x: f64) -> f64; }

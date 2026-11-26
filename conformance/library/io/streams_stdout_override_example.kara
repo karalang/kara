@@ -1,3 +1,5 @@
+import std.io.{StdoutProvider};
+
 struct Lines { n: i64 }
 impl StdoutProvider for Lines {
     fn write(mut ref self, s: Str) { self.n = self.n + 1; eprintln(f"line {self.n}: {s.trim()}"); }

@@ -1,3 +1,5 @@
+import std.cmp.{F64};
+
 fn biggest[T: Ord + Copy](xs: Slice[T]) -> T {
     let mut m = xs[0];
     for x in xs { if *x > m { m = *x; } }

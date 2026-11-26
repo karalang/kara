@@ -1,4 +1,5 @@
 import std.time.{Duration, Instant, sleep};
+import std.sync.{TaskFailed, TaskGroup};
 
 fn forever() -> Result[i64, String] {
     defer println("defer ran");

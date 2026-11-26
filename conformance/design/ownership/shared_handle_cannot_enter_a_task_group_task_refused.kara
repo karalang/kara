@@ -1,4 +1,6 @@
 // design.md §11 One task only: nor a TaskGroup task.
+import std.sync.{TaskGroup};
+
 shared struct N { v: i64 }
 fn main() {
     let n = N { v: 1 };

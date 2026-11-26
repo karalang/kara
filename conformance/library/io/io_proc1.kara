@@ -1,4 +1,7 @@
 // Command / Stdio / Child / ExitStatus.
+import std.process.{Command, ExitStatus, Stdio};
+import std.io.{File};
+
 fn st(x: Result[ExitStatus, IoError]) -> String {
     match x {
         Ok(s) => f"success={s.success()} code={qo(s.code())} signal={qo(s.signal())}",

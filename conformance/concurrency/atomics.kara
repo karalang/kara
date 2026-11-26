@@ -1,4 +1,5 @@
 import std.sync.{Atomic};
+import std.sync.{TaskGroup};
 
 sync struct Metrics {
     requests: Atomic[u64],

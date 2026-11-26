@@ -1,1 +1,1 @@
-ERROR at line 3: `#[require_simd]` violated: element-wise `*` on `Vector[f32, 3]` would lower to a scalar loop on this target (lane count is not a power of two)
+ERROR at line 5: `#[require_simd]` violated: element-wise `*` on `Vector[f32, 3]` would lower to a scalar loop on this target (lane count is not a power of two)

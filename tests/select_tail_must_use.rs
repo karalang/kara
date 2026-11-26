@@ -27,7 +27,7 @@ fn karac(tag: &str, cmd: &str, src: &str) -> (bool, String, String) {
     )
 }
 
-const TAIL: &str = r#"import std.time.{Duration};
+const TAIL: &str = r#"import std.sync.{Receiver, Sender}; import std.time.{Duration};
 fn get(rx: Receiver[i64]) -> Result[i64, String] {
     select {
         v = rx.recv() => match v { Some(v) => Ok(v), None => Err("closed".to_string()) },
@@ -57,7 +57,7 @@ fn a_select_tail_is_used_not_discarded() {
 #[test]
 fn a_library_bodys_discard_is_not_the_programs() {
     // `recv_timeout` is a library function whose body is a `select`.
-    let src = "import std.time.{Duration};\n\
+    let src = "import std.time.{Duration}; import std.sync.{Receiver, Sender};\n\
                fn main() {\n\
                \x20   let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1);\n\
                \x20   let _ = tx.send(4);\n\
@@ -71,7 +71,7 @@ fn a_library_bodys_discard_is_not_the_programs() {
 
 #[test]
 fn a_discarded_select_result_still_warns() {
-    let src = "import std.time.{Duration};\n\
+    let src = "import std.sync.{Receiver, Sender}; import std.time.{Duration};\n\
                fn main() {\n\
                \x20   let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1);\n\
                \x20   let _ = tx.send(5);\n\

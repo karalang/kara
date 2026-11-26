@@ -2,6 +2,9 @@
 import std.time.{Instant, SystemTime, Clock};
 import std.random;
 import std.uuid;
+import std.env.{EnvProvider};
+import std.time.{ClockProvider};
+import std.random.{RandomProvider};
 struct FakeEnv {}
 impl EnvProvider for FakeEnv {
     fn args(ref self) -> Vec[String] { ["prog", "--verbose"] }

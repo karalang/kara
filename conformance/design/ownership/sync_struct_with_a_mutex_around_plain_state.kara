@@ -1,4 +1,6 @@
 // design.md §11 Performance note: a plain struct behind one Mutex in a sync type.
+import std.sync.{Mutex};
+
 struct SessionState { request_count: i64, last: String }
 sync struct Session { id: u64, state: Mutex[SessionState] }
 fn hit(s: Session, p: own String) { let g = s.state.lock(); g.value.request_count += 1; g.value.last = p; }

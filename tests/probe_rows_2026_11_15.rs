@@ -29,7 +29,7 @@ fn fixture(tag: &str, src: &str) -> (PathBuf, PathBuf) {
     (dir, path)
 }
 
-const FAKE: &str = "struct P {}
+const FAKE: &str = "import std.io.{File, FileSystemProvider, OpenOptions, StdoutProvider};\nstruct P {}
 impl FileSystemProvider for P {
   fn open(mut ref self, path: Str, opts: ref OpenOptions) -> Result[i64, IoError] { Ok(1) }
   fn close(mut ref self, h: i64) { println(\"closed\"); }

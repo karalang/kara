@@ -96,6 +96,8 @@ fn migrate_round_trip_wraps_writes_reads_and_literals() {
         "2\n2\n",
     );
     assert!(out.contains("sync struct Counter { n: Mutex[i64], log: Mutex[Vec[i64]] }"));
+    // The wrap names `Mutex`, which the migrated program then imports.
+    assert!(out.starts_with("import std.sync.{Mutex};\n"), "{out}");
     assert!(out.contains("Counter { n: Mutex.new(0), log: Mutex.new(Vec.new()) }"));
 }
 

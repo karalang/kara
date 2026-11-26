@@ -1,4 +1,6 @@
 // design.md §11 Handles in closures: ... and TaskGroup tasks.
+import std.sync.{TaskGroup};
+
 shared struct N { v: i64 }
 fn use_it(n: frozen N) -> i64 { let c = || n.v * 2; let g = TaskGroup.new(); let h = g.spawn(c); h.join() }
 fn main() { let n0 = N { v: 3 }; let g = freeze n0; println(use_it(g)); }

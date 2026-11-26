@@ -1,3 +1,5 @@
+import std.sync.{TaskGroup};
+
 shared struct Node { v: i64 }
 struct Wrap { inner: Option[Node] }
 fn main() {

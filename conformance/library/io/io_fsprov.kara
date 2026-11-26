@@ -1,4 +1,6 @@
 // FileSystem provider override: path ops, files under an override, after it ends.
+import std.io.{BufReader, File, FileSystemProvider, OpenOptions};
+
 fn r(x: Result[(), IoError]) -> String { match x { Ok(_) => "ok".to_string(), Err(e) => f"err[{e}]" } }
 fn ri(x: Result[i64, IoError]) -> String { match x { Ok(n) => f"ok {n}", Err(e) => f"err[{e}]" } }
 

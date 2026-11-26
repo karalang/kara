@@ -1,3 +1,5 @@
+import std.json.{Json};
+
 fn main() {
     let v = Json.parse("[1]").unwrap();
     println(v.stringify());

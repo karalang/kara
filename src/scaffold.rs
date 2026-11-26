@@ -516,6 +516,8 @@ fn cli_main_test_body() -> String {
     r#"// The tests run `count_file` against files held in memory: the
 // `FileSystem` provider is swapped for `MemFs` inside `with_provider`.
 
+import std.io.FileSystemProvider;
+
 struct MemFs {
     files: Map[String, String],
 }
@@ -600,6 +602,9 @@ fn backend_main_body() -> String {
 // To run: `karac run` in the project directory. The server listens
 // until the process is killed.
 
+import std.net.{Request, Response, Server, WebSocket};
+import std.tracing.{LogEvent, StdoutExporter};
+
 fn handle(req: Request) -> Response {
     match req.path().as_str() {
         "/health" => Response {
@@ -654,7 +659,8 @@ fn main() {
 /// function, so a test calls it with a `Request` it builds
 /// (`Request.new(method, url)`, docs/library/io.md § HTTP server).
 fn backend_main_test_body() -> String {
-    "test \"/health answers ok\" {\n    \
+    "import std.net.Request;\n\n\
+     test \"/health answers ok\" {\n    \
      let r = handle(Request.new(\"GET\", \"/health\"));\n    \
      assert_eq(r.status, 200);\n    \
      assert_eq(r.body, \"ok\");\n\

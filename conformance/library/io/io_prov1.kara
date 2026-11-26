@@ -1,4 +1,6 @@
 // Stream providers: overriding Stdout/Stderr/Stdin; default methods panic.
+import std.io.{StdinProvider, StdoutProvider};
+
 struct Cap { n: i64 }
 impl StdoutProvider for Cap {
     fn write(mut ref self, s: Str) { self.n = self.n + 1; eprintln(f"cap {self.n}: {q(s)}"); }

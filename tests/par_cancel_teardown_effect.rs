@@ -27,7 +27,7 @@ fn temp(tag: &str, src: &str) -> std::path::PathBuf {
     path
 }
 
-const HEAD: &str = "struct R { id: i64 }
+const HEAD: &str = "import std.sync.{TaskGroup}; struct R { id: i64 }
 impl Drop for R { fn drop(mut ref self) { println(f\"d{self.id}\"); } }
 fn main() {
     let g = TaskGroup.new();

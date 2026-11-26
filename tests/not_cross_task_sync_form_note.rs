@@ -49,7 +49,9 @@ fn not_cross_task_shows_the_sync_form_for_review_only() {
 
 #[test]
 fn the_suggested_sync_form_checks_and_runs() {
-    let src = "enum Direction { Up, Down }
+    let src = "import std.sync.{Atomic, Mutex};
+
+enum Direction { Up, Down }
 sync struct Elevator { stops: Vec[i64], direction: Mutex[Direction], floor: Atomic[i64] }
 fn run(e: Elevator) -> i64 { e.floor.load() }
 fn main() {

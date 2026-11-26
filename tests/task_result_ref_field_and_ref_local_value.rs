@@ -29,7 +29,7 @@ fn runs(src: &str, want: &str) {
     assert_eq!(r.stdout.concat(), want, "{src}");
 }
 
-const HD: &str = "struct Hd { r: ref i64 }\n";
+const HD: &str = "import std.sync.{TaskGroup}; struct Hd { r: ref i64 }\n";
 
 #[test]
 fn joined_ref_field_outliving_its_place_is_refused() {

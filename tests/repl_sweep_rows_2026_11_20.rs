@@ -184,7 +184,7 @@ fn repl_sweep_help_lists_every_repl_flag() {
 
 const FAKE_CLOCK: [&str; 2] = [
     "struct FakeClock {}",
-    "impl ClockProvider for FakeClock { fn now(ref self) -> i64 { 42 } }",
+    "import std.time.{ClockProvider}; impl ClockProvider for FakeClock { fn now(ref self) -> i64 { 42 } }",
 ];
 
 /// B-2026-11-20-104: `?` is legal in a cell under `:provide`, as in any

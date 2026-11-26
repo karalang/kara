@@ -78,7 +78,9 @@ fn main() {
         ),
         (
             "crosstask_view_in_task",
-            r#"trait Shape {
+            r#"import std.sync.{TaskGroup};
+
+trait Shape {
     fn area(self) -> i64;
 }
 struct Sq { s: i64 }
@@ -120,7 +122,9 @@ fn main() {
         ),
         (
             "crosstask_supertrait",
-            r#"trait Job: CrossTask {
+            r#"import std.sync.{TaskGroup};
+
+trait Job: CrossTask {
     fn run(self) -> i64;
 }
 struct J { n: i64 }

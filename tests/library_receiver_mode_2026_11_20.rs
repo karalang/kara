@@ -32,7 +32,7 @@ fn karac(src: &str, args: &[&str]) -> (Option<i32>, String, String) {
     )
 }
 
-const READ_LINE: &str = "fn main() {
+const READ_LINE: &str = "import std.io.{BufReader, File};\nfn main() {
     let br = BufReader.new(File.open(\"data.txt\").unwrap());
     let mut s = String.new();
     let _ = br.read_line(mut s);
@@ -67,7 +67,9 @@ fn read_line_on_a_mut_bufreader_leaves_the_mut_unused() {
     );
 }
 
-const CONSUME: &str = "fn main() {
+const CONSUME: &str = "import std.io.{BufReader, File};
+
+fn main() {
     let br = BufReader.with_capacity(File.open(\"data.txt\").unwrap(), 4);
     let n = match br.fill_buf() { Ok(b) => b.len(), Err(_) => 0 };
     br.consume(n);

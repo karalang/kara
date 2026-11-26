@@ -1022,7 +1022,7 @@ fn under_d5_a_bare_parameter_borrows() {
     // and the local dies before the group, so the task takes it by move.
     check_d5(
         "d5-task-borrow",
-        "struct R { id: i64, tag: String }\n\
+        "import std.sync.{TaskGroup, TaskHandle};\nstruct R { id: i64, tag: String }\n\
          fn show(r: R) -> i64 { r.id }\n\
          fn main() {\n\
              let mut g = TaskGroup.new();\n\
@@ -1353,7 +1353,7 @@ fn storing_a_borrow_into_a_set_or_map_is_an_error() {
 fn a_task_group_borrows_what_its_tasks_capture() {
     // §9.5, pins `ok_taskgroup_borrows`, `err_taskgroup_write_while_borrowed`,
     // `err_taskgroup_origin_declared_after`.
-    let total = "fn total(v: ref Vec[i64]) -> i64 { v.len() }\n";
+    let total = "import std.sync.{TaskGroup}; fn total(v: ref Vec[i64]) -> i64 { v.len() }\n";
     accepted(
         "taskgroup-borrows",
         &format!(
@@ -1408,7 +1408,7 @@ fn a_task_group_borrows_what_its_tasks_capture() {
     );
     accepted(
         "taskgroup-loop-body-locals",
-        "fn work(s: ref String) -> i64 { s.len() }\n\
+        "import std.sync.{TaskGroup, TaskHandle};\nfn work(s: ref String) -> i64 { s.len() }\n\
          fn main() {\n\
              let mut g = TaskGroup.new();\n\
              let mut hs: Vec[TaskHandle[i64]] = Vec.new();\n\
@@ -1424,7 +1424,7 @@ fn a_task_group_borrows_what_its_tasks_capture() {
     );
     rejected(
         "taskgroup-copy-mut-capture-dies-first",
-        "fn main() {\n\
+        "import std.sync.{TaskGroup};\nfn main() {\n\
              let mut g = TaskGroup.new();\n\
              let mut n = 1;\n\
              let h = g.spawn(|| { n = n + 1; n });\n\
@@ -1435,7 +1435,7 @@ fn a_task_group_borrows_what_its_tasks_capture() {
     );
     rejected(
         "taskgroup-mut-capture-in-loop",
-        "fn main() {\n\
+        "import std.sync.{TaskGroup};\nfn main() {\n\
              let mut b: Vec[i64] = Vec.new();\n\
              let mut g = TaskGroup.new();\n\
              let mut k = 0;\n\
@@ -1531,7 +1531,7 @@ fn a_shared_ref_place_is_read_only() {
     // `shared` value reached through a `ref` (§6.2).
     accepted(
         "write-through-ref-legal",
-        "shared struct Counter { mut hits: i64 }\n\
+        "import std.arena.{Arena};\nshared struct Counter { mut hits: i64 }\n\
          fn bump(c: ref Counter) { c.hits = c.hits + 1; }\n\
          fn add(v: mut ref Vec[i64]) { v.push(1); }\n\
          fn grow(a: ref Arena[i64]) -> i64 { let r = a.push(3); a.get(r) }\n\
@@ -2598,7 +2598,7 @@ fn collect_all_is_removed() {
     );
     rejected_with(
         "free-spawn",
-        "fn add(a: i64, b: i64) -> i64 { a + b }\n\
+        "import std.sync.{TaskHandle};\nfn add(a: i64, b: i64) -> i64 { a + b }\n\
          fn main() {\n\
              let h: TaskHandle[i64] = spawn(|| add(40, 2));\n\
              println(f\"{h.join()}\");\n\
@@ -2879,15 +2879,15 @@ fn main() {
     );
 }
 
-/// §5.2: `StringSlice` is `Str`, a shared view, so reading one out of a
+/// §5.2: `Str`, a shared view, so reading one out of a
 /// borrowed place copies it.
 #[test]
 fn a_string_slice_field_copies_out_of_a_borrow() {
     accepted(
         "string-slice-copy",
-        "struct It { rest: StringSlice, done: bool }\n\
+        "struct It { rest: Str, done: bool }\n\
          impl It {\n\
-             fn next(mut ref self) -> Option[StringSlice] {\n\
+             fn next(mut ref self) -> Option[Str] {\n\
                  if self.done { return None; }\n\
                  self.done = true;\n\
                  return Some(self.rest);\n\
@@ -3105,7 +3105,7 @@ fn sorted_set_min_and_max_lend_their_element() {
 fn an_owned_receiver_on_a_for_element_moves_the_loop() {
     rejected_then_fixed_by(
         "for-elem-join",
-        "fn main() {\n\
+        "import std.sync.{TaskGroup, TaskHandle};\nfn main() {\n\
              let mut g = TaskGroup.new();\n\
              let mut hs: Vec[TaskHandle[i64]] = Vec.new();\n\
              hs.push(g.spawn(|| 1));\n\
@@ -4542,7 +4542,7 @@ fn question_then_member_access_propagates() {
 /// B-2026-10-27-20 and B-2026-10-15-10, so that error has no program.)
 #[test]
 fn library_module_paths_resolve() {
-    let src = "import std.sync.{TaskGroup, Sender, Receiver, Mutex};\n\
+    let src = "import std.sync.{Channel};\nimport std.sync.{TaskGroup, Sender, Receiver, Mutex};\n\
                import std.io.{File, BufReader};\n\
                import std.net.{TcpListener, TcpError};\n\
                import std.hash.{FxBuildHasher};\n\
@@ -4629,7 +4629,7 @@ fn a_closure_early_return_agrees_with_its_tail() {
 fn channels_and_task_groups_check_as_specified() {
     accepted(
         "channel-surface",
-        "fn producer(tx: own Sender[i64]) -> Result[(), SendError[i64]] {\n\
+        "import std.sync.{SendError, Sender, TaskGroup, TaskHandle};\nfn producer(tx: own Sender[i64]) -> Result[(), SendError[i64]] {\n\
              tx.send(5)?;\n\
              Ok(())\n\
          }\n\
@@ -4649,7 +4649,7 @@ fn channels_and_task_groups_check_as_specified() {
     // `channel(0)` is a compile error.
     let (dir, path) = fixture(
         "channel-zero",
-        "fn main() {\n    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(0);\n}\n",
+        "import std.sync.{Receiver, Sender};\nfn main() {\n    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(0);\n}\n",
     );
     let out = karac().arg("check").arg(&path).output().unwrap();
     let err = String::from_utf8_lossy(&out.stderr);
@@ -4665,7 +4665,7 @@ fn channels_and_task_groups_check_as_specified() {
 fn legacy_channel_spellings_are_fixed() {
     rejected_then_fixed_by(
         "recv-as-t",
-        "fn main() {\n\
+        "import std.sync.{Channel, Receiver, Sender};\nfn main() {\n\
              let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.bounded(4);\n\
              tx.send(3).unwrap();\n\
              let x: i64 = rx.recv();\n\
@@ -4676,7 +4676,7 @@ fn legacy_channel_spellings_are_fixed() {
     );
     let (dir, path) = fixture(
         "bounded-to-channel",
-        "fn main() {\n\
+        "import std.sync.{Channel, Receiver, Sender};\nfn main() {\n\
              let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.bounded(  4);\n\
              tx.send(3).unwrap();\n\
              println(rx.recv().unwrap());\n\
@@ -4735,7 +4735,7 @@ fn an_operator_method_must_return_its_impls_output() {
 fn a_task_of_a_borrowed_group_takes_locals_by_move() {
     let (dir, path) = fixture(
         "param-group-local",
-        "fn start(group: ref TaskGroup) -> TaskHandle[i64] {\n\
+        "import std.sync.{TaskGroup, TaskHandle};\nfn start(group: ref TaskGroup) -> TaskHandle[i64] {\n\
              let v: Vec[i64] = [1, 2, 3];\n\
              let h = group.spawn(|| v.len());\n\
              println(v.len());\n\
@@ -5770,6 +5770,7 @@ fn a_mutex_guard_excludes_and_releases_on_every_exit() {
         (
             "guard-across-sleep",
             r#"import std.time.{sleep, Duration};
+import std.sync.{Mutex, TaskGroup};
 fn bump(m: Mutex[i64]) {
     let g = m.lock();
     let v = *g.value;
@@ -5802,7 +5803,9 @@ fn main() {
         ),
         (
             "guard-doc-example",
-            r#"struct Totals { count: i64, sum: i64 }
+            r#"import std.sync.{Mutex};
+
+struct Totals { count: i64, sum: i64 }
 
 sync struct Tally {
     name: String,
@@ -6130,6 +6133,7 @@ fn main() {
     rejected(
         "serde-tagged-tuple",
         r#"
+import std.json.{Json};
 #[derive(Serialize)]
 #[serde(tag: "type")]
 enum Bad { A(i64) }
@@ -9953,11 +9957,11 @@ fn get_mut_takes_the_keys_view() {
 fn an_atomic_ordering_argument_is_deprecated_and_fixed() {
     accepted(
         "atomic-no-ordering",
-        "fn main() {\n    let c = Atomic.new(0);\n    c.fetch_add(5);\n    c.store(7);\n    let old = c.swap(9);\n    let r = c.compare_exchange(9, 11);\n    println(f\"{old} {c.load()} {r.is_ok()}\");\n}\n",
+        "import std.sync.{Atomic};\nfn main() {\n    let c = Atomic.new(0);\n    c.fetch_add(5);\n    c.store(7);\n    let old = c.swap(9);\n    let r = c.compare_exchange(9, 11);\n    println(f\"{old} {c.load()} {r.is_ok()}\");\n}\n",
     );
     let (dir, path) = fixture(
         "atomic-ordering-deprecated",
-        "fn main() {\n    let c = Atomic.new(0);\n    c.fetch_add(5, MemoryOrdering.Relaxed);\n    let r = c.compare_exchange(5, 6, MemoryOrdering.AcqRel, MemoryOrdering.Acquire);\n    println(f\"{c.load(MemoryOrdering.Acquire)} {r.is_ok()}\");\n}\n",
+        "import std.sync.{Atomic, MemoryOrdering};\nfn main() {\n    let c = Atomic.new(0);\n    c.fetch_add(5, MemoryOrdering.Relaxed);\n    let r = c.compare_exchange(5, 6, MemoryOrdering.AcqRel, MemoryOrdering.Acquire);\n    println(f\"{c.load(MemoryOrdering.Acquire)} {r.is_ok()}\");\n}\n",
     );
     let out = karac().arg("check").arg(&path).output().unwrap();
     let err = String::from_utf8_lossy(&out.stderr);
@@ -9984,7 +9988,7 @@ fn an_atomic_ordering_argument_is_deprecated_and_fixed() {
     let _ = std::fs::remove_dir_all(&dir);
     let (dir, path) = fixture(
         "atomic-ordering-allowed",
-        "#[allow(deprecated)]\nfn main() {\n    let c = Atomic.new(0);\n    c.store(1, MemoryOrdering.Release);\n    println(c.load());\n}\n",
+        "import std.sync.{Atomic, MemoryOrdering}; #[allow(deprecated)]\nfn main() {\n    let c = Atomic.new(0);\n    c.store(1, MemoryOrdering.Release);\n    println(c.load());\n}\n",
     );
     let out = karac().arg("check").arg(&path).output().unwrap();
     let err = String::from_utf8_lossy(&out.stderr);
@@ -9992,7 +9996,7 @@ fn an_atomic_ordering_argument_is_deprecated_and_fixed() {
     let _ = std::fs::remove_dir_all(&dir);
     rejected(
         "atomic-too-many-arguments",
-        "fn main() {\n    let c = Atomic.new(0);\n    c.store(1, MemoryOrdering.Release, 2);\n}\n",
+        "import std.sync.{Atomic, MemoryOrdering};\nfn main() {\n    let c = Atomic.new(0);\n    c.store(1, MemoryOrdering.Release, 2);\n}\n",
         "Atomic.store takes (value) — 1 argument",
     );
 }
@@ -10011,7 +10015,7 @@ fn check_refuses_the_par_conflicts_the_mir_effect_pass_refuses() {
     );
     rejected(
         "par-two-sends",
-        "fn send_one(tx: Sender[i64], v: i64) -> i64 {\n    tx.send(v);\n    v\n}\n\n\
+        "import std.sync.{Channel, Receiver, Sender};\nfn send_one(tx: Sender[i64], v: i64) -> i64 {\n    tx.send(v);\n    v\n}\n\n\
          fn main() {\n    let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();\n    \
          let tx2 = tx.clone();\n    \
          let (a, b) = par { send_one(tx, 1), send_one(tx2, 2) };\n    \
@@ -10332,22 +10336,22 @@ fn a_tuple_literal_takes_str_from_its_slot() {
 fn the_tls_and_websocket_servers_check_clean() {
     accepted(
         "m4a-serve-tls",
-        "fn main() {\n    let _r = Server.serve_tls(\"127.0.0.1:0\".to_string(), \"c\".to_string(), \"k\".to_string(), |req| Response { status: 200, body: req.path() });\n}\n",
+        "import std.net.{Response, Server};\nfn main() {\n    let _r = Server.serve_tls(\"127.0.0.1:0\".to_string(), \"c\".to_string(), \"k\".to_string(), |req| Response { status: 200, body: req.path() });\n}\n",
     );
     accepted(
         "m4a-serve-ws",
-        "fn route(req: Request) -> Response { Response { status: 101, body: req.path() } }\n\
+        "import std.net.{Request, Response, Server, WebSocket};\nfn route(req: Request) -> Response { Response { status: 101, body: req.path() } }\n\
          fn on_ws(ws: own WebSocket) { let mut ws = ws; let _ = ws.send_text(\"hi\"); }\n\
          fn main() {\n    let _a = Server.serve_ws(\"127.0.0.1:0\".to_string(), route, on_ws);\n    \
          let _b = Server.serve_ws_tls(\"127.0.0.1:0\".to_string(), \"c\".to_string(), \"k\".to_string(), route, on_ws);\n}\n",
     );
     accepted(
         "m4-websocket-accept",
-        "fn main() {\n    let l = TcpListener.bind(\"127.0.0.1:0\").unwrap();\n    let _w = WebSocket.accept(l);\n}\n",
+        "import std.net.{TcpListener, WebSocket};\nfn main() {\n    let l = TcpListener.bind(\"127.0.0.1:0\").unwrap();\n    let _w = WebSocket.accept(l);\n}\n",
     );
     accepted(
         "m4-tls-listener",
-        "fn main() {\n    let _l = TlsListener.bind_tls(\"127.0.0.1:0\", \"c\", \"k\");\n}\n",
+        "import std.net.{TlsListener};\nfn main() {\n    let _l = TlsListener.bind_tls(\"127.0.0.1:0\", \"c\", \"k\");\n}\n",
     );
     accepted(
         "m4a-own-websocket-type",
@@ -10479,7 +10483,7 @@ fn a_resource_is_called_through_its_bounds() {
     );
     accepted(
         "provider-env-fake",
-        "struct FakeEnv {}\n\
+        "import std.env.{EnvProvider};\nstruct FakeEnv {}\n\
          impl EnvProvider for FakeEnv {\n\
              fn var(self, name: Str) -> Result[String, VarError] { Ok(\"mocked\") }\n\
          }\n\
@@ -10833,7 +10837,7 @@ fn a_loop_over_an_owned_result_borrows_nothing() {
 fn a_handler_response_has_the_documented_shape() {
     rejected(
         "handler-response-without-body",
-        "struct Response { status: i64 }\n\
+        "import std.net.{Request, Server};\nstruct Response { status: i64 }\n\
          fn handle(req: Request) -> Response { Response { status: 200 } }\n\
          fn main() with sends(Network) receives(Network) {\n\
              Server.serve(\"127.0.0.1:0\", handle);\n\
@@ -10842,7 +10846,7 @@ fn a_handler_response_has_the_documented_shape() {
     );
     accepted(
         "handler-response-with-headers",
-        "struct Response { status: i64, body: String, headers: Vec[(String, String)] }\n\
+        "import std.net.{Request, Server};\nstruct Response { status: i64, body: String, headers: Vec[(String, String)] }\n\
          fn handle(req: Request) -> Response {\n\
              Response { status: 200, body: \"{}\".to_string(), headers: Vec.new() }\n\
          }\n\
@@ -10916,7 +10920,7 @@ fn a_collection_where_an_iterator_is_wanted_takes_into_iter() {
 fn a_misshaped_handler_response_is_a_type_mismatch() {
     let (dir, path) = fixture(
         "handler-response-code",
-        "struct Response { status: i64 }\n\
+        "import std.net.{Request, Server};\nstruct Response { status: i64 }\n\
          fn handle(req: Request) -> Response { Response { status: 200 } }\n\
          fn main() with sends(Network) receives(Network) {\n\
              Server.serve(\"127.0.0.1:0\", handle);\n\
@@ -11003,7 +11007,7 @@ fn a_call_borrows_one_field_and_moves_another() {
 fn a_pub_fn_may_name_a_library_type() {
     accepted(
         "pub-fn-library-types",
-        "import std.regex.{Match, Regex};\n\
+        "import std.net.{TcpStream};\nimport std.process.{Command};\nimport std.regex.{Match, Regex};\n\
          pub fn f(x: Option[TcpStream]) -> bool { x.is_some() }\n\
          pub fn g(c: ref Command) -> i64 { 1 }\n\
          pub fn h(r: ref Regex) -> bool { r.is_match(\"a\") }\n\
@@ -11600,10 +11604,10 @@ fn a_module_let_is_refused_with_a_fix_to_const() {
     rejected_then_fixed_by(
         "module-let-annotated",
         "pub let MAX_RETRIES: i64 = 5;\n\
-         let APP_NAME: StringSlice = \"karac\";\n\
+         let APP_NAME: Str = \"karac\";\n\
          fn main() { println(f\"{APP_NAME} {MAX_RETRIES}\") }\n",
         "E_MODULE_LET",
-        "pub const MAX_RETRIES: i64 = 5;\nconst APP_NAME: StringSlice = \"karac\";",
+        "pub const MAX_RETRIES: i64 = 5;\nconst APP_NAME: Str = \"karac\";",
     );
     rejected_then_fixed_by(
         "module-let-inferred",
@@ -11629,7 +11633,7 @@ fn a_module_let_mut_or_cell_is_refused_without_a_fix() {
         ),
         (
             "module-let-cell",
-            "let COUNTER: Atomic[i64] = Atomic.new(0);\n\
+            "import std.sync.{Atomic};\nlet COUNTER: Atomic[i64] = Atomic.new(0);\n\
              fn main() { COUNTER.store(7); println(COUNTER.load()) }\n",
         ),
     ] {
@@ -11779,13 +11783,13 @@ fn a_const_of_a_cell_type_gets_the_module_cell_refusal() {
     for (tag, src) in [
         (
             "const-lazy-lock",
-            "fn build() -> i64 { 3 }\n\
+            "import std.sync.{LazyLock};\nfn build() -> i64 { 3 }\n\
              const TABLE: LazyLock[i64] = LazyLock.new(|| build());\n\
              fn main() { let w = TABLE.get(); println(f\"{w}\") }\n",
         ),
         (
             "const-atomic",
-            "const HITS: Atomic[i64] = Atomic.new(0);\n\
+            "import std.sync.{Atomic};\nconst HITS: Atomic[i64] = Atomic.new(0);\n\
              fn main() { HITS.store(1); println(HITS.load()) }\n",
         ),
     ] {
@@ -12158,7 +12162,7 @@ fn a_provider_cannot_leave_its_scope_through_a_callee_or_a_function_value() {
     );
 }
 
-const SHARED_CLK: &str = "trait Ticker { fn now(self) -> i64; }
+const SHARED_CLK: &str = "import std.sync.{TaskGroup};\ntrait Ticker { fn now(self) -> i64; }
 effect resource Clk: Ticker;
 shared struct S { t: i64 }
 impl Ticker for S { fn now(self) -> i64 { self.t } }
@@ -12321,7 +12325,7 @@ fn a_bare_variant_does_not_build_a_value() {
 fn f16_and_bf16_print_as_their_float() {
     accepted_and_runs(
         "f16-bf16-display",
-        "fn main() {\n    let a = F16.from(2.5);\n    let b = Bf16.from(3.25);\n    \
+        "import std.cmp.{Bf16, F16, F64}; fn main() {\n    let a = F16.from(2.5);\n    let b = Bf16.from(3.25);\n    \
          println(a);\n    println(f\"{b} {F64.from(1.5)}\");\n}\n",
         "2.5\n3.25 1.5\n",
     );
@@ -12638,7 +12642,7 @@ fn a_for_loop_over_a_value_that_does_not_iterate_is_refused() {
         "struct Counter { n: i64 }\nimpl Iterator for Counter {\n    type Item = i64;\n    \
          fn next(mut ref self) -> Option[i64] { if self.n == 0 { None } else { self.n -= 1; Some(self.n) } }\n}\n\
          fn main() {\n    let c = Counter { n: 2 };\n    for x in c { println(f\"{x}\"); }\n    \
-         let v: StringSlice = \"hé\";\n    for ch in v { let d: char = ch; println(f\"{d}\"); }\n    \
+         let v: Str = \"hé\";\n    for ch in v { let d: char = ch; println(f\"{d}\"); }\n    \
          for i in 0..2 { println(f\"{i}\"); }\n}\n",
         "1\n0\nh\né\n0\n1\n",
     );
@@ -12650,19 +12654,19 @@ fn a_spawned_task_returns_only_a_cross_task_value() {
     // result direction is checked like the capture direction.
     rejected(
         "taskgroup-spawn-shared-result",
-        "shared struct Node { v: i64 }\nfn main() {\n    let mut g = TaskGroup.new();\n    \
+        "import std.sync.{TaskGroup};\nshared struct Node { v: i64 }\nfn main() {\n    let mut g = TaskGroup.new();\n    \
          let h = g.spawn(|| Node { v: 1 });\n    println(h.join().v);\n}\n",
         "the result of the task passed to `TaskGroup.spawn` (type `Node`) cannot cross a task boundary",
     );
     rejected(
         "taskgroup-spawn-shared-in-vec",
-        "shared struct Node { v: i64 }\nfn main() {\n    let mut g = TaskGroup.new();\n    \
+        "import std.sync.{TaskGroup};\nshared struct Node { v: i64 }\nfn main() {\n    let mut g = TaskGroup.new();\n    \
          let h = g.spawn(|| [Node { v: 1 }]);\n    println(h.join().len());\n}\n",
         "E_NOT_CROSS_TASK",
     );
     accepted_and_runs(
         "taskgroup-spawn-plain-result",
-        "struct P { v: i64 }\nfn main() {\n    let mut g = TaskGroup.new();\n    \
+        "import std.sync.{TaskGroup};\nstruct P { v: i64 }\nfn main() {\n    let mut g = TaskGroup.new();\n    \
          let h = g.spawn(|| P { v: 1 });\n    let k = g.spawn(|| [1, 2, 3]);\n    \
          println(h.join().v);\n    println(k.join().len());\n}\n",
         "1\n3\n",
@@ -12675,7 +12679,7 @@ fn a_mismatch_names_the_string_view_str() {
     // `StringSlice` is the checker's own name for it.
     rejected(
         "command-args-vec-string",
-        "fn main() {\n    let a = [\"-n\", \"hi\"];\n    \
+        "import std.process.{Command};\nfn main() {\n    let a = [\"-n\", \"hi\"];\n    \
          let o = Command.new(\"echo\").args(a).output().unwrap();\n}\n",
         "expected 'Slice[Str]', found 'Vec[String]': each `String` owns its text",
     );
@@ -14033,7 +14037,7 @@ fn a_sync_type_holds_only_cross_task_fields_and_counts_as_a_handle() {
     // tree, not an ownership cycle.
     let holder = |decl: &str| {
         format!(
-            "{decl} struct Plain {{\n    n: i64,\n}}\nsync struct Holder {{\n    p: Plain,\n}}\n\
+            "import std.sync.{{TaskGroup}}; {decl} struct Plain {{\n    n: i64,\n}}\nsync struct Holder {{\n    p: Plain,\n}}\n\
              fn read(h: Holder) -> i64 {{\n    let q = h.p.clone();\n    q.n\n}}\n\
              fn main() {{\n    let h = Holder {{ p: Plain {{ n: 1 }} }};\n    let g = TaskGroup.new();\n    \
              let t = {{\n        let h1 = h.clone();\n        g.spawn(|| read(h1))\n    }};\n    \
@@ -14345,7 +14349,7 @@ fn an_associated_function_call_checks_its_closure_kinds() {
     // A library associated function is checked the same way.
     rejected(
         "library-assoc-fn-mutfn-for-fn",
-        "struct Store {\n    hits: i64,\n}\nfn handle(s: mut ref Store, req: Request) -> Response {\n    \
+        "import std.net.{Request, Response, Server};\nstruct Store {\n    hits: i64,\n}\nfn handle(s: mut ref Store, req: Request) -> Response {\n    \
          s.hits = s.hits + 1;\n    Response { status: 200, body: f\"{s.hits}\" }\n}\nfn main() {\n    \
          let mut store = Store { hits: 0 };\n    \
          let _ = Server.serve(\"127.0.0.1:0\", |req| handle(mut store, req));\n}\n",
@@ -14687,7 +14691,7 @@ fn a_nested_closure_reads_an_escaping_closures_capture() {
 fn a_function_value_reaching_a_shared_handle_does_not_cross_a_task() {
     accepted_and_runs(
         "fn-env-sync-store",
-        "sync struct Store {\n\
+        "import std.sync.{Atomic, TaskGroup, TaskHandle};\nsync struct Store {\n\
              n: Atomic[i64],\n\
          }\n\
          \n\
@@ -14711,7 +14715,7 @@ fn a_function_value_reaching_a_shared_handle_does_not_cross_a_task() {
     );
     accepted_and_runs(
         "fn-env-plain-capture",
-        "fn twice(f: Fn(i64) -> i64, x: i64) -> i64 {\n\
+        "import std.sync.{TaskGroup};\nfn twice(f: Fn(i64) -> i64, x: i64) -> i64 {\n\
              f(f(x))\n\
          }\n\
          \n\
@@ -14727,7 +14731,7 @@ fn a_function_value_reaching_a_shared_handle_does_not_cross_a_task() {
     for (tag, src, name) in [
         (
             "fn-env-spawned-fn-value",
-            "// Core semantics §6.3: a function value is CrossTask only when everything\n\
+            "import std.sync.{TaskGroup};\n// Core semantics §6.3: a function value is CrossTask only when everything\n\
          // its environment reaches is. `bump` captures the `shared` handle `s`, so\n\
          // the spawned closure that holds `bump` cannot cross a task boundary.\n\
          shared struct Store {\n\
@@ -14748,7 +14752,7 @@ fn a_function_value_reaching_a_shared_handle_does_not_cross_a_task() {
         ),
         (
             "fn-env-spawned-param",
-            "shared struct Store {\n\
+            "import std.sync.{TaskGroup};\nshared struct Store {\n\
              mut n: i64,\n\
          }\n\
          \n\
@@ -14766,7 +14770,7 @@ fn a_function_value_reaching_a_shared_handle_does_not_cross_a_task() {
         ),
         (
             "fn-env-nested-fn-value",
-            "shared struct Store {\n\
+            "import std.sync.{TaskGroup};\nshared struct Store {\n\
              mut n: i64,\n\
          }\n\
          \n\
@@ -14782,7 +14786,7 @@ fn a_function_value_reaching_a_shared_handle_does_not_cross_a_task() {
         ),
         (
             "fn-env-server-handler",
-            "shared struct Hits {\n\
+            "import std.net.{Request, Response, Server};\nshared struct Hits {\n\
              mut n: i64,\n\
          }\n\
          \n\
@@ -14976,7 +14980,7 @@ fn an_escaping_closure_made_in_a_loop_moves_its_capture_each_time() {
     );
     accepted_and_runs(
         "loop-spawn-borrows",
-        "struct Prog {\n\
+        "import std.sync.{TaskGroup, TaskHandle};\nstruct Prog {\n\
              ops: Vec[i64],\n\
          }\n\
          \n\
@@ -15319,7 +15323,7 @@ fn an_ascii_char_literal_cast_to_u8_is_fixed_to_a_byte_literal() {
 fn a_task_capturing_one_half_of_a_tuple_let_leaves_the_other_free() {
     accepted_and_runs(
         "task-captures-rx-moves-tx",
-        "fn count(rxs: own Vec[Receiver[String]]) -> i64 {\n\
+        "import std.sync.{Receiver, Sender, TaskGroup};\nfn count(rxs: own Vec[Receiver[String]]) -> i64 {\n\
              rxs.len()\n\
          }\n\
          \n\
@@ -15334,7 +15338,7 @@ fn a_task_capturing_one_half_of_a_tuple_let_leaves_the_other_free() {
     );
     accepted_and_runs(
         "task-captures-a-writes-b",
-        "fn main() {\n\
+        "import std.sync.{TaskGroup};\nfn main() {\n\
              let mut (a, b) = (Vec[1, 2], Vec[3]);\n\
              let g = TaskGroup.new();\n\
              let h = g.spawn(|| a.len());\n\
@@ -15345,7 +15349,7 @@ fn a_task_capturing_one_half_of_a_tuple_let_leaves_the_other_free() {
     );
     let (dir, path) = fixture(
         "task-captures-a-writes-a",
-        "fn main() {\n\
+        "import std.sync.{TaskGroup};\nfn main() {\n\
              let mut (a, b) = (Vec[1, 2], Vec[3]);\n\
              let g = TaskGroup.new();\n\
              let h = g.spawn(|| a.len());\n\

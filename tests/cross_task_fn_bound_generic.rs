@@ -26,7 +26,7 @@ fn karac(tag: &str, args: &[&str], src: &str) -> (Output, String) {
     (out, after)
 }
 
-const HEAD: &str = "shared struct C { v: i64 }
+const HEAD: &str = "import std.sync.{TaskGroup};\nshared struct C { v: i64 }
 fn both[F: Fn() -> i64 + CrossTask](f: F) -> i64 {
     let (a, b) = par { f(), f() };
     a + b

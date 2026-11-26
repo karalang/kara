@@ -1,3 +1,5 @@
+import std.io.{File};
+
 fn main() {
     let f = File.create("one.txt").unwrap();
     let g = File.create("two.txt").unwrap();

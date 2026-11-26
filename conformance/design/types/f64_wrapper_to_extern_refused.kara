@@ -1,4 +1,6 @@
 // design.md §5 Floats: `F64` must be unwrapped to `f64` before it is passed to an `extern` function.
+import std.cmp.{F64};
+
 /// # Safety
 /// `fabs` reads only its argument.
 unsafe extern "C" { fn fabs(x: f64) -> f64; }

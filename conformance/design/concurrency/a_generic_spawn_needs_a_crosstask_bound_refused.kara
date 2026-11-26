@@ -1,4 +1,6 @@
 // design.md §13 What may cross a task boundary: a generic function that spawns or sends a `T` must require `T: CrossTask` in its signature.
+import std.sync.{Receiver, Sender};
+
 fn send_one[T](tx: ref Sender[T], v: own T) { let _ = tx.send(v); }
 fn main() {
     let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1);

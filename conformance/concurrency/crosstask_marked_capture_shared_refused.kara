@@ -1,3 +1,5 @@
+import std.sync.{TaskGroup};
+
 shared struct Cache { mut hits: i64 }
 fn run(f: Fn() -> i64 + CrossTask) -> i64 {
     let g = TaskGroup.new();

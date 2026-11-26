@@ -1,3 +1,5 @@
+import std.sync.{TaskGroup};
+
 fn main() {
     let g = TaskGroup.new();
     let a = g.spawn(|| 1);

@@ -1,4 +1,5 @@
 import std.time.{Duration, Instant, sleep};
+import std.sync.{TaskGroup};
 
 fn inner() -> i64 { defer println("inner torn down"); sleep(Duration.ms(60000)); 0 }
 fn outer() -> i64 {

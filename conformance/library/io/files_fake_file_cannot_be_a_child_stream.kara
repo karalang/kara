@@ -1,4 +1,5 @@
 import std.process.{Command, Stdio};
+import std.io.{File, FileSystemProvider, OpenOptions};
 // io.md: a fake's file cannot become a child process's standard stream.
 struct MemFs {}
 impl FileSystemProvider for MemFs {

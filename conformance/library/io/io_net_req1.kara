@@ -1,3 +1,5 @@
+import std.net.{Request};
+
 fn show(r: Request) {
     let mut q = "".to_string();
     for (k, v) in r.query() { q.push_str(f"{k}={v};"); }

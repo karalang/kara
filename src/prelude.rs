@@ -68,8 +68,8 @@ pub const PRELUDE_PRIMITIVES: &[&str] = &[
 
 /// Names the legacy library baked in that v1 does not have: the
 /// `Base64` / `Hex` / `Url` namespaces are `std.encoding`'s free functions,
-/// and `Stats`, `Column`, `DataFrame`, `LazyExpr` and `Tensor` come with the
-/// post-v1 `kara-data` package (docs/library/README.md, data.md). A
+/// and `Stats`, `Column`, `DataFrame`, `LazyExpr`, `LazyFrame`, `LazyGroupBy`
+/// and `Tensor` come with the post-v1 `kara-data` package (docs/library/README.md, data.md). A
 /// program's own type of one of these names shadows nothing it could use.
 pub const REMOVED_LIBRARY_TYPES: &[&str] = &[
     "Base64",
@@ -83,8 +83,6 @@ pub const REMOVED_LIBRARY_TYPES: &[&str] = &[
     // The rest of the data track (the review's prelude ruling, 2026-11-26).
     "LazyFrame",
     "LazyGroupBy",
-    "F16",
-    "Bf16",
 ];
 
 /// Stdlib type names visible without import. These are the placeholder
@@ -2589,7 +2587,7 @@ pub const LIBRARY_GLOBAL_MODULES: &[(&[&str], &[&str], &[&str])] = &[
     ),
     (&["std", "env"], &["EnvProvider"], &[]),
     (&["std", "random"], &["RandomProvider"], &[]),
-    (&["std", "cmp"], &["F32", "F64"], &[]),
+    (&["std", "cmp"], &["F32", "F64", "F16", "Bf16"], &[]),
     (
         &["std", "arena"],
         &["Arena", "ArenaRef", "ArenaCheckpoint"],

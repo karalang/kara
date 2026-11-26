@@ -1,4 +1,6 @@
 // a function type writes a channel effect as receives(Channel).
+import std.sync.{Receiver, Sender};
+
 struct Hook { f: Fn(ref Receiver[String]) -> String with receives(Channel) blocks }
 fn take(rx: ref Receiver[String]) -> String { rx.recv().unwrap_or("none") }
 fn main() {

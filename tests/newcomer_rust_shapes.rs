@@ -77,7 +77,7 @@ fn rust_thread_spawn_names_task_group_and_par() {
         "spawn",
         "fn main() { let h = std::thread::spawn(|| 1); println(h.join().unwrap()); }\n",
         "`std::thread::spawn` is Rust: Kāra has no free `spawn`",
-        "fn main() { let group = TaskGroup.new(); let h = group.spawn(|| 1); println(h.join()); }\n",
+        "import std.sync.{TaskGroup};\n\nfn main() { let group = TaskGroup.new(); let h = group.spawn(|| 1); println(h.join()); }\n",
     );
     // In a loop body a group there would join each task at the end of
     // its iteration, which may not be what was meant: no fix.

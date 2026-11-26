@@ -91,7 +91,8 @@ fn compiled(src: &str) -> Option<String> {
     Some(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-const DROP: &str = r#"struct Noisy {
+const DROP: &str = r#"import std.io.{BufWriter, File};
+struct Noisy {
     name: String,
 }
 
@@ -166,7 +167,8 @@ fn main() {
     assert_eq!(run(src), "5\n");
 }
 
-const TIMEOUT: &str = r#"struct Pong { n: i64 }
+const TIMEOUT: &str = r#"import std.net.{TcpStream};
+struct Pong { n: i64 }
 
 impl NetworkProvider for Pong {
     fn connect(mut ref self, addr: Str) -> Result[i64, NetError] {

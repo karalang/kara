@@ -52,7 +52,7 @@ const LANES: [&[&str]; 2] = [&[], &["--interp"]];
 
 #[test]
 fn testing_every_test_fail_carries_a_location() {
-    let src = "struct FakeClock { t: i64 }\n\
+    let src = "import std.time.ClockProvider; struct FakeClock { t: i64 }\n\
 impl ClockProvider for FakeClock { fn wall_ns(ref self) -> i64 { self.t } }\n\
 #[test(requires: [Env])]\n\
 test \"needs env\" { assert(true); }\n\

@@ -187,7 +187,7 @@ fn a_resolved_library_send_is_not_charged_as_a_channel_send() {
     // channel send under the same clause is still refused.
     let (ok, text) = check(
         "builder_send",
-        "fn main() with sends(Network) receives(Network) writes(Stdout) {\n\
+        "import std.net.{Client};\nfn main() with sends(Network) receives(Network) writes(Stdout) {\n\
          let c = Client.new();\n\
          match c.request(\"GET\", \"http://127.0.0.1:1/\").header(\"X-A\", \"b\").send() {\n\
          Ok(resp) => { println(resp.body()); }\n\

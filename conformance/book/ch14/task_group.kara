@@ -1,3 +1,5 @@
+import std.sync.{TaskGroup, TaskHandle};
+
 fn square(n: i64) -> i64 { n * n }
 
 fn main() {

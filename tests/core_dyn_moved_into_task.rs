@@ -24,7 +24,7 @@ fn check(name: &str, src: &str) -> (bool, String) {
     )
 }
 
-const JOB: &str = "trait Job { fn run(ref self) -> i64; }
+const JOB: &str = "import std.sync.{TaskGroup}; trait Job { fn run(ref self) -> i64; }
 shared struct Cell { mut n: i64 }
 struct J { c: Cell }
 impl Job for J { fn run(ref self) -> i64 { self.c.n } }

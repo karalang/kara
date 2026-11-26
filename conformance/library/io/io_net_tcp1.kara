@@ -1,3 +1,5 @@
+import std.net.{TcpListener, TcpStream};
+
 fn show(e: NetError) -> String {
     match e {
         NetError.TimedOut => "timed out".to_string(),

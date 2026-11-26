@@ -142,7 +142,9 @@ fn main() { let y = Y { f: mkf(S { n: 0 }) }; println((y.f)()); }",
 fn a_marked_function_type_crosses_and_its_coercions_are_checked() {
     accepted_and_runs(
         "marked",
-        "fn mk(k: i64) -> Fn() -> i64 + CrossTask { || k + 1 }
+        "import std.sync.{TaskGroup};
+
+fn mk(k: i64) -> Fn() -> i64 + CrossTask { || k + 1 }
 fn go(f: Fn() -> i64 + CrossTask) -> i64 { TaskGroup.new().spawn(|| f()).join() }
 struct W { f: Fn() -> i64 + CrossTask }
 fn main() {
@@ -204,7 +206,7 @@ fn main() { let s = S { n: 0 }; let w = W { f: || s.n }; println((w.f)()); }",
 fn a_function_value_bound_from_a_closure_literal_is_in_sight() {
     accepted_and_runs(
         "literal-local",
-        "fn main() { let k = 3; let f = || k + 1; let g = TaskGroup.new(); \
+        "import std.sync.{TaskGroup};\nfn main() { let k = 3; let f = || k + 1; let g = TaskGroup.new(); \
          println(g.spawn(|| f()).join()); }
 ",
         "4\n",

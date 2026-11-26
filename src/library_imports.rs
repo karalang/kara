@@ -88,7 +88,7 @@ pub const IMPORT_REQUIRED_MODULES: &[(&str, &[&str])] = &[
     ("std.time", &["ClockProvider"]),
     ("std.env", &["EnvProvider"]),
     ("std.random", &["RandomProvider"]),
-    ("std.cmp", &["F32", "F64"]),
+    ("std.cmp", &["F32", "F64", "F16", "Bf16"]),
     ("std.arena", &["Arena", "ArenaRef", "ArenaCheckpoint"]),
     ("std.intern", &["Symbol", "Interner"]),
     // Experimental modules (library/README.md).
@@ -271,6 +271,17 @@ pub fn missing_library_imports(src: &str) -> Vec<TypeError> {
                 {
                     continue;
                 }
+                // `sends(Channel)` / `receives(Channel)`: the collapsed
+                // channel resource of an effect clause, not the type
+                // (design.md § Resources).
+                if name == "Channel"
+                    && i >= 2
+                    && tokens[i - 1].token == Token::LeftParen
+                    && matches!(&tokens[i - 2].token,
+                        Token::Identifier { name: verb, .. } if verb == "sends" || verb == "receives")
+                {
+                    continue;
+                }
                 if let Some((_, instead)) = INTERNAL_LIBRARY_NAMES
                     .iter()
                     .find(|(n, _)| *n == name.as_str())
@@ -348,6 +359,16 @@ pub fn missing_library_imports(src: &str) -> Vec<TypeError> {
         })
         .chain(internal)
         .collect()
+}
+
+/// The one edit that adds every import `src` is missing, if any: what a
+/// rewrite that introduces a library type (`karac migrate` wrapping a field
+/// in `Mutex[T]`) applies so its result checks.
+pub fn missing_imports_edit(src: &str) -> Option<FixIt> {
+    missing_library_imports(src)
+        .into_iter()
+        .find(|e| e.message.contains("imports before it uses it"))
+        .and_then(|e| e.fix_it)
 }
 
 /// A use of an [`INTERNAL_LIBRARY_NAMES`] name: refused, with the rename to

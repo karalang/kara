@@ -1,4 +1,5 @@
 import std.regex.{Regex};
+import std.sync.{TaskGroup};
 fn count(re: ref Regex, s: Str) -> i64 { re.find_all(s).len() }
 fn main() {
     let re = Regex.compile("[0-9]+").unwrap();

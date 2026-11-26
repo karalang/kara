@@ -1,4 +1,5 @@
 import std.sync.{channel, Sender, Receiver};
+import std.sync.{TaskGroup};
 
 struct Handler {
     f: Fn(i64) -> i64 with sends(Channel) receives(Channel) blocks suspends,

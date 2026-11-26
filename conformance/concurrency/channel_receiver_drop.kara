@@ -1,5 +1,6 @@
 import std.sync.{channel, Sender, Receiver, SendError};
 import std.time.{Duration, sleep};
+import std.sync.{TaskGroup};
 
 struct Msg { id: i64 }
 impl Drop for Msg {

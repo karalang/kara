@@ -1,3 +1,5 @@
+import std.hash.{SipHash13BuildHasher};
+
 fn main() {
     let s = "abc".to_string();
     let mut a = SipHash13BuildHasher {}.build();

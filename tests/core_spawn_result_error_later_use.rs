@@ -8,7 +8,7 @@
 
 use std::process::Command;
 
-const HALF: &str = "fn half(n: i64) -> Result[i64, String] {
+const HALF: &str = "import std.sync.{TaskGroup}; fn half(n: i64) -> Result[i64, String] {
     if n % 2 == 0 { Ok(n / 2) } else { Err(\"odd\".to_string()) }
 }
 ";

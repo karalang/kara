@@ -1,4 +1,6 @@
 // design.md §11 sync: plain fields read from any task; Atomic fields through atomic methods; Mutex fields through a guard; handles enter par branches.
+import std.sync.{Atomic, Mutex};
+
 sync struct Counter { name: String, count: Atomic[u64], state: Mutex[Vec[i64]] }
 impl Counter { fn increment(self) { self.count.fetch_add(1); } }
 fn work(c: Counter, k: i64) -> i64 { c.increment(); let g = c.state.lock(); g.value.push(k); k + c.name.len() }

@@ -1914,7 +1914,7 @@ fn test_query_effects_resolves_instance_method_network_effect() {
     ));
     std::fs::create_dir_all(&tmp).unwrap();
     let path = tmp.join("svc.kara");
-    let src = "fn fetch() {\n\
+    let src = "import std.net.{Client};\nfn fetch() {\n\
                \x20   let c = Client.new();\n\
                \x20   let r = c.get(\"http://example.com\");\n\
                \x20   match r { Result.Ok(_) => {} Result.Err(_) => {} }\n\
@@ -9007,7 +9007,7 @@ fn test_test_block_form_with_provider_fixture_is_recognized() {
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
     write(
         &tmp.join("src/main.kara"),
-        "fn main() {}\n\
+        "import std.time.{ClockProvider};\nfn main() {}\n\
          shared struct FakeClock { value: i64 }\n\
          impl ClockProvider for FakeClock {\n    fn now(ref self) -> i64 { self.value }\n}\n",
     );
@@ -9376,7 +9376,7 @@ fn with_provider_project(tag: &str, test_attrs_and_body: &str) -> std::path::Pat
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
     write(
         &tmp.join("src/main.kara"),
-        "struct FakeClock { t: i64 }\n\
+        "import std.time.{ClockProvider};\nstruct FakeClock { t: i64 }\n\
          impl ClockProvider for FakeClock { fn now(ref self) -> i64 { self.t } }\n\
          fn main() {}\n",
     );
@@ -9639,7 +9639,7 @@ fn test_multiple_with_provider_attributes_all_active_in_body() {
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
     write(
         &tmp.join("src/main.kara"),
-        "trait Audit { fn count(ref self) -> i64; }\n\
+        "import std.time.{ClockProvider};\ntrait Audit { fn count(ref self) -> i64; }\n\
          effect resource AuditLog: Audit;\n\
          struct FakeClock { t: i64 }\n\
          impl ClockProvider for FakeClock { fn now(ref self) -> i64 { self.t } }\n\
@@ -9683,7 +9683,7 @@ fn test_with_provider_frame_popped_between_tests() {
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
     write(
         &tmp.join("src/main.kara"),
-        "struct FakeClock { t: i64 }\n\
+        "import std.time.{ClockProvider};\nstruct FakeClock { t: i64 }\n\
          impl ClockProvider for FakeClock { fn now(ref self) -> i64 { self.t } }\n\
          fn main() {}\n",
     );
@@ -9722,7 +9722,7 @@ fn test_with_provider_overrides_builtin_primitive_clock() {
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
     write(
         &tmp.join("src/main.kara"),
-        "struct FakeClock { t: i64 }\n\
+        "import std.time.{ClockProvider};\nstruct FakeClock { t: i64 }\n\
          impl ClockProvider for FakeClock { fn now(ref self) -> i64 { self.t } }\n\
          fn main() {}\n",
     );
@@ -10992,8 +10992,9 @@ fn test_fix_applies_concurrent_plain_struct_migration() {
     // 1 `par ` insert + 1 `mut ` strip + 2 `Mutex[`/`]` wraps = 4 edits,
     // and the `par` block's comma form (two `;` to `,` and a `;` after the
     // block, B-2026-11-16-182) = 7, and the literal's `count: 0` wrapped in
-    // `Mutex.new(`/`)` so the result checks (B-2026-11-16-285) = 9.
-    assert!(stdout.contains("applied 9 fix"), "stdout: {stdout}");
+    // `Mutex.new(`/`)` so the result checks (B-2026-11-16-285) = 9, and
+    // the `import std.sync.{Mutex};` the wrapped field then needs = 10.
+    assert!(stdout.contains("applied 10 fix"), "stdout: {stdout}");
     let rewritten = std::fs::read_to_string(&path).unwrap();
     assert!(
         rewritten.contains("sync struct State"),
@@ -11041,8 +11042,9 @@ fn test_fix_applies_concurrent_shared_struct_migration() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     // Plus the `par` block's comma form, 3 more (B-2026-11-16-182), and the
     // literal's two mut inits wrapped in `Mutex.new(`/`)`, 4 more, so the
-    // result checks (B-2026-11-16-285).
-    assert!(stdout.contains("applied 14 fix"), "stdout: {stdout}");
+    // result checks (B-2026-11-16-285), and the `import std.sync.{Mutex};`
+    // the wrapped fields then need, 1 more.
+    assert!(stdout.contains("applied 15 fix"), "stdout: {stdout}");
     let rewritten = std::fs::read_to_string(&path).unwrap();
     assert!(
         rewritten.contains("sync struct Counter"),
@@ -12606,7 +12608,7 @@ fn every_type_the_module_mut_binding_warning_names_actually_runs() {
             // Every atomic op takes an explicit `MemoryOrdering` — there is no
             // implicit-ordering form. Spelling it here keeps the probe about
             // the TYPE's existence rather than about the ordering rule.
-            "let COUNTER: Atomic[i64] = Atomic.new(0);\n\
+            "import std.sync.{Atomic, MemoryOrdering};\nlet COUNTER: Atomic[i64] = Atomic.new(0);\n\
              fn main() {\n\
                  COUNTER.store(7, MemoryOrdering.SeqCst);\n\
                  println(COUNTER.load(MemoryOrdering.SeqCst));\n\
@@ -12614,12 +12616,12 @@ fn every_type_the_module_mut_binding_warning_names_actually_runs() {
         ),
         (
             "Mutex",
-            "let SLOT: Mutex[i64] = Mutex.new(0);\n\
+            "import std.sync.{Mutex};\nlet SLOT: Mutex[i64] = Mutex.new(0);\n\
              fn main() { println(1); }",
         ),
         (
             "OnceLock",
-            "let SLOT: OnceLock[i64] = OnceLock.new();\n\
+            "import std.sync.{OnceLock};\nlet SLOT: OnceLock[i64] = OnceLock.new();\n\
              fn main() { println(1); }",
         ),
         (
@@ -12628,7 +12630,7 @@ fn every_type_the_module_mut_binding_warning_names_actually_runs() {
             // backend failed. The probe reads the value back through `get()`
             // precisely because that is the call the phantom died on.
             "LazyLock",
-            "let SLOT: LazyLock[i64] = LazyLock.new(|| 1);\n\
+            "import std.sync.{LazyLock};\nlet SLOT: LazyLock[i64] = LazyLock.new(|| 1);\n\
              fn main() { println(SLOT.get()); }",
         ),
     ];
@@ -12684,7 +12686,8 @@ fn every_type_the_module_mut_binding_warning_names_actually_runs() {
 fn test_lazy_lock_runs_its_initializer_once_on_every_backend() {
     let tmp = scratch_project("lazylock-once");
     // `INIT` marks each closure execution; three `get`s must produce one mark.
-    let src = r#"fn build() -> i64 { println("INIT"); return 42; }
+    let src = r#"import std.sync.{LazyLock};
+fn build() -> i64 { println("INIT"); return 42; }
 let TABLE: LazyLock[i64] = LazyLock.new(|| build());
 fn main() {
     println(TABLE.get());
@@ -13037,7 +13040,8 @@ fn test_lazy_lock_get_attributes_init_effects_to_the_caller() {
 #[ignore = "v2 gap after M3: v2 refuses module-level `let` (E_MODULE_LET), so `--interp` never runs it; module-level `let` returns with deferred.md § Module-Level Mutable State"]
 fn test_module_scope_atomic_lowers_on_every_backend() {
     let tmp = scratch_project("module-atomic");
-    let src = r#"let COUNTER: Atomic[i64] = Atomic.new(0);
+    let src = r#"import std.sync.{Atomic, MemoryOrdering};
+let COUNTER: Atomic[i64] = Atomic.new(0);
 fn main() {
     COUNTER.store(7, MemoryOrdering.SeqCst);
     println(COUNTER.load(MemoryOrdering.SeqCst));
@@ -13099,7 +13103,7 @@ fn test_stable_hash_page_claims_match_the_compiler() {
     // the failure mode this whole row was filed about.
     let ok = check_source_output(
         "stablehash-ships",
-        "fn main() {\n\
+        "import std.hash.{StableHash};\nfn main() {\n\
              let s: String = \"kara\";\n\
              println(StableHash.siphash24(s.bytes(), 0u64, 0u64));\n\
          }\n",
@@ -13116,7 +13120,7 @@ fn test_stable_hash_page_claims_match_the_compiler() {
     // (2) `xxh3` — design.md names it; nothing implements it.
     let xxh3 = check_source_output(
         "stablehash-xxh3",
-        "fn main() { println(StableHash.xxh3([1u8, 2u8])); }\n",
+        "import std.hash.{StableHash};\nfn main() { println(StableHash.xxh3([1u8, 2u8])); }\n",
     );
     assert!(
         xxh3.contains("error"),
@@ -19229,7 +19233,7 @@ fn run_via_jit_executes_network_boundary_fn_body() {
         ),
         (
             "spawned",
-            "import std.net.{TcpListener, WebSocket};\n\
+            "import std.sync.{TaskGroup};\nimport std.net.{TcpListener, WebSocket};\n\
              struct R { id: i64 }\n\
              impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
              fn handle(r: own R, l: own TcpListener, go: bool) {\n\
@@ -19289,7 +19293,7 @@ fn run_via_jit_executes_network_boundary_fn_body() {
 fn uncalled_network_boundary_fn_builds_at_o0_and_runs_on_the_jit() {
     use std::process::Command;
 
-    let handler = "fn handle_ws(ws: own WebSocket) {\n\
+    let handler = "import std.net.{WebSocket};\nfn handle_ws(ws: own WebSocket) {\n\
                    \x20   let mut ws = ws;\n\
                    \x20   loop {\n\
                    \x20       match ws.recv() {\n\
@@ -20996,6 +21000,8 @@ fn wasm_f16_arithmetic_build_and_run_e2e() {
     std::fs::write(
         &path,
         r#"
+import std.simd.{Vector};
+
 fn main() {
     let n = env.args().len() as i64;
     let one: f32 = n as f32;
@@ -21632,6 +21638,7 @@ fn concurrent_same_stem_wasm_builds_do_not_collide() {
 /// varargs float→double promotion wasm32's args-buffer lowering
 /// exposed. Expected output: `22` then `12`.
 const WASM_SIMD_VECTOR_PROGRAM: &str = r#"
+import std.simd.{Vector};
 fn lane_sum(p: i64, q: i64) -> i64 {
     let a: Vector[i64, 2] = Vector[i64, 2](p, p);
     let b: Vector[i64, 2] = Vector[i64, 2](q, q);
@@ -22134,6 +22141,8 @@ fn wasm_require_simd_fires_on_simd128_opt_out() {
     std::fs::write(
         &path,
         r#"
+import std.simd.{Vector};
+
 #[require_simd]
 fn f32_scale(x: f32, y: f32) -> f32 {
     let a: Vector[f32, 4] = Vector[f32, 4](x, x, x, x);
@@ -25199,11 +25208,11 @@ fn fix_applies_bang_to_not_and_string_slice_edits() {
 
     let fixed = std::fs::read_to_string(&path).unwrap();
     assert!(
-        fixed.contains("const ALPHA: StringSlice = \"abc\";"),
+        fixed.contains("const ALPHA: Str = \"abc\";"),
         "annotated String should be rewritten: {fixed}"
     );
     assert!(
-        fixed.contains("const BETA: StringSlice = \"xyz\";"),
+        fixed.contains("const BETA: Str = \"xyz\";"),
         "inferred String should gain an annotation: {fixed}"
     );
     // `not` is a word operator: a space is added where none existed, and the
@@ -27023,7 +27032,7 @@ fn stable_hash_digest_does_not_move_with_the_process_hash_seed() {
     let src = dir.join("stable.kara");
     std::fs::write(
         &src,
-        "fn main() {\n\
+        "import std.hash.{StableHash};\nfn main() {\n\
              let s: String = \"kara\";\n\
              println(StableHash.siphash24(s.bytes(), 0u64, 0u64));\n\
          }",
@@ -27077,7 +27086,7 @@ fn a_pinned_fx_hasher_stops_the_order_moving_while_the_default_keeps_moving() {
     let src = dir.join("hasher.kara");
     std::fs::write(
         &src,
-        "fn main() {\n\
+        "import std.hash.{FxBuildHasher};\nfn main() {\n\
              let mut fx: Map[String, i64, FxBuildHasher] = Map.new();\n\
              let mut sip: Map[String, i64] = Map.new();\n\
              let names = [\"zulu\", \"alpha\", \"mike\", \"bravo\", \"yankee\",\n\
@@ -29931,7 +29940,7 @@ fn test_unrenderable_main_error_is_a_build_error_not_an_empty_message() {
         ),
         (
             "p",
-            "fn main() -> Result[(), Option[Vector[i64, 4]]] {\n\
+            "import std.simd.{Vector};\nfn main() -> Result[(), Option[Vector[i64, 4]]] {\n\
              \x20   return Err(Some(Vector[i64, 4](1, 2, 3, 4)));\n\
              }\n"
             .to_string(),

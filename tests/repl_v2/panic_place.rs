@@ -25,6 +25,7 @@ fn repl_panic_place_names_the_cell_of_an_item() {
 fn repl_panic_place_reaches_a_task_failed_location() {
     let mut s = session();
     let out: Vec<String> = [
+        "import std.sync.{TaskFailed, TaskGroup};",
         "fn f(o: Option[i64]) -> i64 {\n    o.unwrap()\n}",
         "let g = TaskGroup.isolating();",
         "let h = g.spawn(|| f(None));",
@@ -37,5 +38,5 @@ fn repl_panic_place_reaches_a_task_failed_location() {
         r.stdout
     })
     .collect();
-    assert_eq!(out[3], "cell 1:2:5: called unwrap() on None\n", "{out:?}");
+    assert_eq!(out[4], "cell 2:2:5: called unwrap() on None\n", "{out:?}");
 }

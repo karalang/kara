@@ -1,4 +1,6 @@
 // when the compiler cannot tell whether two values are the same, they conflict.
+import std.sync.{Receiver, Sender};
+
 fn both(a: ref Sender[i64], b: ref Sender[i64]) {
     let (x, y) = par { a.send(1).is_ok(), b.send(2).is_ok() };
     println(x and y);

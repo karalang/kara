@@ -1,3 +1,5 @@
+import std.sync.{TaskGroup};
+
 fn half(n: i64) -> i64 {
     if n == 3 { panic("odd branch"); }
     n / 2

@@ -1,3 +1,5 @@
+import std.io.{File};
+
 fn put(f: ref File) -> bool { f.write("z".bytes()).is_ok() }
 fn main() {
     let a = File.create("a.txt").unwrap();

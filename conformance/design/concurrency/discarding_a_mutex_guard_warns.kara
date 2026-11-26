@@ -1,4 +1,6 @@
 // design.md §13 Locks and atomics: discarding a guard is a `#[must_use]` warning, because the lock would be released at once.
+import std.sync.{Mutex};
+
 fn main() {
     let m = Mutex.new(1);
     m.lock();

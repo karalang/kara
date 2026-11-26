@@ -1,4 +1,6 @@
 // design.md §13 `TaskGroup`: the closure captures place by place, so a task may borrow from the enclosing scope; a loop-body local is moved into the task.
+import std.sync.{TaskGroup, TaskHandle};
+
 fn main() {
     let base = [100, 200];
     let mut hs: Vec[TaskHandle[i64]] = [];

@@ -1,4 +1,6 @@
 // Non-UTF-8 names and link targets; copy keeps permissions; stdin-free extras.
+import std.process.{Command};
+
 fn r(x: Result[(), IoError]) -> String { match x { Ok(_) => "ok".to_string(), Err(e) => f"err[{e}]" } }
 fn main() {
     let _ = fs.create_dir("n");

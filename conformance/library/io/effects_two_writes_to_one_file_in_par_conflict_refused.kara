@@ -1,3 +1,5 @@
+import std.io.{File};
+
 fn main() {
     let f = File.create("one.txt").unwrap();
     let (a, b) = par { f.write("a".bytes()), f.write("b".bytes()) };

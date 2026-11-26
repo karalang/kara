@@ -36,7 +36,10 @@ fn check(tag: &str, src: &str) -> String {
 fn discarded_builder_steps_and_derived_values_warn() {
     let out = check(
         "warn",
-        "fn main() {
+        "import std.process.{Command};
+import std.net.{Client};
+
+fn main() {
     let c = Command.new(\"true\");
     c.arg(\"x\");
     let cl = Client.new();
@@ -78,7 +81,9 @@ fn discarded_builder_steps_and_derived_values_warn() {
 fn mutations_and_bound_results_stay_silent() {
     let out = check(
         "silent",
-        "fn main() {
+        "import std.process.{Command};
+
+fn main() {
     let mut v = [1, 2];
     v.push(3);
     let n = v.len();

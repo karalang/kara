@@ -56,7 +56,9 @@ fn mend(name: &str, src: &str, want_code: &str, want_msg: &str) -> (String, Stri
 fn str_field_stored_in_a_mutex_becomes_a_string() {
     let (fixed, out) = mend(
         "b76-mutex",
-        "struct E { name: String, kind: Str }
+        "import std.sync.{Mutex};
+
+struct E { name: String, kind: Str }
 struct Lab { ex: Mutex[Vec[(i64, E)]] }
 fn main() {
     let lab = Lab { ex: Mutex.new(Vec.new()) };

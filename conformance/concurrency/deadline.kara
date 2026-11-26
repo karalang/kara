@@ -1,5 +1,6 @@
 import std.sync.{channel, Sender, Receiver, TaskFailed};
 import std.time.{Duration, Instant, sleep};
+import std.sync.{TaskGroup};
 
 fn main() {
     let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1);

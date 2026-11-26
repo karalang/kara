@@ -57,7 +57,8 @@ fn run_stdout(path: &std::path::Path) -> String {
     String::from_utf8_lossy(&run.stdout).into_owned()
 }
 
-const OLD_READ: &str = r#"fn main() {
+const OLD_READ: &str = r#"import std.process.{Command, Stdio};
+fn main() {
     let child = match Command.new("sh").arg("-c").arg("printf hi; printf oops >&2")
         .stdout(Stdio.piped()).stderr(Stdio.piped()).spawn() {
         Ok(c) => c,
@@ -143,7 +144,9 @@ fn old_read_to_string_unwrap_and_expect_keep_their_panic() {
 fn current_read_to_string_is_left_alone() {
     let path = scratch(
         "current.kara",
-        r#"fn main() {
+        r#"import std.process.{Command, Stdio};
+
+fn main() {
     let child = Command.new("sh").arg("-c").arg("printf ok")
         .stdout(Stdio.piped()).spawn().unwrap();
     let mut s = String.new();
@@ -160,7 +163,9 @@ fn current_read_to_string_is_left_alone() {
 fn old_websocket_recv_text_names_recv_and_ws_message() {
     let path = scratch(
         "ws.kara",
-        r#"fn echo(ws: own WebSocket) {
+        r#"import std.net.{TcpListener, WebSocket};
+
+fn echo(ws: own WebSocket) {
     let mut buf: Array[u8, 64] = [0u8; 64];
     match ws.recv_text(mut buf) {
         Ok(n) => println(n),

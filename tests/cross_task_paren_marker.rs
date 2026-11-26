@@ -84,7 +84,9 @@ fn refused(tag: &str, body: &str, needle: &str) {
 fn a_parenthesized_function_type_takes_the_marker() {
     accepted_and_runs(
         "whole-paren",
-        "fn go(f: (Fn() -> Fn() -> i64) + CrossTask) -> i64 {
+        "import std.sync.{TaskGroup};
+
+fn go(f: (Fn() -> Fn() -> i64) + CrossTask) -> i64 {
     TaskGroup.new().spawn(|| f()()).join()
 }
 fn mk() -> (Fn() -> Fn() -> i64) + CrossTask { || || 7 }
@@ -114,7 +116,9 @@ fn main() {
 fn a_parenthesized_return_type_leaves_the_marker_to_the_outer_type() {
     accepted_and_runs(
         "return-paren",
-        "fn go(f: Fn() -> (Fn() -> i64) + CrossTask) -> i64 {
+        "import std.sync.{TaskGroup};
+
+fn go(f: Fn() -> (Fn() -> i64) + CrossTask) -> i64 {
     TaskGroup.new().spawn(|| f()()).join()
 }
 fn main() { println(go(|| || 4)); }

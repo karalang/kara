@@ -170,7 +170,7 @@ fn repl_v2_runs_a_cell_under_a_provider() {
     let mut s = session();
     s.evaluate_cell_captured("struct FakeClock {}");
     let r = s.evaluate_cell_captured(
-        "impl ClockProvider for FakeClock { fn now(ref self) -> i64 { 42 } }",
+        "import std.time.{ClockProvider};\nimpl ClockProvider for FakeClock { fn now(ref self) -> i64 { 42 } }",
     );
     assert!(r.errors.is_empty(), "{:?}", r.errors);
     s.dispatch_meta(":provide Clock = FakeClock {}");
@@ -282,6 +282,7 @@ fn repl_v2_does_not_run_an_earlier_cell_again() {
     // `/` separators: a Windows `\` would read as a Kāra string escape.
     let p = path.display().to_string().replace('\\', "/");
     let mut s = session();
+    s.evaluate_cell_captured("import std.io.{File};");
     let r = s.evaluate_cell_captured(&format!(
         "let mut n: i64 = {{ File.append(\"{p}\").unwrap().write(\"x\".bytes()).unwrap(); 5 }};"
     ));
@@ -298,7 +299,7 @@ fn repl_v2_does_not_run_an_earlier_cell_again() {
     assert!(r.errors.is_empty(), "{:?}", r.errors);
     let r = s.evaluate_cell_captured("println(w);");
     assert!(
-        r.errors.join("\n").contains("moved at cell 6:1:"),
+        r.errors.join("\n").contains("moved at cell 7:1:"),
         "{:?}",
         r.errors
     );
@@ -324,7 +325,7 @@ fn repl_v2_carries_each_kind_of_value() {
         path.display().to_string().replace('\\', "/")
     );
     for cell in [
-        "struct P { name: String, xs: Vec[u8] }",
+        "import std.io.{File};\nstruct P { name: String, xs: Vec[u8] }",
         first.as_str(),
         "enum E { A, B(i64, String), C { w: f64 } }",
         "let m: Map[String, Vec[i64]] = [\"k\": [1, 2], \"j\": Vec.new()];",
@@ -395,8 +396,8 @@ fn repl_v2_provide_does_not_run_an_earlier_cell_again() {
     let _ = std::fs::remove_file(&path);
     let p = path.display().to_string().replace('\\', "/");
     let mut s = session();
-    s.evaluate_cell_captured("struct FakeClock {}");
-    s.evaluate_cell_captured("impl ClockProvider for FakeClock { fn now(ref self) -> i64 { 42 } }");
+    s.evaluate_cell_captured("import std.io.{File};\nstruct FakeClock {}");
+    s.evaluate_cell_captured("import std.time.{ClockProvider};\nimpl ClockProvider for FakeClock { fn now(ref self) -> i64 { 42 } }");
     let r = s.evaluate_cell_captured(&format!(
         "let n: i64 = {{ File.append(\"{p}\").unwrap().write(\"x\".bytes()).unwrap(); 5 }};"
     ));
@@ -468,7 +469,7 @@ fn repl_v2_show_prints_errors_and_providers() {
     assert!(!show.ok);
     assert!(show.text.contains("no written form"), "{}", show.text);
     s.evaluate_cell_captured("struct FakeClock {}");
-    s.evaluate_cell_captured("impl ClockProvider for FakeClock { fn now(ref self) -> i64 { 42 } }");
+    s.evaluate_cell_captured("import std.time.{ClockProvider};\nimpl ClockProvider for FakeClock { fn now(ref self) -> i64 { 42 } }");
     s.dispatch_meta(":provide Clock = FakeClock {}");
     let show = s.dispatch_magic("%show Clock.now() + 1");
     assert_eq!(show.text, "43");
@@ -486,7 +487,7 @@ fn repl_v2_auto_clone_clones_where_the_binding_moved() {
     let _ = std::fs::remove_file(&path);
     let p = path.display().to_string().replace('\\', "/");
     let cells = [
-        "fn eat(s: own String) -> i64 { s.len() }".to_string(),
+        "import std.io.{File};\nfn eat(s: own String) -> i64 { s.len() }".to_string(),
         format!(
             "let mut k: i64 = {{ File.append(\"{p}\").unwrap().write(\"x\".bytes()).unwrap(); 5 }};"
         ),

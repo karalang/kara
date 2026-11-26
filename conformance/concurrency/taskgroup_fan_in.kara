@@ -1,4 +1,5 @@
 import std.sync.{channel, Sender, Receiver};
+import std.sync.{TaskGroup};
 
 fn main() {
     let (tx, rx): (Sender[String], Receiver[String]) = channel(2);

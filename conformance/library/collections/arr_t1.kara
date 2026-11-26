@@ -1,4 +1,5 @@
 import std.hash.{Hasher, BuildHasher};
+import std.hash.{FxBuildHasher};
 struct Rec { n: u64 }
 impl Hasher for Rec {
     fn write(mut ref self, bytes: ref Slice[u8]) {

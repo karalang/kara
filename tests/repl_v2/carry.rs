@@ -31,7 +31,7 @@ fn repl_carry_a_task_runs_once_across_cells() {
     let out = outputs(
         &mut s,
         &[
-            "fn work(n: i64) -> i64 { println(f\"work {n}\"); n * 10 }",
+            "import std.sync.{TaskGroup};\nfn work(n: i64) -> i64 { println(f\"work {n}\"); n * 10 }",
             "let g = TaskGroup.new();",
             "let h = g.spawn(|| work(4));",
             "let r = h.join();",
@@ -54,7 +54,7 @@ fn repl_carry_an_isolated_panic_across_cells() {
     let out = outputs(
         &mut s,
         &[
-            "fn risky(n: i64) -> i64 { if n == 2 { panic(\"bad request\"); } n * 10 }",
+            "import std.sync.{TaskGroup};\nfn risky(n: i64) -> i64 { if n == 2 { panic(\"bad request\"); } n * 10 }",
             "let g = TaskGroup.isolating();",
             "let b = g.spawn(|| risky(2));",
             "let rb = b.join();",

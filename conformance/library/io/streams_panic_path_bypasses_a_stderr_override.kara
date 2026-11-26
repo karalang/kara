@@ -1,3 +1,5 @@
+import std.io.{StderrProvider};
+
 struct Eat {}
 impl StderrProvider for Eat {
     fn write(mut ref self, s: Str) {}

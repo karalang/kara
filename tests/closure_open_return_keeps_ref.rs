@@ -111,7 +111,9 @@ fn main() {
 fn a_spawned_closures_ref_result_is_the_reference() {
     runs(
         "spawn.kara",
-        "fn main() {
+        "import std.sync.{TaskGroup};
+
+fn main() {
     let v = 5;
     let g = TaskGroup.new();
     let h = g.spawn(|| ref v);
@@ -127,7 +129,9 @@ fn a_spawned_closures_ref_result_is_the_reference() {
 fn a_spawned_ref_that_outlives_its_value_is_refused() {
     refused(
         "spawn_escape.kara",
-        "fn main() {
+        "import std.sync.{TaskGroup};
+
+fn main() {
     let e = 1;
     let mut p: ref i64 = ref e;
     {
@@ -150,7 +154,9 @@ fn a_spawned_ref_that_outlives_its_value_is_refused() {
 fn a_computed_ref_tail_still_reads_the_value() {
     runs(
         "block_tails.kara",
-        "fn ap[T](f: Fn() -> T) -> T { f() }
+        "import std.sync.{TaskGroup};
+
+fn ap[T](f: Fn() -> T) -> T { f() }
 fn main() {
     let v = 5;
     let q = ap(|| { let r = ref v; r });

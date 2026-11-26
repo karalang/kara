@@ -24,7 +24,7 @@ fn check(tag: &str, src: &str) -> Output {
     out
 }
 
-const PRELUDE: &str = "shared struct S { mut n: i64 }
+const PRELUDE: &str = "import std.sync.{TaskGroup};\nshared struct S { mut n: i64 }
 fn mkf(s: own S) -> Fn() -> i64 { || { s.n = s.n + 1; s.n } }
 fn id[T](x: own T) -> T { x }
 fn race2(f: Fn() -> i64 + CrossTask) -> i64 {

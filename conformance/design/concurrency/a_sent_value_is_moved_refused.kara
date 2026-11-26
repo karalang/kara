@@ -1,4 +1,6 @@
 // design.md §13 Channels: a sent value moves into the channel; using it after the send is a use after move.
+import std.sync.{Receiver, Sender};
+
 fn main() {
     let (tx, rx): (Sender[String], Receiver[String]) = channel(1);
     let s = "hi".to_string();

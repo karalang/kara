@@ -55,7 +55,9 @@ fn main() { println(dial()); }
 fn wasm_wasi_refuses_an_http_client_request() {
     let (wasi, native) = both(
         "http",
-        "fn main() {
+        "import std.net.{Client};
+
+fn main() {
     let c = Client.new();
     match c.get(\"http://127.0.0.1:1/\".to_string()) { Ok(r) => println(r.status()), Err(_) => println(\"get failed\") }
 }

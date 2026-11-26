@@ -153,7 +153,7 @@ fn test_with_provider_harness_draws_no_warning_of_its_own() {
     // other case's `#[with_provider]` was reported with it as `unused_mut`
     // (W0295) at `<generated>`. Measured: the binary before the fix prints
     // that warning for exactly this package.
-    let main = "pub struct FakeClock { t: i64 }\n\
+    let main = "import std.time.{ClockProvider};\npub struct FakeClock { t: i64 }\n\
                 impl ClockProvider for FakeClock {\n    fn now(ref self) -> i64 { self.t }\n}\n\
                 pub trait DbT {\n    fn get(ref self, k: i64) -> i64;\n}\n\
                 pub effect resource Db: DbT;\n\

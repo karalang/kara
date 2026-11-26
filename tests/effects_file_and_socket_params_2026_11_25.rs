@@ -27,8 +27,9 @@ fn karac(tag: &str, src: &str, args: &[&str]) -> (Output, String) {
 
 #[test]
 fn a_file_parameter_declares_writes_f() {
-    let src =
-        "pub fn put(f: ref File) -> bool with writes(f) blocks { f.write(\"z\".bytes()).is_ok() }
+    let src = "import std.io.{File};
+
+pub fn put(f: ref File) -> bool with writes(f) blocks { f.write(\"z\".bytes()).is_ok() }
 fn main() { println(1); }
 ";
     let (out, text) = karac("put", src, &["check", "m.kara"]);
@@ -50,7 +51,9 @@ fn main() { println(1); }
 
 #[test]
 fn a_connection_parameter_declares_receives_and_sends() {
-    let src = "pub fn rd(c: ref TcpStream) -> bool with receives(c) blocks suspends { let mut b = [0u8; 1]; c.read(mut b).is_ok() }
+    let src = "import std.net.{TcpStream};
+
+pub fn rd(c: ref TcpStream) -> bool with receives(c) blocks suspends { let mut b = [0u8; 1]; c.read(mut b).is_ok() }
 pub fn wr(c: ref TcpStream) -> bool with sends(c) blocks suspends { c.write(\"x\".bytes()).is_ok() }
 fn main() { println(1); }
 ";

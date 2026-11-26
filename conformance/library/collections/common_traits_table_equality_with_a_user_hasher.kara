@@ -1,3 +1,5 @@
+import std.hash.{FxBuildHasher};
+
 struct Rec { n: u64 }
 impl Hasher for Rec {
     fn write(mut ref self, bytes: Slice[u8]) { for b in bytes { self.n = self.n.wrapping_mul(31).wrapping_add(b as u64); } }

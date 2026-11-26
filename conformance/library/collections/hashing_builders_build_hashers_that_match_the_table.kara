@@ -1,3 +1,5 @@
+import std.hash.{FxBuildHasher, SipHash13BuildHasher};
+
 fn digest[B: BuildHasher](b: B, x: i64) -> u64 { let mut h = b.build(); h.write_i64(x); h.finish() }
 fn main() {
     let a = digest(FxBuildHasher {}, 7);

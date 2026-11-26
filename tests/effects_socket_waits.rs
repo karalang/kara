@@ -147,7 +147,10 @@ fn udp_recv_under_a_network_only_clause_is_refused() {
 fn declared_blocks_covers_every_socket_and_process_wait() {
     let out = check(
         "declared-blocks",
-        "pub fn pull(s: ref TcpStream) -> i64 with sends(Network) receives(Network) blocks {
+        "import std.net.{TcpListener, TcpStream, TlsStream, WebSocket};
+import std.process.{Child};
+
+pub fn pull(s: ref TcpStream) -> i64 with sends(Network) receives(Network) blocks {
              let mut buf = [0u8; 16];
              match s.read(mut buf) {
                  Ok(n) => n,

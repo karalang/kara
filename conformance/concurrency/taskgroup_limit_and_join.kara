@@ -1,5 +1,6 @@
 import std.sync.{Atomic};
 import std.time.{Duration, sleep};
+import std.sync.{TaskGroup};
 
 fn work(i: i64, running: Atomic[i64], peak: Atomic[i64]) -> i64 {
     let now = running.fetch_add(1) + 1;

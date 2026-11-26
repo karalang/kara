@@ -2904,8 +2904,43 @@ impl Session {
         self.pending_cell_fn = Some((cell_idx, s[fn_start..].to_string()));
         let keep = self.keep_cell_fns();
         s.push_str(&format!("fn main(){ret} {{\n{keep}{cell_fn}()\n}}\n"));
+        let imports = self.generated_imports(&s, cell_src);
+        s.push_str(&imports);
         self.cell_byte_ranges = ranges;
         s
+    }
+
+    /// Imports for the library items the session's own code names and no
+    /// cell does: a carried `TaskHandle[i64]`'s annotation, the
+    /// `TaskGroup.isolating()` [`Session::keep_cell_fns`] writes. A name a
+    /// cell writes is the cell's to import, as in a file. Appended at the
+    /// end, so no byte or line of the program moves.
+    fn generated_imports(&self, program: &str, cell_src: &str) -> String {
+        let word = |text: &str, w: &str| {
+            text.match_indices(w).any(|(i, _)| {
+                let before = text[..i].chars().next_back();
+                let after = text[i + w.len()..].chars().next();
+                !before.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '.')
+                    && !after.is_some_and(|c| c.is_alphanumeric() || c == '_')
+            })
+        };
+        let written = |w: &str| {
+            word(cell_src, w)
+                || word(&self.items_source, w)
+                || self.cell_history.iter().any(|c| word(c, w))
+        };
+        let mut out = String::new();
+        for (module, names) in crate::library_imports::IMPORT_REQUIRED_MODULES {
+            let used: Vec<&str> = names
+                .iter()
+                .copied()
+                .filter(|n| word(program, n) && !written(n))
+                .collect();
+            if !used.is_empty() {
+                out.push_str(&format!("import {module}.{{{}}};\n", used.join(", ")));
+            }
+        }
+        out
     }
 
     /// The session's end, `:quit` or end of input: its bindings go out of
@@ -2970,6 +3005,8 @@ impl Session {
         }
         self.push_in_scopes(&mut s, &mut ranges, "", true, false);
         s.push_str("}\n");
+        let imports = self.generated_imports(&s, "");
+        s.push_str(&imports);
         self.cell_byte_ranges = ranges;
         self.install_line_map(&s);
         match crate::cli::repl_v2::run_cell(&self.worker, &s, self.built_take.get()) {

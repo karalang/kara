@@ -1,4 +1,6 @@
 // design.md §13 Locks and atomics: `Atomic[T]` mutates state several tasks share; atomic operations have no effects.
+import std.sync.{Atomic, TaskGroup};
+
 fn bump(c: Atomic[i64]) -> i64 { c.fetch_add(1) }
 fn main() {
     let c = Atomic.new(0);

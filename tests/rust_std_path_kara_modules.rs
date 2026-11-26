@@ -74,6 +74,6 @@ fn a_std_path_to_a_type_after_a_kara_module_drops_the_module() {
         "type",
         "fn main() {\n    let f = std::fs::File::open(\"x.txt\");\n    println(f.is_err());\n}\n",
         &["write `File.open`"],
-        "fn main() {\n    let f = File.open(\"x.txt\");\n    println(f.is_err());\n}\n",
+        "import std.io.{File};\n\nfn main() {\n    let f = File.open(\"x.txt\");\n    println(f.is_err());\n}\n",
     );
 }

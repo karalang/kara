@@ -3,6 +3,9 @@
 // an event bus of stored callbacks whose effects are charged where the bus
 // emits.
 
+import std.net.{TcpListener, TcpStream};
+import std.sync.{TaskGroup};
+
 struct Req {
     route: i64,
     body: String,

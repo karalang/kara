@@ -358,7 +358,7 @@ fn karac_check_rejects_require_simd_scalarization() {
 
 #[test]
 fn karac_check_accepts_native_require_simd() {
-    let src = "#[require_simd]\n\
+    let src = "import std.simd.{Vector};\n#[require_simd]\n\
         fn add4(a: Vector[i32, 4], b: Vector[i32, 4]) -> Vector[i32, 4] { a + b }\n\
         fn main() {}\n";
     let out = karac_check(src, "accept");
@@ -373,7 +373,7 @@ fn karac_check_accepts_native_require_simd() {
 
 // A program with a native op and a scalar op, no `#[require_simd]` — so it
 // type-checks clean and the report (not an error) is what we assert on.
-const MIXED_TIERS_SRC: &str = "\
+const MIXED_TIERS_SRC: &str = "import std.simd.{Vector};\n\
     fn native4(a: Vector[i32, 4], b: Vector[i32, 4]) -> Vector[i32, 4] { a + b }\n\
     fn scalar3(a: Vector[i32, 3], b: Vector[i32, 3]) -> Vector[i32, 3] { a + b }\n\
     fn main() {}\n";

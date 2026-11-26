@@ -1,4 +1,5 @@
 import std.time.{Duration, Instant, sleep};
+import std.sync.{TaskGroup};
 
 fn spin() -> i64 { let mut s = 0; for i in 0..30000000 { s = (s + i) % 1000003; } s }
 fn main() {

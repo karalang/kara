@@ -57,7 +57,7 @@ fn run_refuses(tag: &str, src: &str, want: &str) {
     assert!(err.contains(want), "{tag}: {err}");
 }
 
-const SERVE: &str = r#"struct Fake { }
+const SERVE: &str = r#"import std.net.{Request, Response, Server}; struct Fake { }
 impl NetworkProvider for Fake {}
 
 fn route(req: ref Request) -> Response { Response { status: 200, body: "ok".to_string() } }
@@ -89,7 +89,7 @@ fn provider_refuses_a_server_under_a_network_override() {
     run_refuses("serve", SERVE, "`Server.serve` is not served");
 }
 
-const REACHED: &str = r#"struct Fake { }
+const REACHED: &str = r#"import std.net.{TlsListener}; struct Fake { }
 impl NetworkProvider for Fake {}
 
 fn ping() -> i64 with sends(Network) receives(Network) {
@@ -141,7 +141,7 @@ fn provider_refuses_udp_and_tls_reached_under_a_network_override() {
     run_refuses("reached", REACHED, "E_PROVIDER_UNSUPPORTED");
 }
 
-const SERVED: &str = r#"struct Fake { }
+const SERVED: &str = r#"import std.net.{TcpStream, WebSocket}; struct Fake { }
 impl NetworkProvider for Fake {
     fn connect(mut ref self, addr: Str) -> Result[i64, NetError] { Err(NetError.ConnectionRefused) }
 }
@@ -181,7 +181,7 @@ fn provider_network_override_keeps_what_it_serves() {
     assert_eq!(String::from_utf8_lossy(&out.stdout), "udp\n0\ntrue\n");
 }
 
-const FILE_HANDLER: &str = r#"struct MemFs { n: i64 }
+const FILE_HANDLER: &str = r#"import std.io.{File, FileSystemProvider, OpenOptions, StdoutProvider}; struct MemFs { n: i64 }
 impl FileSystemProvider for MemFs {
     fn open(mut ref self, path: Str, opts: ref OpenOptions) -> Result[i64, IoError] { Ok(1) }
     fn close(mut ref self, h: i64) { println(f"close {h}"); }
@@ -234,7 +234,7 @@ fn provider_file_handle_method_using_an_override_is_checked() {
     );
 }
 
-const SOCKET_HANDLER: &str = r#"struct Fake { }
+const SOCKET_HANDLER: &str = r#"import std.io.{StdoutProvider}; import std.net.{TcpStream}; struct Fake { }
 impl NetworkProvider for Fake {
     fn connect(mut ref self, addr: Str) -> Result[i64, NetError] { Ok(7) }
     fn close(mut ref self, h: i64) { println(f"close {h}"); }
@@ -289,7 +289,7 @@ fn provider_unsupported_call_refuses_the_build() {
     assert!(err.contains("`Server.serve` is not served"), "{err}");
 }
 
-const DYN_OVERRIDDEN: &str = r#"trait Speak {
+const DYN_OVERRIDDEN: &str = r#"import std.io.{StdoutProvider}; trait Speak {
     fn speak(ref self);
 }
 struct Dog { }
@@ -391,7 +391,7 @@ fn provider_refuses_a_dyn_reaching_a_provider_rooted_resource() {
     run_refuses("dyn-rooted", DYN_PROVIDER_ROOTED, "E_DYN_PROVIDER");
 }
 
-const DYN_DEFAULTS: &str = r#"trait Speak {
+const DYN_DEFAULTS: &str = r#"import std.io.{StdoutProvider}; trait Speak {
     fn speak(ref self);
 }
 struct Dog { }

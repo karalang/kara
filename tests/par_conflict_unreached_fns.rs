@@ -105,7 +105,7 @@ fn par_conflict_in_a_library_package_is_reported() {
 fn task_provider_conflict_in_an_unreached_fn_is_reported() {
     let t = check_file(
         "task",
-        "effect resource Clk: ClkP;
+        "import std.sync.{TaskGroup}; effect resource Clk: ClkP;
 trait ClkP {
     fn now(ref self) -> i64;
     fn bump(mut ref self) {}
@@ -135,7 +135,7 @@ fn main() {}
 // rest on what a caller passes, so they are left to the caller's build.
 
 const PRODUCE: &str =
-    "fn produce(tx: Sender[i64], from: i64, to: i64) -> Result[(), SendError[i64]] {
+    "import std.sync.{SendError, Sender}; fn produce(tx: Sender[i64], from: i64, to: i64) -> Result[(), SendError[i64]] {
     for i in from..to { tx.send(i)?; }
     Ok(())
 }

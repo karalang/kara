@@ -1,3 +1,5 @@
+import std.io.{FileSystemProvider};
+
 struct MemFs { files: Map[String, String] }
 impl FileSystemProvider for MemFs {
     fn read_to_string(ref self, path: Str) -> Result[String, IoError] {

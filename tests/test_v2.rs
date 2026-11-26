@@ -55,7 +55,7 @@ const UTIL: &str = "pub fn double(x: i64) -> i64 {\n    x * 2\n}\n\npub fn pick(
 
 const UTIL_TEST: &str = "import util.{double, pick};\n\ntest \"double doubles\" {\n    assert_eq(double(2), 4);\n}\n\ntest \"double is wrong on purpose\" {\n    assert_eq(double(2), 5);\n}\n\ntest \"pick faults\" {\n    let mut v: Vec[i64] = Vec.new();\n    v.push(1);\n    let _ = pick(v, 3);\n}\n";
 
-const MAIN_TEST: &str = "struct FakeClock { t: i64 }\n\nimpl ClockProvider for FakeClock {\n    fn wall_ns(ref self) -> i64 { self.t }\n}\n\nfn boom() -> FakeClock { panic(\"no clock\") }\n\n#[with_provider(Clock, FakeClock { t: 42 })]\ntest \"fake clock\" {\n    assert_eq(Clock.wall_ns(), 42);\n}\n\n#[with_provider(Clock, boom())]\ntest \"ctor fails\" {\n    assert_eq(Clock.wall_ns(), 1);\n}\n\n#[test(timeout_seconds: 1)]\ntest \"loops briefly\" {\n    let mut i = 0;\n    while true { i += 1; }\n}\n";
+const MAIN_TEST: &str = "import std.time.{ClockProvider};\nstruct FakeClock { t: i64 }\n\nimpl ClockProvider for FakeClock {\n    fn wall_ns(ref self) -> i64 { self.t }\n}\n\nfn boom() -> FakeClock { panic(\"no clock\") }\n\n#[with_provider(Clock, FakeClock { t: 42 })]\ntest \"fake clock\" {\n    assert_eq(Clock.wall_ns(), 42);\n}\n\n#[with_provider(Clock, boom())]\ntest \"ctor fails\" {\n    assert_eq(Clock.wall_ns(), 1);\n}\n\n#[test(timeout_seconds: 1)]\ntest \"loops briefly\" {\n    let mut i = 0;\n    while true { i += 1; }\n}\n";
 
 #[test]
 fn test_v2_reports_each_case() {
@@ -224,7 +224,7 @@ fn test_v2_legacy_flag_is_refused_and_env_is_ignored() {
 /// `provider_construction_failed` (core semantics §14.8).
 #[test]
 fn test_v2_fixture_paths_and_results() {
-    let fixtures = "struct FakeClock { t: i64 }\n\nimpl FakeClock {\n    fn new() -> FakeClock { FakeClock { t: 7 } }\n    fn try_new(ok: bool) -> Result[FakeClock, String] {\n        if ok { Ok(FakeClock { t: 9 }) } else { Err(\"refused\") }\n    }\n}\n\nimpl ClockProvider for FakeClock {\n    fn wall_ns(ref self) -> i64 { self.t }\n}\n\n#[with_provider(Clock, FakeClock.new)]\ntest \"path\" {\n    assert_eq(Clock.wall_ns(), 7);\n}\n\n#[with_provider(Clock, FakeClock.try_new(true))]\ntest \"ok result\" {\n    assert_eq(Clock.wall_ns(), 9);\n}\n\n#[with_provider(Clock, FakeClock.try_new(false))]\ntest \"err result\" {\n    assert_eq(Clock.wall_ns(), 9);\n}\n";
+    let fixtures = "import std.time.{ClockProvider};\nstruct FakeClock { t: i64 }\n\nimpl FakeClock {\n    fn new() -> FakeClock { FakeClock { t: 7 } }\n    fn try_new(ok: bool) -> Result[FakeClock, String] {\n        if ok { Ok(FakeClock { t: 9 }) } else { Err(\"refused\") }\n    }\n}\n\nimpl ClockProvider for FakeClock {\n    fn wall_ns(ref self) -> i64 { self.t }\n}\n\n#[with_provider(Clock, FakeClock.new)]\ntest \"path\" {\n    assert_eq(Clock.wall_ns(), 7);\n}\n\n#[with_provider(Clock, FakeClock.try_new(true))]\ntest \"ok result\" {\n    assert_eq(Clock.wall_ns(), 9);\n}\n\n#[with_provider(Clock, FakeClock.try_new(false))]\ntest \"err result\" {\n    assert_eq(Clock.wall_ns(), 9);\n}\n";
     let dir = package(
         "fixtures",
         &[

@@ -143,7 +143,10 @@ fn vec_of(s: Str) -> Vec[String] { let mut v = Vec.new(); v.push(s.to_string());
 #[test]
 fn semaphore_release_and_arena_rewind_to_return_unit() {
     let out = checks_and_runs(
-        r#"fn r(s: ref Semaphore) -> () {
+        r#"import std.sync.{Semaphore};
+import std.arena.{Arena};
+
+fn r(s: ref Semaphore) -> () {
     s.release()
 }
 fn main() {
@@ -195,7 +198,9 @@ fn main() {
 #[test]
 fn request_header_borrows_its_name_as_str() {
     let out = checks_and_runs(
-        r#"fn h(r: ref Request, n: Str) -> Option[String] { r.header(n) }
+        r#"import std.net.{Request};
+
+fn h(r: ref Request, n: Str) -> Option[String] { r.header(n) }
 fn h2(r: ref Request, n: String) -> Option[String] { r.header(n) }
 fn main() {
     let r = Request.new("GET", "/x").with_header("Accept", "text/plain");
@@ -214,7 +219,9 @@ fn main() {
 #[test]
 fn stdin_lines_type_can_be_named() {
     let out = checks_and_runs(
-        r#"fn f() -> StdinLines with writes(Stdin) blocks { stdin.lines() }
+        r#"import std.io.{StdinLines};
+
+fn f() -> StdinLines with writes(Stdin) blocks { stdin.lines() }
 fn main() {
     let mut n = 0;
     for line in f() {

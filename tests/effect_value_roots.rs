@@ -75,7 +75,7 @@ fn a_function_without_a_receiver_cannot_root_a_resource_at_self() {
     );
 }
 
-const OUT: &str = "struct Out {\n    tx: Sender[i64],\n}\n\n\
+const OUT: &str = "import std.sync.{Receiver, Sender};\nstruct Out {\n    tx: Sender[i64],\n}\n\n\
      impl Out {\n    fn put(ref self, v: i64) with sends(self) blocks {\n        self.tx.send(v).unwrap();\n    }\n}\n\n";
 
 #[test]

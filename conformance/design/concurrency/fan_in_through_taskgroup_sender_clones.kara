@@ -1,4 +1,6 @@
 // design.md §13 Channels: concurrent producers on one channel run as `TaskGroup` tasks, each with its own clone of the `Sender`; messages arrive in no fixed order.
+import std.sync.{Receiver, Sender, TaskGroup};
+
 fn produce(tx: own Sender[i64], n: i64) { let _ = tx.send(n); }
 fn main() {
     let (tx, rx): (Sender[i64], Receiver[i64]) = channel(8);

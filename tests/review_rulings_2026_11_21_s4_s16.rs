@@ -35,7 +35,7 @@ fn karac(dir: &Path, args: &[&str]) -> (bool, String) {
     )
 }
 
-const NET_MAIN: &str = "fn fetch() -> i64 {
+const NET_MAIN: &str = "import std.net.{TcpStream};\nfn fetch() -> i64 {
     match TcpStream.connect(\"127.0.0.1:1\") { Ok(_) => 1, Err(_) => 0 }
 }
 fn main() { println(fetch()); }

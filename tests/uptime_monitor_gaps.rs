@@ -181,7 +181,7 @@ fn silent_server() -> u16 {
 
 fn timeout_program(port: u16) -> String {
     format!(
-        "fn main() {{
+        "import std.net.{{Client}};\nfn main() {{
     let c = Client.new();
     match c.request(\"GET\".to_string(), \"http://127.0.0.1:{port}/slow\".to_string()).timeout(200).send() {{
         Ok(r) => println(f\"status {{r.status()}}\"),
@@ -213,7 +213,8 @@ fn an_http_timeout_says_so_compiled() {
     }
 }
 
-const WRITE_ALL: &str = "fn save(path: Str, text: Str) -> Result[(), IoError] {
+const WRITE_ALL: &str =
+    "import std.io.{File}; fn save(path: Str, text: Str) -> Result[(), IoError] {
     let f = File.create(path)?;
     f.write_all(text.bytes())?;
     f.write_all(\"\".bytes())?;

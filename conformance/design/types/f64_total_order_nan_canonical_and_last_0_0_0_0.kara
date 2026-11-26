@@ -1,4 +1,6 @@
 // design.md conformance (moved from the shared folder's design-5-7): F64: total order, NaN canonical and last, -0.0 != 0.0
+import std.cmp.{F64};
+
 fn main() {
     let scores: Vec[f64] = [2.0, f64.NAN, -0.0, 1.0, 0.0, f64.NEG_INFINITY];
     let mut ranked: Vec[F64] = scores.iter().map(|x| F64.from(*x)).collect();

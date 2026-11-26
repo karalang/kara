@@ -1,5 +1,6 @@
 // design.md §11 categories 2-5: an adapter, a guard (its message names the resource), a builder step, and pure transformations.
 import std.process.{Command};
+import std.sync.{Mutex};
 fn main() {
     let v = [1, 2, 3];
     v.iter().map(|x| x * 2);

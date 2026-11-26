@@ -1,4 +1,6 @@
 // two branches that write one File conflict.
+import std.io.{File};
+
 fn put(f: File, s: Str) -> bool { f.write_all(s.bytes()).is_ok() }
 fn main() {
     let f = File.create("/tmp/kara-conf-one-file").unwrap();

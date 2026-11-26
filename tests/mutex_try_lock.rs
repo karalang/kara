@@ -46,7 +46,8 @@ fn runs_as(tag: &str, src: &str, want: &str) {
     }
 }
 
-const HELD: &str = r#"fn main() {
+const HELD: &str = r#"import std.sync.{Mutex};
+fn main() {
     let m = Mutex.new(5);
     {
         let g = m.lock();
@@ -68,7 +69,8 @@ const HELD: &str = r#"fn main() {
 }
 "#;
 
-const PHILOSOPHERS: &str = r#"import std.time.{sleep, Duration};
+const PHILOSOPHERS: &str = r#"import std.sync.{Mutex, TaskGroup};
+import std.time.{sleep, Duration};
 pub fn peek(m: ref Mutex[i64]) -> bool {
     m.try_lock().is_some()
 }

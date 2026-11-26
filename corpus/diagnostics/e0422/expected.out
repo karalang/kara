@@ -1,1 +1,1 @@
-ERROR at line 10: `MemFs.close` uses `Stdout`, which is overridden where the `with_provider[FileSystem]` call is; a file's `close` runs with every other resource at its default (core semantics §14.11)
+ERROR at line 12: `MemFs.close` uses `Stdout`, which is overridden where the `with_provider[FileSystem]` call is; a file's `close` runs with every other resource at its default (core semantics §14.11)

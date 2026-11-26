@@ -249,7 +249,9 @@ fn snmp_slice_starts_with_and_ends_with() {
 
 #[test]
 fn snmp_closure_writes_then_returns_its_capture() {
-    let src = "struct Agent { n: i64, names: Vec[String] }
+    let src = "import std.sync.{TaskGroup};
+
+struct Agent { n: i64, names: Vec[String] }
 impl Agent {
     fn serve(mut ref self) { self.n = self.n + 1; }
 }

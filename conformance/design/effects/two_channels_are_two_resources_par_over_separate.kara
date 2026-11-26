@@ -1,5 +1,7 @@
 // two channels are two resources: par over separate senders is accepted
 
+import std.sync.{Receiver, SendError, Sender};
+
 fn produce(tx: Sender[i64], from: i64, to: i64) -> Result[(), SendError[i64]] { for i in from..to { tx.send(i)?; } Ok(()) }
 fn main() {
     let (tx1, rx1): (Sender[i64], Receiver[i64]) = channel(8);

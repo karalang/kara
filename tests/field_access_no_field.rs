@@ -42,7 +42,7 @@ fn field_access_error_names_the_type_and_only_nameable_fields() {
         one_error(vec),
         "no field 'foo' on type 'Vec', which has no fields"
     );
-    let req = "fn main() {\n    let r = Request.new(\"GET\", \"/\");\n    let _ = r.foo;\n}\n";
+    let req = "import std.net.{Request};\nfn main() {\n    let r = Request.new(\"GET\", \"/\");\n    let _ = r.foo;\n}\n";
     assert_eq!(
         one_error(req),
         "no field 'foo' on type 'Request', which has no fields"

@@ -1,5 +1,6 @@
 import std.sync.{channel, Sender, Receiver, Atomic, TaskFailed};
 import std.time.{Duration, Instant};
+import std.sync.{TaskGroup};
 
 struct Noisy { name: String }
 impl Drop for Noisy {

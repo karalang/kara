@@ -35,7 +35,7 @@ fn a_bare_for_moving_its_elements_out_does_not_run() {
 #[test]
 fn an_atomic_without_an_ordering_runs() {
     let r = run_playground(
-        "sync struct Counter { count: Atomic[i64] }\n\
+        "import std.sync.{Atomic};\nsync struct Counter { count: Atomic[i64] }\n\
          fn bump(counter: ref Counter) { let _ = counter.count.fetch_add(1); }\n\
          fn main() {\n    \
              let counter: Counter = Counter { count: Atomic.new(0) };\n    \

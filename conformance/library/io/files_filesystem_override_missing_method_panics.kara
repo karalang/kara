@@ -1,3 +1,5 @@
+import std.io.{FileSystemProvider};
+
 struct Empty {}
 impl FileSystemProvider for Empty {}
 fn main() {

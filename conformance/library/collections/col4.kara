@@ -1,5 +1,6 @@
 // Hashing: what the built-in types feed a user hasher, StableHash.siphash24, a user BuildHasher table.
 import std.hash.{Hasher, BuildHasher};
+import std.hash.{FxBuildHasher};
 
 struct Rec { bytes: Vec[u8] }
 impl Hasher for Rec {

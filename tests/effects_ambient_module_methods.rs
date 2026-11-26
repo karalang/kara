@@ -31,6 +31,8 @@ fn check(tag: &str, src: &str) -> Output {
 /// The socket half every program below shares: a write on a `TcpStream` and
 /// a `read_line` through a `BufReader` over one.
 const SOCKETS: &str = r#"
+import std.net.{TcpListener, TcpStream};
+import std.io.{BufReader};
 fn talk() {
     let l = TcpListener.bind("127.0.0.1:0").unwrap();
     let c = TcpStream.connect(l.local_addr().unwrap()).unwrap();

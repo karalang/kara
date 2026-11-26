@@ -1,3 +1,5 @@
+import std.cmp.{F64};
+
 fn main() {
     let mut s: Set[F64] = Set.new();
     s.insert(F64.from(0.0));

@@ -1,1 +1,1 @@
-ERROR at line 22: this task uses `Clk` while the task spawned at line 21, which writes `Clk`, may still run (core semantics §14.9: a task borrows the provider of each resource it uses, `mut ref` when it writes it, until its group drops); write `Clk` from one task only
+ERROR at line 24: this task uses `Clk` while the task spawned at line 23, which writes `Clk`, may still run (core semantics §14.9: a task borrows the provider of each resource it uses, `mut ref` when it writes it, until its group drops); write `Clk` from one task only

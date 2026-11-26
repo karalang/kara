@@ -1,4 +1,6 @@
 // Stdin override: read_to_string not implemented panics naming stream and method.
+import std.io.{StdinProvider};
+
 struct In {}
 impl StdinProvider for In {}
 fn main() {

@@ -1,4 +1,5 @@
 import std.time.{Duration, Instant, sleep};
+import std.sync.{Atomic, TaskGroup};
 
 fn work(live: Atomic[i64], peak: Atomic[i64]) -> i64 {
     let now = live.fetch_add(1) + 1;

@@ -192,7 +192,7 @@ const DYN_SPAWN: &str = "trait Bump {\n\
 fn cross_task_mark_on_a_return_holding_a_shared_handle_gets_no_fix() {
     refused_and_left_alone(
         "cross-task-dyn-shared",
-        &format!("shared struct S {{ mut n: i64 }}\n{DYN_SPAWN}"),
+        &format!("import std.sync.{{TaskGroup}}; shared struct S {{ mut n: i64 }}\n{DYN_SPAWN}"),
         "cannot cross a TaskGroup.spawn task boundary",
     );
 }
@@ -203,7 +203,7 @@ fn cross_task_mark_on_a_return_holding_a_shared_handle_gets_no_fix() {
 fn cross_task_mark_on_a_plain_return_is_still_fixed() {
     refused_then_fixed(
         "cross-task-dyn-plain",
-        &format!("struct S {{ n: i64 }}\n{DYN_SPAWN}"),
+        &format!("import std.sync.{{TaskGroup}}; struct S {{ n: i64 }}\n{DYN_SPAWN}"),
         "cannot cross a TaskGroup.spawn task boundary",
         "-> dyn Bump + CrossTask",
     );

@@ -1,1 +1,1 @@
-ERROR at line 12: impl method 'Point.show' performs writes(Log) but trait 'Show.show' ceiling is [reads(Log)]; narrow the impl or widen the trait ceiling
+ERROR at line 14: impl method 'Point.show' performs writes(Log) but trait 'Show.show' ceiling is [reads(Log)]; narrow the impl or widen the trait ceiling

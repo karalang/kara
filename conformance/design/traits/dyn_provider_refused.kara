@@ -1,3 +1,5 @@
+import std.env.{EnvProvider};
+
 trait Stamp { fn stamp(self) -> i64; }
 struct S {}
 impl Stamp for S { fn stamp(self) -> i64 { let _ = env.var("X"); 1 } }

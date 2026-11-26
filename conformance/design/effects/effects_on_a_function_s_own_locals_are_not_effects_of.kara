@@ -1,4 +1,6 @@
 // effects on a function's own locals are not effects of the function
 
+import std.sync.{Receiver, Sender};
+
 fn local_chan() -> i64 { let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1); let _ = tx.send(4); rx.recv().unwrap() }
 fn main() { println(f"{local_chan()}"); }

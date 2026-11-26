@@ -1,4 +1,5 @@
 import std.sync.{Mutex};
+import std.sync.{Receiver, Sender};
 fn lock(m: ref Mutex[i64]) -> i64 { m.lock().value }
 fn send(tx: ref Sender[i64]) { let _ = tx.send(1); }
 fn recv(rx: ref Receiver[i64]) -> i64 { rx.recv().unwrap_or(0) }

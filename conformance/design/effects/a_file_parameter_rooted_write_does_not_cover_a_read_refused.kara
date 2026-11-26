@@ -1,3 +1,5 @@
 // `writes(f)` declares the write; a read through the same file is still undeclared (B-2026-11-25-35).
+import std.io.{File};
+
 pub fn get(f: ref File) -> bool with writes(f) blocks { let mut b = [0u8; 1]; f.read(mut b).is_ok() }
 fn main() { }

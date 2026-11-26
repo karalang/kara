@@ -1701,6 +1701,12 @@ fn migrated_text(plan: &FileMigrationPlan) -> String {
         }
         rewritten.replace_range(edit.offset..end, &edit.replacement);
     }
+    // A field the migration wraps in `Mutex[T]` / `Atomic[T]` names a
+    // `std.sync` item, which the program then imports.
+    if let Some(fix) = crate::library_imports::missing_imports_edit(&rewritten) {
+        let at = fix.span.offset.min(rewritten.len());
+        rewritten.insert_str(at, &fix.replacement);
+    }
     rewritten
 }
 

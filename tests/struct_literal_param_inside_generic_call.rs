@@ -27,7 +27,8 @@ fn text(out: &Output) -> String {
     )
 }
 
-const SRC: &str = r#"struct Holder[T] {
+const SRC: &str = r#"import std.sync.{Mutex};
+struct Holder[T] {
     values: Mutex[VecDeque[T]],
 }
 

@@ -29,7 +29,7 @@ fn check(tag: &str, src: &str) -> (bool, String) {
     )
 }
 
-const CLK: &str = "effect resource Clk: ClkP;
+const CLK: &str = "import std.sync.{TaskGroup}; effect resource Clk: ClkP;
 trait ClkP { fn now(ref self) -> i64; }
 struct F { t: Vec[i64] }
 impl ClkP for F { fn now(ref self) -> i64 { self.t[0] } }

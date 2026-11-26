@@ -38,7 +38,7 @@ const LANES: [&[&str]; 2] = [&["run"], &["run", "--interp"]];
 const CASES: [(&str, &str, u32, u32); 4] = [
     (
         "recv",
-        r#"fn main() {
+        r#"import std.sync.{Receiver, Sender}; fn main() {
     let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1);
     println("start");
     let v = rx.recv();
@@ -50,7 +50,7 @@ const CASES: [(&str, &str, u32, u32); 4] = [
     ),
     (
         "join",
-        r#"fn main() {
+        r#"import std.sync.{Receiver, Sender, TaskGroup}; fn main() {
     let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1);
     let group = TaskGroup.new();
     let h = group.spawn(|| { let v: i64 = rx.recv().unwrap(); v });
@@ -77,7 +77,7 @@ fn main() {
     ),
     (
         "select",
-        r#"fn main() {
+        r#"import std.sync.{Receiver, Sender}; fn main() {
     let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1);
     let (tx2, rx2): (Sender[i64], Receiver[i64]) = channel(1);
     select {

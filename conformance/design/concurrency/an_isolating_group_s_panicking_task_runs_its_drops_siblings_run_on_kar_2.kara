@@ -1,4 +1,5 @@
 import std.time.{Duration, Instant, sleep};
+import std.sync.{TaskGroup};
 
 struct Noisy {}
 impl Drop for Noisy { fn drop(mut ref self) { println("panicker dropped its local"); } }

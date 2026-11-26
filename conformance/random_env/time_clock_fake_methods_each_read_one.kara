@@ -1,4 +1,5 @@
 import std.time.{Clock, Instant, SystemTime};
+import std.time.{ClockProvider};
 struct Wall {}
 impl ClockProvider for Wall {
     fn wall_ns(ref self) -> i64 { 3000000000 }

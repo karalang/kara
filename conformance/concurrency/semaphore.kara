@@ -1,5 +1,6 @@
 import std.sync.{Atomic};
 import std.time.{Duration, Instant, sleep};
+import std.sync.{Semaphore, SemaphoreError, TaskGroup};
 
 sync struct FooBar {
     n: i64,
