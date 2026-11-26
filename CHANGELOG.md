@@ -2575,6 +2575,16 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Performance
 
+- A compiled `SortedMap` or `SortedSet` with `i64` keys past 16 KiB of
+  entries finds a key about twice as fast and inserts a new one about 1.5
+  times as fast. Its searches halve with a select rather than a branch,
+  which mispredicted on about half the steps, and each inner node keeps
+  its children's first keys in place rather than reading them from each
+  child's leftmost leaf. A run of rising or falling keys takes a branch at
+  each node's ends first. Inserting 10^5 random keys 100 times takes 1.0 s,
+  down from 1.5 s, level with Rust's `BTreeMap`; a program of 10^7 lookups takes 0.55 s,
+  down from 1.3 s; and 4 million rising keys take 0.09 s, down from
+  0.14 s (B-2026-11-25-31).
 - A compiled `rotate_left` / `rotate_right` on a `Vec`, a part of one or
   an array moves each element once: the short side goes through a buffer
   and the rest moves with one `memmove`, as Rust's rotate does, where the

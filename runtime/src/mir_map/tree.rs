@@ -9,8 +9,9 @@
 //! leaves of up to `lcap` entries each, linked in key order, under inner
 //! nodes that keep for each child the number of entries below it and its
 //! leftmost leaf. A key is found by comparing it with the first entry of
-//! each child's leftmost leaf, an index by the counts, and an insert or a
-//! removal moves at most one leaf's entries, so each is `O(log n)`.
+//! each child's leftmost leaf (kept in the inner node for `i64` keys), an
+//! index by the counts, and an insert or a removal moves at most one
+//! leaf's entries, so each is `O(log n)`.
 //! Compiled code sees a table in a tree by its null `buf` and asks the
 //! runtime for an entry by index ([`Tree::at`]), which a walk in order
 //! answers from the last leaf it reached, without a descent.
@@ -116,6 +117,14 @@ struct Inner {
     counts: Row<usize>,
     /// Each child's leftmost leaf (the child itself for a leaf).
     firsts: Row<*mut Leaf>,
+    /// For `i64` keys, the first key of each child's leftmost leaf, which
+    /// [`Tree::kid_for`] compares with in place rather than through
+    /// `firsts`, one leaf apart per comparison (B-2026-11-25-31). It is
+    /// set wherever `firsts` is, and a removal refreshes it through
+    /// [`Tree::fix`]; only an insert before a tree's first key changes a
+    /// first key without that, and only the first child's on every level,
+    /// which no search reads.
+    keys: Row<i64>,
 }
 
 /// A node's children, indexed and moved with bounds checks that abort
@@ -193,6 +202,7 @@ impl Inner {
         self.kids.shift(from, to, n);
         self.counts.shift(from, to, n);
         self.firsts.shift(from, to, n);
+        self.keys.shift(from, to, n);
     }
 
     /// Copies `n` children of `src` from `from` to `to` in this node.
@@ -200,6 +210,7 @@ impl Inner {
         self.kids.take(to, &src.kids, from, n);
         self.counts.take(to, &src.counts, from, n);
         self.firsts.take(to, &src.firsts, from, n);
+        self.keys.take(to, &src.keys, from, n);
     }
 }
 
@@ -308,6 +319,7 @@ impl Tree {
                         (&mut *p).kids[c] = kid;
                         (&mut *p).counts[c] = count;
                         (&mut *p).firsts[c] = first;
+                        (&mut *p).keys[c] = tr.key_of(first);
                         total += count;
                     }
                     (&mut *p).len = take;
@@ -388,6 +400,36 @@ impl Tree {
         }
     }
 
+    /// The first key of the leaf `l` for `i64` keys, else 0: what
+    /// [`Inner::keys`] holds for a child whose leftmost leaf is `l`.
+    ///
+    /// # Safety
+    /// `l` is a live leaf.
+    unsafe fn key_of(&self, l: *mut Leaf) -> i64 {
+        // SAFETY: the caller's contract; an `i64` key is at offset 0 of
+        // an entry, and the leaf holds one.
+        unsafe {
+            if self.i64_keys && (*l).len > 0 {
+                entry(l, self.es, 0).cast::<i64>().read_unaligned()
+            } else {
+                0
+            }
+        }
+    }
+
+    /// Records `first` as the leftmost leaf of the child `j` of `p`, with
+    /// its first key.
+    ///
+    /// # Safety
+    /// `p` is a live inner node; `first` a live leaf.
+    unsafe fn set_first(&self, p: *mut Inner, j: usize, first: *mut Leaf) {
+        // SAFETY: the caller's contract.
+        unsafe {
+            (&mut *p).firsts[j] = first;
+            (&mut *p).keys[j] = self.key_of(first);
+        }
+    }
+
     /// `cmp(a, b)`, read in place for `i64` keys.
     ///
     /// # Safety
@@ -416,22 +458,32 @@ impl Tree {
     /// `p` is a live inner node; `key` a key of the table's type.
     unsafe fn kid_for(&self, p: *const Inner, key: *const u8) -> usize {
         if self.i64_keys {
-            // SAFETY: the caller's contract; a leaf below an inner node is
-            // never empty, and its first key is an `i64` at offset 0.
+            // SAFETY: the caller's contract; `keys` holds each child's
+            // first key but the first's, which this never reads.
             unsafe {
                 let k = key.cast::<i64>().read_unaligned();
                 let p = &*p;
-                let firsts = p.firsts.0.as_ptr();
+                let keys = p.keys.0.as_ptr();
                 // Halving with no branch on the comparison: the last child
                 // whose first key is at most `k`, else the first.
                 let (mut base, mut n) = (0, p.len.min(FAN));
+                // A run of rising or falling keys goes to the last or the
+                // first child every time, which these branches predict and
+                // the selects below would not see (B-2026-11-25-31).
+                if n > 1 && *keys.add(n - 1) <= k {
+                    return n - 1;
+                }
+                if n > 1 && k < *keys.add(1) {
+                    return 0;
+                }
                 while n > 1 {
                     let half = n / 2;
                     // `base + n` never grows past the children, so this is one.
-                    let l = *firsts.add(base + half);
-                    if l.cast::<u8>().add(LEAF_AT).cast::<i64>().read() <= k {
-                        base += half;
-                    }
+                    // A select, not a branch: the comparison is a coin toss,
+                    // and a branch mispredicts on half the steps
+                    // (B-2026-11-25-31).
+                    let mid = base + half;
+                    base = std::hint::select_unpredictable(*keys.add(mid) <= k, mid, base);
                     n -= half;
                 }
                 return base;
@@ -468,14 +520,21 @@ impl Tree {
                     return Err(0);
                 }
                 let at = |i: usize| entry(l, es, i).cast::<i64>().read_unaligned();
+                // Past either end, as in `kid_for`.
+                if at(n - 1) < k {
+                    return Err(n);
+                }
+                if k < at(0) {
+                    return Err(0);
+                }
                 // The last entry whose key is below `k`, else the first,
                 // halving with no branch on the comparison.
                 let (mut base, mut m) = (0, n);
                 while m > 1 {
                     let half = m / 2;
-                    if at(base + half) < k {
-                        base += half;
-                    }
+                    // A select, as in `kid_for`.
+                    let mid = base + half;
+                    base = std::hint::select_unpredictable(at(mid) < k, mid, base);
                     m -= half;
                 }
                 let pos = base + usize::from(at(base) < k);
@@ -721,8 +780,8 @@ impl Tree {
                 (&mut *p).kids[1] = kid;
                 (&mut *p).counts[0] = self.len + 1 - count;
                 (&mut *p).counts[1] = count;
-                (&mut *p).firsts[0] = Self::first(old, self.height);
-                (&mut *p).firsts[1] = Self::first(kid, self.height);
+                self.set_first(p, 0, Self::first(old, self.height));
+                self.set_first(p, 1, Self::first(kid, self.height));
             }
             self.root = p.cast();
             self.height += 1;
@@ -841,8 +900,9 @@ impl Tree {
         // SAFETY: the caller's contract.
         unsafe {
             let n = (&mut *p).len;
+            let key = self.key_of(first);
             if n < FAN {
-                put_kid(p, at, kid, count, first);
+                put_kid(p, at, kid, count, first, key);
                 return None;
             }
             let r = new_inner();
@@ -853,9 +913,9 @@ impl Tree {
             rm.len = m;
             pm.len = mid;
             if at <= mid {
-                put_kid(p, at, kid, count, first);
+                put_kid(p, at, kid, count, first, key);
             } else {
-                put_kid(r, at - mid, kid, count, first);
+                put_kid(r, at - mid, kid, count, first, key);
             }
             let rm = &*r;
             let total = rm.counts.sum(0, rm.len);
@@ -940,7 +1000,7 @@ impl Tree {
                 (INNER_MIN, FAN)
             };
             if kid_len((&mut *p).kids[j]) >= min || (&mut *p).len < 2 {
-                (&mut *p).firsts[j] = Self::first((&mut *p).kids[j], level);
+                self.set_first(p, j, Self::first((&mut *p).kids[j], level));
                 return;
             }
             let a = if j + 1 < (&mut *p).len { j } else { j - 1 };
@@ -966,7 +1026,7 @@ impl Tree {
                 }
                 (&mut *p).counts[a] += (&mut *p).counts[b];
                 take_kid(p, b);
-                (&mut *p).firsts[a] = Self::first(ka, level);
+                self.set_first(p, a, Self::first(ka, level));
                 return;
             }
             // Even the two out.
@@ -1010,8 +1070,8 @@ impl Tree {
             };
             (&mut *p).counts[a] = (&mut *p).counts[a].wrapping_add_signed(moved);
             (&mut *p).counts[b] = (&mut *p).counts[b].wrapping_add_signed(-moved);
-            (&mut *p).firsts[a] = Self::first(ka, level);
-            (&mut *p).firsts[b] = Self::first(kb, level);
+            self.set_first(p, a, Self::first(ka, level));
+            self.set_first(p, b, Self::first(kb, level));
         }
     }
 
@@ -1045,6 +1105,27 @@ impl Tree {
     pub(super) fn height(&self) -> usize {
         self.height
     }
+
+    /// Whether every inner node's `keys` hold its children's first keys,
+    /// the first child's aside.
+    #[cfg(test)]
+    pub(super) fn keys_hold(&self) -> bool {
+        // SAFETY: every node under the root is live.
+        unsafe fn walk(t: &Tree, node: *mut u8, level: usize) -> bool {
+            if level == 0 {
+                return true;
+            }
+            // SAFETY: the caller's contract.
+            unsafe {
+                let p = &*node.cast::<Inner>();
+                (0..p.len).all(|j| {
+                    (j == 0 || p.keys[j] == t.key_of(p.firsts[j])) && walk(t, p.kids[j], level - 1)
+                })
+            }
+        }
+        // SAFETY: as above.
+        unsafe { walk(self, self.root, self.height) }
+    }
 }
 
 /// # Safety
@@ -1073,6 +1154,7 @@ fn new_inner() -> *mut Inner {
             kids: Row([std::ptr::null_mut(); FAN]),
             counts: Row([0; FAN]),
             firsts: Row([std::ptr::null_mut(); FAN]),
+            keys: Row([0; FAN]),
         })
     };
     p
@@ -1082,7 +1164,14 @@ fn new_inner() -> *mut Inner {
 ///
 /// # Safety
 /// `p` is a live inner node with fewer than [`FAN`] children; `at <= len`.
-unsafe fn put_kid(p: *mut Inner, at: usize, kid: *mut u8, count: usize, first: *mut Leaf) {
+unsafe fn put_kid(
+    p: *mut Inner,
+    at: usize,
+    kid: *mut u8,
+    count: usize,
+    first: *mut Leaf,
+    key: i64,
+) {
     // SAFETY: the caller's contract.
     unsafe {
         let p = &mut *p;
@@ -1091,6 +1180,7 @@ unsafe fn put_kid(p: *mut Inner, at: usize, kid: *mut u8, count: usize, first: *
         p.kids[at] = kid;
         p.counts[at] = count;
         p.firsts[at] = first;
+        p.keys[at] = key;
         p.len = n + 1;
     }
 }
@@ -1196,6 +1286,11 @@ mod tests {
             let check = |t: &T, model: &[i64], full: bool, r: u64| {
                 // SAFETY: a live table.
                 assert_eq!(unsafe { karac_mir_map_len(t.h) } as usize, model.len());
+                // SAFETY: a live table, in a tree.
+                assert!(
+                    !t.in_tree() || unsafe { (*(*t.h).tree).keys_hold() },
+                    "es {es} keys"
+                );
                 let n = model.len();
                 if full {
                     for (i, k) in model.iter().enumerate() {
