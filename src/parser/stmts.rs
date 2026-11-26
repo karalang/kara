@@ -1000,13 +1000,22 @@ impl super::Parser {
                 && crate::lints::LintLevel::from_attr_name(&attr.path[0]).is_some();
             if !is_lint_level {
                 let name = attr.path.join("::");
+                // A scoped arithmetic region is a deferred feature, not a
+                // misplaced attribute (B-2026-11-25-71).
+                let deferred = if matches!(name.as_str(), "wrapping" | "checked") {
+                    " Scoped `#[wrapping]` / `#[checked]` blocks are deferred \
+                     (docs/deferred.md § Scoped `#[wrapping]` / `#[checked]` \
+                     Arithmetic Regions)."
+                } else {
+                    ""
+                };
                 self.error_at(
                     &format!(
                         "error[E_ATTRIBUTE_NOT_VALID_ON_STATEMENT]: `#[{name}]` cannot \
                          apply to a statement — only the lint-level attributes \
                          `#[allow]`, `#[warn]`, `#[deny]` and `#[expect]` are \
                          recognised here. Move it onto the enclosing item if it \
-                         belongs there."
+                         belongs there.{deferred}"
                     ),
                     attr.span,
                 );

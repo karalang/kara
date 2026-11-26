@@ -2354,7 +2354,7 @@ fn out_of_range_int(text: String, radix: i64, sfx: own String) -> Token {
 fn non_ascii_ident_msg(c: char) -> String {
     let mut m = "non-ASCII identifier (containing '".to_string();
     m.push(c);
-    m.push_str("') is deferred to a future edition; identifiers must be ASCII in 0.8");
+    m.push_str("') is deferred to a future edition (docs/deferred.md § Non-ASCII Identifiers); identifiers must be ASCII in 0.8");
     m
 }
 

@@ -389,7 +389,8 @@ impl<'a> super::TypeChecker<'a> {
         };
         if args.len() != sig.params.len() {
             self.type_error(
-                self.arity_error_message(sig.params.len(), args.len(), Some(name)),
+                self.arity_error_message(sig.params.len(), args.len(), Some(name))
+                    + &spread_note(args),
                 *span,
                 TypeErrorKind::WrongNumberOfArgs,
             );
@@ -3969,7 +3970,8 @@ impl<'a> super::TypeChecker<'a> {
                         _ => None,
                     };
                     self.type_error(
-                        self.arity_error_message(params.len(), args.len(), defaulted_fn),
+                        self.arity_error_message(params.len(), args.len(), defaulted_fn)
+                            + &spread_note(args),
                         *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
@@ -5086,5 +5088,27 @@ fn collect_some_payloads<'e>(e: &'e Expr, out: &mut Vec<&'e Expr>) {
             out.push(&args[0].value);
         }
         _ => {}
+    }
+}
+
+/// A wrong-count call one of whose arguments is `..e` reads as call-site
+/// spread, a deferred feature, so its message says so (B-2026-11-25-71).
+fn spread_note(args: &[CallArg]) -> String {
+    let spreads = args.iter().any(|a| {
+        matches!(
+            &a.value.kind,
+            ExprKind::Range {
+                start: None,
+                end: Some(_),
+                inclusive: false
+            }
+        )
+    });
+    if spreads {
+        "; `..e` in an argument list is call-site spread, which is deferred \
+         (docs/deferred.md § Call-Site Spread) and not in 0.8: pass each value"
+            .to_string()
+    } else {
+        String::new()
     }
 }

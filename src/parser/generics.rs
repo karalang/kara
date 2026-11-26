@@ -232,6 +232,17 @@ impl super::Parser {
                     bounds: Vec::new(),
                     span: self.span_from(&ep_start),
                 });
+                // `with E: no writes(R)` bounds an effect variable, a deferred
+                // feature: say so rather than "Expected `]`, found `:`"
+                // (B-2026-11-25-71).
+                if self.check(&Token::Colon) {
+                    self.error(
+                        "an effect-variable bound (`with E: no writes(R)`) is deferred \
+                         (docs/deferred.md § Effect Variable Bounds (`with E: no writes(R)`)) \
+                         and not in 0.8; declare `with E` alone",
+                    );
+                    return None;
+                }
                 if !self.eat(&Token::Comma) {
                     break;
                 }

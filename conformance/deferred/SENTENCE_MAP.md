@@ -114,7 +114,7 @@ Corpus caveat: the corpus backends `__mir-run` and `__mir-llvm-run` do not apply
 | 2441 | #### `no_alloc` formatting | SUB |  | Part of “Project Profiles”; covered by that row. |
 | 2481 | Fallible-Allocation Mode | DEFERRED REFUSED |  | `[profile] panic_on_alloc_failure` codes E0264/E0265 are listed as deferred in explain; v1's `try_*` methods are library/collections.md. |
 | 2514 | Embedded-Profile Arithmetic | NO SURFACE |  | Needs the embedded profile. |
-| 2529 | Scoped `#[wrapping]` / `#[checked]` Arithmetic Regions | DEFERRED REFUSED |  | `#[wrapping] { }` is refused (E_ATTRIBUTE_NOT_VALID_ON_STATEMENT), with no deferred.md pointer. GAP (message). B-2026-11-25-71. |
+| 2529 | Scoped `#[wrapping]` / `#[checked]` Arithmetic Regions | DEFERRED REFUSED |  | `#[wrapping] { }` is refused (E_ATTRIBUTE_NOT_VALID_ON_STATEMENT), with no deferred.md pointer. FIXED: the refusal names this section (B-2026-11-25-71, tests/deferred_refusals_name_section_2026_11_26.rs). |
 | 2562 | Item-Level `#[cfg]` | SUBSET | cfg_refused_with_interim_target | Stated 0.8 subset holds: `#[cfg]` is refused (E0005) naming `#[target]` as the interim spelling. |
 | 2573 | Conditional Compilation Beyond Targets | NO SURFACE |  | Beyond `#[cfg]`; nothing to write. |
 | 2590 | `#[no_std]` / Bare Metal Support | DEFERRED REFUSED | no_std_refused | E_ATTRIBUTE_DEFERRED, naming this section (B-2026-11-25-61). |
@@ -128,9 +128,9 @@ Corpus caveat: the corpus backends `__mir-run` and `__mir-llvm-run` do not apply
 | 2691 | Module-Level Mutable State | DEFERRED REFUSED | module_cells_refused, module_level_mutable_state_refused, thread_local_refused, explain_module_cells_says_deferred | `let TABLE: LazyLock[..] = ..` is E_MODULE_LET on check, run and build, as design.md § Constants ('No mutable globals') says. The status line now says deferred and `karac explain E_LAZYLOCK_RUNTIME_CAPTURE` prints the deferred scope text. Only the corpus backends, which skip check, run it (B-2026-11-25-70). Review ruling 2026-11-26 (experimental only when `karac check` accepts it and it runs) applied. B-2026-11-25-65. |
 | 2839 | `#[repr(packed)]`, `#[repr(align(N))]`, `offset_of` | DEFERRED REFUSED | repr_packed_refused, repr_align_refused | E_REPR_DEFERRED, naming design.md § `#[repr]` (which points here). |
 | 2866 | #### Field Offsets: `offset_of[T](field)` | DEFERRED REFUSED | offset_of_not_lowered, explain_offset_of_says_deferred | `offset_of[P](b)` checks but no lane lowers it: E0516 'the expression kind `OffsetOf` is not lowered yet'. The E_OFFSET_OF_* refusals work (corpus/diagnostics). The status line now says deferred, as does `karac explain`. Review ruling 2026-11-26 (experimental only when `karac check` accepts it and it runs) applied. B-2026-11-25-65. |
-| 2952 | Bitfield Types | DEFERRED REFUSED | bitfield_refused | `u1`..`u63` are undefined types (E0104); `#[repr(C, bitfield)]` is not reached. GAP (message). B-2026-11-25-71. |
+| 2952 | Bitfield Types | DEFERRED REFUSED | bitfield_refused | `u1`..`u63` are undefined types (E0104); `#[repr(C, bitfield)]` is not reached. FIXED: the refusal names this section (B-2026-11-25-71, tests/deferred_refusals_name_section_2026_11_26.rs). |
 | 2974 | Volatile access, inline assembly, interrupts | DEFERRED |  | Volatile access, inline asm, interrupts: rowed by sub-entry. |
-| 2976 | #### Volatile Memory Access (MMIO) | DEFERRED REFUSED |  | No volatile methods on pointers (`read_volatile`: no method). GAP (message). B-2026-11-25-71. |
+| 2976 | #### Volatile Memory Access (MMIO) | DEFERRED REFUSED |  | Correction (2026-11-26): `read_volatile` / `write_volatile` on a raw pointer check and run (corpus/fixtures/codegen/numerics/test_e2e_volatile_read_write_roundtrip), and `VolatileCell` exists, with no line in design.md or the library pages: UNDECLARED, routed to review. The free `volatile_read` / `volatile_write` intrinsics are E_INTRINSIC_STDLIB_ONLY (B-2026-11-25-67). |
 | 3018 | #### Inline Assembly | DEFERRED REFUSED | inline_asm_refused | `asm` is a reserved word (E_RESERVED_KEYWORD). |
 | 3178 | #### Interrupt Handler ABI (`#[interrupt]`) | DEFERRED REFUSED | interrupt_attribute_refused | FIXED: `#[interrupt(..)]` is E_ATTRIBUTE_DEFERRED naming this section (it was accepted and did nothing). B-2026-11-25-61 / -66. |
 | 3259 | Codegen hints and linker control | DEFERRED |  | Rowed by sub-entry. |
@@ -171,10 +171,10 @@ Corpus caveat: the corpus backends `__mir-run` and `__mir-llvm-run` do not apply
 | 4595 | #### The alias tri-state — principle before algorithm | SUB |  | Part of “Parameterized Resources (opt-in finer granularity)”; covered by that row. |
 | 4659 | Effect Semver Rules | NO SURFACE |  | Needs effect groups (refused). |
 | 4708 | #### `stable` Modifier on Effect Groups | SUB |  | Part of “Effect Semver Rules”; covered by that row. |
-| 4716 | Effect Variable Bounds (`with E: no writes(R)`) | DEFERRED REFUSED | effect_variable_bound_refused | Parse error E0002 at the `:`. GAP (message). B-2026-11-25-71. |
+| 4716 | Effect Variable Bounds (`with E: no writes(R)`) | DEFERRED REFUSED | effect_variable_bound_refused | Parse error E0002 at the `:`. FIXED: the refusal names this section (B-2026-11-25-71, tests/deferred_refusals_name_section_2026_11_26.rs). |
 | 4726 | #### Effect Variable Bounds | SUB |  | Part of “Effect Variable Bounds (`with E: no writes(R)`)”; covered by that row. |
 | 4755 | Field-Level Effect Granularity for `sync struct` | NO SURFACE |  | Open design question. |
-| 4768 | Process Exit as an Effect (`exits`) | DEFERRED REFUSED | exits_effect_refused | E0403 'unknown effect' (and E0100). The message says effect groups are not in 0.8, not this section. GAP (message). B-2026-11-25-71. |
+| 4768 | Process Exit as an Effect (`exits`) | DEFERRED REFUSED | exits_effect_refused | E0403 'unknown effect' (and E0100). The message says effect groups are not in 0.8, not this section. FIXED: the refusal names this section (B-2026-11-25-71, tests/deferred_refusals_name_section_2026_11_26.rs). |
 | 4776 | Package Manifest Capability Declarations | NO SURFACE |  | Package-manager or audit tooling. |
 | 4791 | Effect Diff Tooling for Cross-Version `panics` Surfacing | NO SURFACE |  | Package-manager or audit tooling. |
 | 4806 | Effect-Row Verbosity Audit | NO SURFACE |  | Package-manager or audit tooling. |
@@ -309,7 +309,7 @@ Corpus caveat: the corpus backends `__mir-run` and `__mir-llvm-run` do not apply
 | 7365 | Tail-Call Optimization (`#[tailrec]`) | DEFERRED REFUSED | tailrec_refused | E_ATTRIBUTE_DEFERRED, naming this section (B-2026-11-25-61). |
 | 7390 | List Comprehensions | DEFERRED REFUSED | list_comprehension_refused | E0001 naming the iterator form; no section. Acceptable (the entry says it may never come). |
 | 7398 | Generators (`yield`) | DEFERRED REFUSED | yield_refused | `yield` and `gen` are reserved (E_RESERVED_KEYWORD). |
-| 7408 | `if let` Chains | DEFERRED REFUSED | if_let_chain_refused | E0001 'Kāra has no let-chains … nest the test'. No section. GAP (message). B-2026-11-25-71. |
+| 7408 | `if let` Chains | DEFERRED REFUSED | if_let_chain_refused | E0001 'Kāra has no let-chains … nest the test'. No section. FIXED: the refusal names this section (B-2026-11-25-71, tests/deferred_refusals_name_section_2026_11_26.rs). |
 | 7429 | Yielding Subscripts | NO SURFACE |  | Yielding subscripts: no syntax. |
 | 7454 | Try Blocks (`try { ... }`) | DEFERRED REFUSED | try_block_refused | E_TRY_BLOCK_NOT_IMPLEMENTED_YET with the section. |
 | 7499 | #### Implementing try blocks | SUB |  | Part of “Try Blocks (`try { ... }`)”; covered by that row. |
@@ -318,15 +318,15 @@ Corpus caveat: the corpus backends `__mir-run` and `__mir-llvm-run` do not apply
 | 7603 | Generic Associated Types (GATs) | EXPERIMENTAL | experimental_gat_runs, explain_gat_says_experimental | Runs on both lanes. |
 | 7659 | Type Alias `impl Trait` (TAIT) | DEFERRED REFUSED | tait_refused | E_TAIT_NOT_IMPLEMENTED_YET with the section. |
 | 7685 | #### Implementing TAIT | SUB |  | Part of “Type Alias `impl Trait` (TAIT)”; covered by that row. |
-| 7711 | Declared Variance Markers | DEFERRED REFUSED | variance_marker_refused | E_VARIANCE_USER_DECL_NOT_YET 'reserved for stdlib types in 0.8' (no section). GAP (message). B-2026-11-25-71. |
+| 7711 | Declared Variance Markers | DEFERRED REFUSED | variance_marker_refused | E_VARIANCE_USER_DECL_NOT_YET 'reserved for stdlib types in 0.8' (no section). FIXED: the refusal names this section (B-2026-11-25-71, tests/deferred_refusals_name_section_2026_11_26.rs). |
 | 7751 | Higher-Kinded Polymorphism and Phantom Variance | NO SURFACE |  |  |
 | 7757 | Units of Measure | DEFERRED REFUSED | units_of_measure_refused | No unit syntax: `f64<m>` is E0001 (Rust spelling). Nothing to refuse beyond that. |
-| 7781 | Homogeneous Varargs | DEFERRED REFUSED | homogeneous_varargs_refused | E0001 'Expected type, found `..`'. GAP (message). B-2026-11-25-71. |
+| 7781 | Homogeneous Varargs | DEFERRED REFUSED | homogeneous_varargs_refused | E0001 'Expected type, found `..`'. FIXED: the refusal names this section (B-2026-11-25-71, tests/deferred_refusals_name_section_2026_11_26.rs). |
 | 7800 | Heterogeneous Varargs / Variadic Generics | NO SURFACE |  |  |
-| 7823 | Call-Site Spread | DEFERRED REFUSED | call_site_spread_refused | `add(..t)` is E0202 (arity). GAP (message). B-2026-11-25-71. |
+| 7823 | Call-Site Spread | DEFERRED REFUSED | call_site_spread_refused | `add(..t)` is E0202 (arity). FIXED: the refusal names this section (B-2026-11-25-71, tests/deferred_refusals_name_section_2026_11_26.rs). |
 | 7838 | User-Defined Callable Types (`Call` trait / `apply`) | DEFERRED REFUSED | call_trait_refused | E0104. FIXED: names this section. |
 | 7867 | Struct Literal Type Prefix in Check Mode | NO SURFACE |  | Check-mode inference. |
-| 7881 | Non-ASCII Identifiers | DEFERRED REFUSED | non_ascii_identifier_refused | E0001 'deferred to a future edition'. No section. GAP (message, minor). B-2026-11-25-71. |
+| 7881 | Non-ASCII Identifiers | DEFERRED REFUSED | non_ascii_identifier_refused | E0001 'deferred to a future edition'. No section. FIXED: the refusal names this section (B-2026-11-25-71, tests/deferred_refusals_name_section_2026_11_26.rs). |
 | 7885 | `std.cli` — Argument Parsing | SUBSET |  | `std.cli` has its own import diagnostic naming deferred.md § std.cli (src/library_imports.rs). |
 | 7911 | `OrderedMap[K, V]` / `OrderedSet[T]` — Insertion-Ordered Collections | DEFERRED REFUSED | ordered_map_refused | E0100/E0104. FIXED: names this section. |
 | 7933 | Lookup by a Borrowed Form for User Key Types (`Borrow`) | NO SURFACE |  |  |

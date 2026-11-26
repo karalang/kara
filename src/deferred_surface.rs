@@ -133,9 +133,26 @@ fn quoted<'a>(message: &'a str, prefix: &str, close: char) -> Option<&'a str> {
     rest.find(close).map(|end| &rest[..end])
 }
 
+/// A sub-word integer type, `u1`-`u63` or `i1`-`i63` other than the 8-, 16-
+/// and 32-bit ones: a bitfield's field type (B-2026-11-25-71).
+fn is_bitfield_width(name: &str) -> bool {
+    let Some(digits) = name.strip_prefix('u').or_else(|| name.strip_prefix('i')) else {
+        return false;
+    };
+    if digits.is_empty() || digits.starts_with('0') || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return false;
+    }
+    matches!(digits.parse::<u32>(), Ok(n) if (1..64).contains(&n) && ![8, 16, 32].contains(&n))
+}
+
 /// The deferred.md section a refusal's subject belongs to, read off the
 /// opening words of the resolver's and typechecker's messages.
 fn section_for(message: &str) -> Option<&'static str> {
+    if let Some(name) = quoted(message, "undefined type '", '\'') {
+        if is_bitfield_width(name) {
+            return Some("Bitfield Types");
+        }
+    }
     for prefix in ["undefined name '", "undefined type '"] {
         if let Some(name) = quoted(message, prefix, '\'') {
             return NAMES.iter().find(|(n, _)| *n == name).map(|(_, s)| *s);
@@ -221,6 +238,8 @@ mod tests {
         );
         assert!(annotated("no method 'read_at' on type 'File'")
             .contains("§ Positional File I/O and Advisory Locking"));
+        assert!(annotated("undefined type 'u1'").contains("§ Bitfield Types"));
+        assert!(annotated("undefined type 'i63'").contains("§ Bitfield Types"));
     }
 
     #[test]
@@ -230,6 +249,10 @@ mod tests {
             "unknown module `std.nope`",
             "no method 'read_at' on type 'Vec'",
             "unknown item `uuid` in module `std.random`",
+            "undefined type 'u64x'",
+            "undefined type 'u128'",
+            "undefined type 'u08'",
+            "undefined name 'u1'",
         ] {
             assert_eq!(annotated(m), m);
         }

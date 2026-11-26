@@ -2014,7 +2014,7 @@ impl<'a> Lexer<'a> {
 
         if let Some(nc) = non_ascii_seen {
             return self.make_spanned(Token::Error(format!(
-                "non-ASCII identifier (containing '{nc}') is deferred to a future edition; identifiers must be ASCII in 0.8"
+                "non-ASCII identifier (containing '{nc}') is deferred to a future edition (docs/deferred.md § Non-ASCII Identifiers); identifiers must be ASCII in 0.8"
             )));
         }
 
@@ -2226,7 +2226,7 @@ impl<'a> Lexer<'a> {
                 break;
             }
             self.make_spanned(Token::Error(format!(
-                "non-ASCII identifier (containing '{cp}') is deferred to a future edition; identifiers must be ASCII in 0.8"
+                "non-ASCII identifier (containing '{cp}') is deferred to a future edition (docs/deferred.md § Non-ASCII Identifiers); identifiers must be ASCII in 0.8"
             )))
         } else {
             self.make_spanned(Token::Error(format!("Unexpected character: '{cp}'")))

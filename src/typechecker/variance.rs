@@ -342,7 +342,8 @@ impl<'a> super::TypeChecker<'a> {
             let span = p.variance_span.unwrap_or(p.span);
             let message = "error[E_VARIANCE_USER_DECL_NOT_YET]: variance declarations are \
                  reserved for stdlib types in 0.8; remove the marker — the parameter \
-                 will be invariant"
+                 will be invariant. User variance markers are deferred \
+                 (docs/deferred.md § Declared Variance Markers)"
                 .to_string();
             // The marker's own span: deleting it is the edit the message
             // names, and the parameter is then what it would be anyway.

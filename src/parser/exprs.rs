@@ -3037,7 +3037,8 @@ impl super::Parser {
                 "`while let` cannot be joined with `and`: Kāra has no let-chains, so the \
                  pattern is matched against the whole `.. and ..` condition; test the rest \
                  first thing in the body instead: \
-                 `while let P = v { if not (cond) { break; } .. }`",
+                 `while let P = v { if not (cond) { break; } .. }`. Let-chains are \
+                 deferred (docs/deferred.md § `if let` Chains)",
                 at,
             );
             let end = scrutinee.span.offset + scrutinee.span.length;
@@ -3062,7 +3063,8 @@ impl super::Parser {
         self.error_at(
             "`if let` cannot be joined with `and`: Kāra has no let-chains, so the \
              pattern is matched against the whole `.. and ..` condition; nest the \
-             test instead: `if let P = v { if cond { .. } }`",
+             test instead: `if let P = v { if cond { .. } }`. Let-chains are deferred \
+             (docs/deferred.md § `if let` Chains)",
             at,
         );
         if !fixable {

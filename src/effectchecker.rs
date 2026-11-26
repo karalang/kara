@@ -3697,8 +3697,15 @@ impl<'a> EffectChecker<'a> {
                             message: format!(
                                 "unknown effect '{}': a `with` clause names verbs on \
                                  resources, such as `reads(Db)`, and effect groups are not \
-                                 in 0.8",
-                                name
+                                 in 0.8{}",
+                                name,
+                                if name == "exits" {
+                                    // B-2026-11-25-71: a scheduled effect, not a typo.
+                                    "; `exits` is deferred (docs/deferred.md § Process \
+                                     Exit as an Effect (`exits`))"
+                                } else {
+                                    ""
+                                }
                             ),
                             span: effects.span,
                             kind: EffectErrorKind::UndefinedEffectGroup,

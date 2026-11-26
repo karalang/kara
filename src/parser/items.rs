@@ -2300,6 +2300,19 @@ impl super::Parser {
             )
             && self.eat_kw("own")
             || misplaced_own;
+        // `xs: ..T` is a homogeneous variadic parameter, a deferred feature:
+        // say so instead of "Expected type, found `..`" (B-2026-11-25-71),
+        // and read the element type so the rest of the list parses.
+        if matches!(self.peek_token_ref_at(0), Token::DotDot) {
+            let at = self.current_span();
+            self.error_at(
+                "a variadic parameter (`xs: ..T`) is deferred (docs/deferred.md § \
+                 Homogeneous Varargs) and not in 0.8; take a `Slice[T]` or `Vec[T]` \
+                 instead",
+                at,
+            );
+            self.advance();
+        }
         let ty = self.parse_type();
         self.frozen_ok = false;
         self.escaping_ok = false;
