@@ -59,8 +59,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 780 |
-| false-positive | 394 |
-| missing-feature | 266 |
+| false-positive | 395 |
+| missing-feature | 267 |
 | perf | 205 |
 | other | 157 |
 | soundness | 135 |
@@ -76,12 +76,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 951 |
+| typecheck | 952 |
 | mir | 346 |
 | mir-llvm | 336 |
 | cli | 320 |
 | parser | 165 |
-| ownership | 140 |
+| ownership | 141 |
 | runtime | 116 |
 | interp | 114 |
 | effect | 70 |
@@ -140,6 +140,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-67 | 2026-11-26 | interp+mir-llvm | medium | The deprecated `String.slice(a, b)` checks neither bounds nor code-point boundaries: `"héllo".slice(1, 2)` gives a `Str` holding half of `é` (invalid UTF-8), and `slice(2, 9)` past the end clamps, where `s[a..b]` panics on both | — |
 | B-2026-11-26-68 | 2026-11-26 | typecheck | medium | A trait impl on a const-generic `Array[T, N]` never resolves: `impl[T: Tally, const N: i64] Tally for Array[T, N]` then `a.tally()` on an `Array[i64, 3]` is refused E0236 "no method 'tally' on type 'Array'" | — |
 | B-2026-11-26-69 | 2026-11-26 | typecheck+runtime | low | `Array[T, N]` has no `Serialize` / `Deserialize`: the ruling is a JSON array of `N` elements, read back from exactly `N` with an error naming the expected and actual length, nested arrays alike; B-2026-11-25-49 refuses the field at the derive until then | — |
+| B-2026-11-26-70 | 2026-11-26 | ownership | medium | Native methods' argument modes disagree with collections.md: `a.union(b)` (and `intersection` / `difference`, on `Set` and `SortedSet`) and `a.cmp(b)` on `Vec` refuse a bare parameter as `b` ('cannot give away parameter'), though the same call with a local leaves `b` usable; `m.floor(k)` (`ceiling`, `lower`, `higher`) and `v.fill(x)` move their argument, though the docs give `key: K` / `val: T` | — |
+| B-2026-11-26-71 | 2026-11-26 | typecheck | low | Remainder of B-2026-11-26-17: built-in methods no family covers are still refused as values: those taking a closure (`Vec.sort_by`, `sort_by_key`, `VecDeque.retain`, `Map.merge`, `String.sorted_by`), giving a mutable view or taking the receiver (`iter_mut`, `split_at_mut`, `into_iter`), and `entry`, `get_or`, `try_insert`, `try_reserve`, `to_cstring`, `slice`, `sorted`, `concat`, `try_into_array`, `clone_from_slice`, `copy_from_slice`, `get_unchecked`, `VecDeque.extend` and the containers' `to_string` | — |
 
 ### Relocated
 
