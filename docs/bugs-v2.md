@@ -62,7 +62,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | false-positive | 399 |
 | missing-feature | 268 |
 | perf | 206 |
-| other | 158 |
+| other | 159 |
 | soundness | 137 |
 | miscompile | 111 |
 | run-vs-build | 80 |
@@ -78,12 +78,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 962 |
 | mir | 348 |
-| mir-llvm | 338 |
+| mir-llvm | 339 |
 | cli | 323 |
 | parser | 165 |
 | ownership | 146 |
-| interp | 116 |
-| runtime | 116 |
+| interp | 117 |
+| runtime | 117 |
 | effect | 70 |
 | resolver | 59 |
 | other | 56 |
@@ -129,6 +129,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-89 | 2026-11-26 | ownership | high | A method with a `self` receiver that returns a closure holding a local closure over another bare parameter (`fn mk(self, pre: String) -> Fn(String) -> String { let c = || pre.clone(); |s| f"{c()}{s}" }`) is accepted, and a caller passing a temporary reads freed memory | — |
 | B-2026-11-26-92 | 2026-11-26 | cli | low | `karac query affected-by` never lists a test: its `tests` array is empty for every seed, because it counts only `test_*`-named functions in a `_test.kara` file and v1 tests are `test "name" { }` blocks | — |
 | B-2026-11-26-93 | 2026-11-26 | interp | low | `std.runtime.list_tasks()` lists no suspended task under `karac run --interp`, where `karac run` and `karac build` list the task suspended on its `recv` | — |
+| B-2026-11-26-94 | 2026-11-26 | interp+mir-llvm+runtime | low | The HTTP server answers 400 to a request whose header value holds a byte that is not UTF-8 (obs-text such as Latin-1 `caf\xe9`), which RFC 9110 §5.5 allows and io.md does not list among its refusals | — |
 
 ### Relocated
 

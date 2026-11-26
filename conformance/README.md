@@ -13,6 +13,7 @@ compiled. Both must give the expected output.
 | `encoding.py` | encoding.md | Python's `base64`, `urllib.parse`, and the page's own rules where Python is laxer (non-canonical Base64, whitespace in hex) |
 | `crypto.py` | crypto.md | FIPS 180-4, RFC 4231, `hashlib`, `hmac`; the streaming types against the one-shot functions for random splits |
 | `regex.py` | regex.md | The Rust `regex` crate the page names, at the version Cargo.lock pins (conformance/regex_oracle, built offline on first use): random patterns with groups, names, classes, repetition, anchors and flags, and invalid ones, through every method (compile, is_match, find, find_all, split, replace and replace_all with every `$` form, captures, captures_all, get, name, len, escape) on multibyte text |
+| `http_server_fuzz.py` | io.md HTTP server | h11 0.16.0 (pinned; offline) as a strict RFC 9112 reader: raw requests (malformed request lines, header folding, duplicate and malformed `Content-Length`, transfer codings, chunked bodies with extensions and trailers, an over-long body, pipelining) and random mutations of them, each request the handler is given echoed and compared with h11's parse, every refusal required to be a 4xx/5xx that closes; a health request after each input catches a crash; build and ASan, the server ended through `exit(0)` so LSan reports. Differences RFC 9112 or the page leave to the server are reported, not failed; open rows are listed in `KNOWN` |
 | `json_suite.py` | json.md | JSONTestSuite's `y_`/`n_`/`i_` files (`JSONTESTSUITE=<checkout>`); `stringify` against Python's parse laid out as serde_json 1.0.149 writes it; random `f64` bit patterns round-tripped |
 | `ct_timing.py` | crypto.md, secret.md | `constant_time_eq` and `Secret.ct_eq` timed on a first-byte vs last-byte difference, compiled only, with `==` as the control that shows the instrument sees an early exit |
 | `channel_model.py` | concurrency.md | Random single-task channel scripts against a model of the page's rules, the model itself checked against Go's buffered channels (`go run`) on every script Go can express |
@@ -49,6 +50,7 @@ each producer's messages arrive in its own order.
 python3 conformance/encoding.py --seed 1      # random cases; any seed
 python3 conformance/crypto.py --seed 1
 python3 conformance/regex.py --seed 1        # needs cargo for its oracle
+python3 conformance/http_server_fuzz.py --seed 1   # needs h11 0.16.0 (pip install h11==0.16.0)
 JSONTESTSUITE=../JSONTestSuite python3 conformance/json_suite.py --seed 1
 python3 conformance/ct_timing.py
 python3 conformance/channel_model.py --seed 1
