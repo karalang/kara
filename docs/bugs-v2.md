@@ -65,7 +65,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | other | 157 |
 | soundness | 135 |
 | miscompile | 110 |
-| run-vs-build | 78 |
+| run-vs-build | 79 |
 | crash | 71 |
 | codegen-gap | 47 |
 | use-after-free | 13 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 960 |
+| typecheck | 961 |
 | mir | 348 |
 | mir-llvm | 337 |
 | cli | 321 |
@@ -130,6 +130,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-82 | 2026-11-26 | typecheck | low | The fix for `a + b.as_str()` (a `String` plus a `Str`, as Rust writes it) appends `.to_string()`, giving `a + b.as_str().to_string()`, a view copied back into a new `String`, where `a + ref b` checks with no copy and is what `karac fix` makes of Rust's `a + &b` | — |
 | B-2026-11-26-83 | 2026-11-26 | typecheck | low | `Ok(Array.from_fn(n, f))` (or `Some(..)`) where the expected type is `Result[Array[T, N], E]` is refused "Array.from_fn needs the array's length": the variant constructor does not hand its payload slot's `Array[T, N]` to `from_fn` | — |
 | B-2026-11-26-84 | 2026-11-26 | typecheck | low | E0208 "'+' on 'String' requires a 'String' right operand, found 'Str'" puts its caret under the LEFT operand: `a + s[1..]` underlines `a`, and `s[..k].to_string() + "1" + s[k + 1..]` underlines `s[..k].to_string() + "1"`, while the fault and the fix are on the right | — |
+| B-2026-11-26-85 | 2026-11-26 | typecheck | high | A table lookup by a tuple needle narrowed unchecked: `given.contains((city, next))` with `city: i64` on a `Set[(i32, i32)]` passed check, and the compiled lanes read the `i64` as an `i32` and found nothing (`1 1 0 0 0 0 0`) where the interpreter answered right (`3 2 0 1 0 49999 49999`) | — |
 
 ### Relocated
 
