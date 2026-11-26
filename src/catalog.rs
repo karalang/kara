@@ -6,7 +6,7 @@
 //! per line) so downstream consumers (LLM agents, IDE plugins, doc
 //! generators) can stream-parse without buffering the whole surface.
 //!
-//! Phase-5 line 643 / `docs/deferred.md § Signature Catalog`.
+//! Phase-5 line 643 / `docs/design.md § karac catalog`.
 //!
 //! Public surface only — items whose visibility is `Default` or
 //! `Private` are skipped (their inferred reported-tier effect rows
@@ -643,7 +643,7 @@ fn render_params_json(params: &[Param]) -> String {
             let name = p.name().unwrap_or("_");
             write_kv(&mut s, "name", &json_string(name));
             s.push(',');
-            let (mode, inner) = param_mode_and_inner(&p.ty);
+            let (mode, inner) = param_mode_and_inner(p);
             write_kv(&mut s, "mode", &json_string(mode));
             s.push(',');
             write_kv(&mut s, "ty", &json_string(&inner));
@@ -848,12 +848,18 @@ fn render_where_json(wc: &WhereClause) -> String {
 
 // ── Param mode classification ───────────────────────────────────
 
-fn param_mode_and_inner(ty: &TypeExpr) -> (&'static str, String) {
+/// The declared mode, as `karac explain` and `karac query ownership`
+/// report it: a bare `T` borrows (D5), so it is `ref`, the same as the
+/// redundant `ref T`; only a written `own T` is `own` (B-2026-11-26-80).
+fn param_mode_and_inner(p: &Param) -> (&'static str, String) {
+    let ty = &p.ty;
     match &ty.kind {
         TypeKind::Ref(inner) => ("ref", render_type_expr(inner)),
         TypeKind::MutRef(inner) => ("mut ref", render_type_expr(inner)),
         TypeKind::MutSlice(inner) => ("mut slice", format!("Slice[{}]", render_type_expr(inner))),
-        _ => ("own", render_type_expr(ty)),
+        _ if p.is_own => ("own", render_type_expr(ty)),
+        _ if p.is_frozen => ("frozen", render_type_expr(ty)),
+        _ => ("ref", render_type_expr(ty)),
     }
 }
 
@@ -948,7 +954,7 @@ mod tests {
         assert!(line.contains("\"kind\":\"fn\""), "got: {line}");
         assert!(line.contains("\"name\":\"add\""), "got: {line}");
         assert!(
-            line.contains("\"params\":[{\"name\":\"x\",\"mode\":\"own\",\"ty\":\"i64\"},{\"name\":\"y\",\"mode\":\"own\",\"ty\":\"i64\"}]"),
+            line.contains("\"params\":[{\"name\":\"x\",\"mode\":\"ref\",\"ty\":\"i64\"},{\"name\":\"y\",\"mode\":\"ref\",\"ty\":\"i64\"}]"),
             "got: {line}"
         );
         assert!(line.contains("\"return_type\":\"i64\""), "got: {line}");
