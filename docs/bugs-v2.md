@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 783 |
-| false-positive | 397 |
+| false-positive | 398 |
 | missing-feature | 267 |
 | perf | 205 |
 | other | 157 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 955 |
+| typecheck | 956 |
 | mir | 348 |
 | mir-llvm | 336 |
 | cli | 320 |
@@ -2378,6 +2378,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-66 | typecheck+mir | medium | `Some` / `Ok` / `Err` named as a function value (`parse_message(raw).map(Some)`) passed `karac check` and failed to build with "a call to this functi… | ba41739764 |
 | B-2026-11-26-67 | interp+mir-llvm | medium | The deprecated `String.slice(a, b)` checks neither bounds nor code-point boundaries: `"héllo".slice(1, 2)` gives a `Str` holding half of `é` (invalid… | d9f4226b4b |
 | B-2026-11-26-68 | typecheck | medium | A trait impl on a const-generic `Array[T, N]` never resolves: `impl[T: Tally, const N: i64] Tally for Array[T, N]` then `a.tally()` on an `Array[i64,… | 06de4537e8 |
+| B-2026-11-26-78 | typecheck | low | `let w: (Vec[i32], i64) = ([1, 2].to_vec(), 3)` is refused as a `(Vec[i64], i64)`, with advice to annotate the binding that already is and no fix, th… | a648c7a471 |
 
 </details>
 
