@@ -654,7 +654,7 @@ It applies only where the compiler proves all of that. In particular, it does no
 
 Pin: `par_error_runs_siblings`, `par_early_exit_cancels_later` (B-2026-11-07-38). `karac` checks the branches' results as they join, in source order, so it cancels the later branches once every branch before the exiting one has finished; §11.9's timing freedom allows that delay.
 
-**The M4a rules (§11.8–§11.12).** Decided 2026-10-24: Gowtham chose teardown at the wait for cancellation and opt-in isolating groups for panics, and the rest are review-thread rulings (`review/m4a-spec-draft.md` in the shared folder). Each rule takes effect when its M4 plan item lands (`review/m4-plan-2026-10-24.md`): §11.8 with items 2–4, §11.9 and §11.10 with item 5, §11.11 with item 6 and §11.12 with item 9. Until then `karac` cancels nothing, and every panic ends the process. Each rule gets its pin in `corpus/core/` when it lands.
+**The M4a rules (§11.8–§11.12).** Decided 2026-10-24: Gowtham chose teardown at the wait for cancellation and opt-in isolating groups for panics, and the rest are review-thread rulings (`review/m4a-spec-draft.md` in the shared folder). Each rule took effect when its M4 plan item landed (`review/m4-plan-2026-10-24.md`): §11.8 with items 2–4, §11.9 and §11.10 with item 5, §11.11 with item 6 and §11.12 with item 9. All five are in v1.
 
 **11.8 Waiting: which calls suspend a task.**
 - Every program runs as tasks. `main` is the root task, and `par {}` branches, `par for` iterations and `TaskGroup.spawn` closures are tasks.
@@ -687,7 +687,7 @@ Pin: `par_error_runs_siblings`, `par_early_exit_cancels_later` (B-2026-11-07-38)
 - Deadlines nest, and the earliest deadline covering a wait is the one that fires.
 
 **11.11 `select`.**
-- The syntax and meaning are as in deferred.md § `select` Across Channels. Arms are `recv`, `send` or `after(d)`, with an optional `default`. The first arm to become ready runs, and the block's value is that arm's value.
+- The syntax is [design.md § `select`](design.md#select). Arms are `recv`, `send` or `after(d)`, with an optional `default`. The first arm to become ready runs, and the block's value is that arm's value.
 - Each arm's pattern is irrefutable, as in `let`. It binds the operation's own result: `Option[T]` for `recv`, `Result[(), SendError[T]]` for `send`, `()` for `after`. The channel, value and duration expressions are evaluated once, in source order, when the `select` is entered, and `after(d)` counts from then.
 - **Choosing an arm performs its operation.** The arm that runs has received or sent, and no other arm has. A send arm that is not chosen still owns its value, which drops as the `select` ends. A closed channel makes its arm ready: `recv` gives `None` and `send` gives `Err(SendError.Closed(v))`, as the plain calls do.
 - **When several arms are ready at once, the source-first ready arm wins.** That is deterministic, unlike Go's random choice. The fairness cost is accepted: order the arms to suit.

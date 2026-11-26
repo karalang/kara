@@ -1,4 +1,4 @@
-//! B-2026-11-26-80: `karac catalog` reports a parameter's DECLARED mode as
+//! B-2026-11-26-91: `karac catalog` reports a parameter's DECLARED mode as
 //! design.md §7 reads it, the same as `karac explain` and `karac query
 //! ownership`: a bare `x: T` borrows, so it is `ref`; only a written `own T`
 //! is `own`. Before the fix every bare parameter catalogued as `own`, the

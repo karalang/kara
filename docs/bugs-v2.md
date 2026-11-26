@@ -60,12 +60,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 788 |
 | false-positive | 399 |
-| missing-feature | 267 |
+| missing-feature | 268 |
 | perf | 206 |
-| other | 157 |
+| other | 158 |
 | soundness | 137 |
 | miscompile | 111 |
-| run-vs-build | 79 |
+| run-vs-build | 80 |
 | crash | 71 |
 | codegen-gap | 47 |
 | use-after-free | 13 |
@@ -79,11 +79,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 962 |
 | mir | 348 |
 | mir-llvm | 338 |
-| cli | 321 |
+| cli | 323 |
 | parser | 165 |
 | ownership | 146 |
+| interp | 116 |
 | runtime | 116 |
-| interp | 115 |
 | effect | 70 |
 | resolver | 59 |
 | other | 56 |
@@ -130,6 +130,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-86 | 2026-11-26 | typecheck | low | `f = g` with `f: Vec[i32]` and `g = Vec.filled(n, f[0] + size)`, `size` a bare `let size = 0` literal, is refused "expected 'Vec[i32]', found 'Vec[i64]'" with no fix, where annotating `g` makes check trace the fill to `size` and offer the machine fix `size: i32` | — |
 | B-2026-11-26-87 | 2026-11-26 | mir-llvm | medium | Compiled `Vector[i8, N]` lane division `MIN / -1` and `MIN % -1` print garbage (`karac run` 784 and 1, `karac build` 0 and 0) where the spec's wrap gives -128 and 0, which the interpreter prints: the lanes lower to a plain `sdiv` / `srem`, whose overflow LLVM leaves undefined | — |
 | B-2026-11-26-89 | 2026-11-26 | ownership | high | A method with a `self` receiver that returns a closure holding a local closure over another bare parameter (`fn mk(self, pre: String) -> Fn(String) -> String { let c = || pre.clone(); |s| f"{c()}{s}" }`) is accepted, and a caller passing a temporary reads freed memory | — |
+| B-2026-11-26-91 | 2026-11-26 | cli | low | `karac catalog` reports a bare parameter `x: T` with mode `own`, where design.md §7, `karac explain` and `karac query ownership` all read it as borrowed (`ref`) | — |
+| B-2026-11-26-92 | 2026-11-26 | cli | low | `karac query affected-by` never lists a test: its `tests` array is empty for every seed, because it counts only `test_*`-named functions in a `_test.kara` file and v1 tests are `test "name" { }` blocks | — |
+| B-2026-11-26-93 | 2026-11-26 | interp | low | `std.runtime.list_tasks()` lists no suspended task under `karac run --interp`, where `karac run` and `karac build` list the task suspended on its `recv` | — |
 
 ### Relocated
 

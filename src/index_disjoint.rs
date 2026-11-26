@@ -3,8 +3,7 @@
 //!
 //! This is sub-slice 2 of *Auto-parallel loops over provably-disjoint indexed
 //! writes* (`docs/implementation_checklist/phase-6-runtime.md`; design in
-//! `docs/deferred.md § Auto-Parallel Loops over Provably-Disjoint Indexed
-//! Writes`). It answers exactly one question about one loop:
+//! `docs/design.md § Automatic parallelism`). It answers exactly one question about one loop:
 //!
 //! > For an outer `for v in lo..hi`, does every iteration of `v` write each
 //! > target collection only inside a **contiguous range that depends on `v`

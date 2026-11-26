@@ -17,7 +17,7 @@ Corpus caveat: the corpus backends `__mir-run` and `__mir-llvm-run` do not apply
 | Line | Entry | Status | Cell(s) | Note |
 |---|---|---|---|---|
 | 28 | ## M4a services | TRACK |  | Track summary; its features are rowed below. |
-| 32 | Execution Effects (`blocks` / `suspends`) | SHIPPED | undeclared_suspends_clause_accepted | `suspends` is a v1 execution effect in design.md §12 (table at the `blocks` row: 'the second execution effect'), and `with suspends` is accepted and runs. design.md § Not in v1 ("Coroutines and `suspends` … M4a") says the opposite: a design.md-internal contradiction, routed to review. The entry's placement design (coroutines, state machines) has no 0.8 surface. |
+| 32 | Execution Effects (`blocks` / `suspends`) | SHIPPED | undeclared_suspends_clause_accepted | `suspends` is a v1 execution effect in design.md §12 (table at the `blocks` row: 'the second execution effect'), and `with suspends` is accepted and runs. design.md § Not in v1 ("Coroutines and `suspends` … M4a") says the opposite: a design.md-internal contradiction, routed to review. The entry's placement design (coroutines, state machines) has no 0.8 surface. FIXED: design.md no longer lists `suspends`, `select` or cancellation as deferred (review rule 4). |
 | 62 | #### Execution Effect Inference | NO SURFACE |  | Inference design for `suspends`; the inferred effect is not reported for a primitive in 0.8. |
 | 97 | Async I/O in Practice | NO SURFACE |  | Explanatory: what non-blocking I/O looks like; no new syntax (no `async`, no `await`). `await` is a reserved word: await_refused. |
 | 158 | Runtime Phases | NO SURFACE |  | Runtime staging (event loop, work stealing); not observable from a 0.8 program. |
@@ -27,19 +27,19 @@ Corpus caveat: the corpus backends `__mir-run` and `__mir-llvm-run` do not apply
 | 291 | #### Debugger Contract Extension for Parked Tasks | SUB |  | Part of “Network Event Loop and State-Machine Transform”; covered by that row. |
 | 328 | #### FFI Across Yield Points | SUB |  | Part of “Network Event Loop and State-Machine Transform”; covered by that row. |
 | 372 | #### Drop Ordering Across Yield Points | SUB |  | Part of “Network Event Loop and State-Machine Transform”; covered by that row. |
-| 412 | #### Cooperative Cancellation | SHIPPED |  | Cooperative cancellation: design.md § Not in v1 (From the services track) says cancellation, deadlines and isolating groups are specified in core-semantics.md §11.8–§11.12, so this section is superseded by v1 text. |
+| 412 | #### Cooperative Cancellation | SHIPPED |  | Cooperative cancellation: design.md § Not in v1 (From the services track) says cancellation, deadlines and isolating groups are specified in core-semantics.md §11.8–§11.12, so this section is superseded by v1 text. MOVED (review rule 4, 2026-11-26): core-semantics §11.9 and design.md § Failure; deferred.md keeps a pointer. |
 | 426 | #### Scheduler-layer concerns and minimum invariants | SUB |  | Part of “Network Event Loop and State-Machine Transform”; covered by that row. |
 | 443 | Full-Hybrid State-Machine Transform (Arbitrary `suspends` Functions) | NO SURFACE |  | Compiler strategy (state machine for every `suspends` fn). |
-| 455 | `select` Across Channels | SHIPPED | select_shipped_in_v1 | `select` runs in 0.8 on both lanes and design.md § From the services track says it is in core-semantics.md §11.8–§11.12. Out of date: move to design.md (or reduce to a pointer). |
+| 455 | `select` Across Channels | SHIPPED | select_shipped_in_v1 | `select` runs in 0.8 on both lanes and design.md § From the services track says it is in core-semantics.md §11.8–§11.12. Out of date: move to design.md (or reduce to a pointer). MOVED (review rule 4, 2026-11-26): design.md § `select` (with core-semantics §11.11); deferred.md keeps a pointer. |
 | 478 | Channel Combinators | DEFERRED REFUSED |  | No combinator names in 0.8 (`merge`, `fan_in`, ... are undefined names). Refused generically: E0100 with no deferred.md pointer (names too generic to table). |
 | 497 | Par-Region Saturation Strategy Configuration | NO SURFACE |  | Runtime configuration knob; no 0.8 surface. |
 | 509 | Cross-task `?` Propagation | NO SURFACE |  | No syntax: a task's `Err` reaches its joiner (v1). |
 | 513 | Unstructured `spawn` | DEFERRED REFUSED | unstructured_spawn_refused | Free `spawn` is E0520, naming core-semantics §11.1. Every user lane refuses it. |
 | 519 | Provider-scoped stored callbacks | NO SURFACE |  | A later relaxation of core-semantics §14.5; today's refusal is that section's own rule (pinned in corpus/core). |
 | 523 | Provider-Rooted Resources (trait-based injection) | SHIPPED |  | Self-declared superseded (2026-10-20): providers are core-semantics §14. Keep or cut the historical text. |
-| 659 | `providers { } in { }` Block (multi-provider bootstrapping) | SHIPPED | providers_block_shipped_in_v1 | `providers { } in { }` runs in 0.8; design.md § Effects ("Providers (`effect resource R: Trait`, `with_provider`, `providers {} in {}`, `#[with_provider]`) are in v1"). Out of date. |
-| 731 | Deterministic Replay via Provider Injection | SHIPPED |  | `#[with_provider]` on a test is v1 (design.md §14 `#[with_provider(R, e)]`). Out of date. FIXED: `#[with_provider(..)]` on a plain `fn` is E_TEST_ATTR_INVALID_TARGET, as `#[test]` is (with_provider_on_fn_refused). B-2026-11-25-61 / -66. |
-| 743 | Test Attributes for Live and Substituted Resources | SHIPPED |  | `#[test(requires: [R, ..])]` is v1 (design.md §14). Out of date. |
+| 659 | `providers { } in { }` Block (multi-provider bootstrapping) | SHIPPED | providers_block_shipped_in_v1 | `providers { } in { }` runs in 0.8; design.md § Effects ("Providers (`effect resource R: Trait`, `with_provider`, `providers {} in {}`, `#[with_provider]`) are in v1"). Out of date. MOVED (review rule 4, 2026-11-26): core-semantics §14.8; deferred.md keeps a pointer. |
+| 731 | Deterministic Replay via Provider Injection | SHIPPED |  | `#[with_provider]` on a test is v1 (design.md §14 `#[with_provider(R, e)]`). Out of date. FIXED: `#[with_provider(..)]` on a plain `fn` is E_TEST_ATTR_INVALID_TARGET, as `#[test]` is (with_provider_on_fn_refused). B-2026-11-25-61 / -66. MOVED (review rule 4, 2026-11-26): design.md § Test attributes; deferred.md keeps a pointer. |
+| 743 | Test Attributes for Live and Substituted Resources | SHIPPED |  | `#[test(requires: [R, ..])]` is v1 (design.md §14). Out of date. MOVED (review rule 4, 2026-11-26): design.md § Test attributes and § Runner output; deferred.md keeps a pointer. |
 | 800 | Diagnostics and Runtime Reports for Services | NO SURFACE |  | Reports that come with the track (traces exclude Cancelled, provider stack in panic record). |
 | 809 | Effect Variables for Stored Callbacks | SHIPPED |  | Self-declared: specified for v1 in design.md § Effect variables. |
 | 813 | Effect Groups and Composition | DEFERRED REFUSED | effect_group_refused | E_DEFERRED_EFFECT_GROUP with the section. |
@@ -62,15 +62,15 @@ Corpus caveat: the corpus backends `__mir-run` and `__mir-llvm-run` do not apply
 | 1096 | Full-Stack Server Web Framework (Django / Rails / Spring Boot / Phoenix class) | NO SURFACE |  | Library or runtime work with no 0.8 name. |
 | 1133 | Stdlib and Ecosystem Security Conventions | NO SURFACE |  | Conventions for later stdlib work. |
 | 1149 | ## M4b auto-par | TRACK |  | Track summary. design.md's own track table says M4b comes before v1, and `seq {}` runs in 0.8 (probe). |
-| 1155 | Feature 5: Auto-Concurrency via Effect Analysis | SHIPPED |  | Auto-par is on by default in `karac build` (kara 72ce9e026c, per kara-katas CLAUDE.md) and `karac query concurrency` reports its groups. The 'Feature 5' design describes 0.8 behaviour: candidate to move. |
+| 1155 | Feature 5: Auto-Concurrency via Effect Analysis | SHIPPED |  | Auto-par is on by default in `karac build` (kara 72ce9e026c, per kara-katas CLAUDE.md) and `karac query concurrency` reports its groups. The 'Feature 5' design describes 0.8 behaviour: candidate to move. MOVED (review rule 4, 2026-11-26): design.md § Automatic parallelism; the optimization-tier rationale stays; deferred.md keeps a pointer. |
 | 1233 | Resource-Modeling Friction Lints | NO SURFACE |  | Advisory lints not yet written. |
-| 1241 | Auto-Parallel Loops over Provably-Disjoint Indexed Writes | SHIPPED |  | Disjoint indexed-write loops fan out in 0.8 (query concurrency reports `disjoint_write` loops). |
+| 1241 | Auto-Parallel Loops over Provably-Disjoint Indexed Writes | SHIPPED |  | Disjoint indexed-write loops fan out in 0.8 (query concurrency reports `disjoint_write` loops). MOVED (review rule 4, 2026-11-26): design.md § Automatic parallelism; the differential-harness gate stays; deferred.md keeps a pointer. |
 | 1266 | Composition with SIMD | NO SURFACE |  | Composition rationale. |
 | 1277 | Cost Model | NO SURFACE |  | Cost model deliberately unspecified. |
 | 1295 | Runtime Work Estimate for Auto-Par Groups in Hot Bodies | NO SURFACE |  | Future runtime estimate. |
 | 1303 | Determinism Contract | SHIPPED |  | Self-declared: v1 contract is design.md §13; this restates it for auto-par. |
 | 1312 | Auto-Parallel Regions and Cleanup | NO SURFACE |  | defer/errdefer join barrier; not separately observable from a program (the effect is invisible by §11.5). |
-| 1322 | `karac query concurrency` Output Schema | SHIPPED |  | `karac query concurrency` ships (probe printed its schema). Out of date: the schema belongs in design.md §17's query API. |
+| 1322 | `karac query concurrency` Output Schema | SHIPPED |  | `karac query concurrency` ships (probe printed its schema). Out of date: the schema belongs in design.md §17's query API. MOVED (review rule 4, 2026-11-26): design.md § Compiler query API (the shipped schema); `would_parallelize_if` stays; deferred.md keeps a pointer. |
 | 1382 | Deterministic Parallel Runtime as a Standalone Library | NO SURFACE |  | Packaging idea. |
 | 1405 | ## M4c data | TRACK |  | `kara-data` package after v1. |
 | 1409 | Numerical Types (Tensor, Column, DataFrame) | DEFERRED REFUSED | tensor_refused | `Tensor` E0520 names the kara-data package and this track; Column/DataFrame are conformance/data. |
@@ -259,14 +259,14 @@ Corpus caveat: the corpus backends `__mir-run` and `__mir-llvm-run` do not apply
 | 6229 | Hot Reloading | NO SURFACE |  |  |
 | 6237 | Workspace Scaffolding (`karac init --workspace`) | TOOL ABSENT | tool_workspace_init_not_in_08 | `karac init --workspace`: unknown flag. |
 | 6259 | `karac test --coverage` (LLVM-instrumented coverage) | TOOL ABSENT | tool_coverage_not_in_08 | `karac test --coverage`: unknown flag. |
-| 6287 | Structured Diagnostics and Error Class Enum (`karac explain --format=json`) | SHIPPED |  | `karac explain --format=json` ships (prints kind/class/concept records). Out of date: belongs in design.md §17. |
+| 6287 | Structured Diagnostics and Error Class Enum (`karac explain --format=json`) | SHIPPED |  | `karac explain --format=json` ships (prints kind/class/concept records). Out of date: belongs in design.md §17. MOVED (review rule 4, 2026-11-26): design.md § `karac fix` and `karac explain`; typed expected/got and patches stay; deferred.md keeps a pointer. |
 | 6299 | Signature-from-Call-Site Stub Diagnostic | NO SURFACE |  |  |
 | 6342 | `karac tdd` Watch Driver — Unified TDD Cycle Loop | TOOL ABSENT | tool_tdd_not_in_08 | `karac tdd`: unknown command. |
-| 6452 | Signature Catalog (`karac catalog`) | SHIPPED |  | `karac catalog` is a command in 0.8 (it asks for a file). Out of date, or the command is unfinished: decide which. |
-| 6462 | `karac query affected-by` — Call-Graph Reach Query | SHIPPED |  | `karac query affected-by` ships (returns callers/callees/tests). Out of date. |
+| 6452 | Signature Catalog (`karac catalog`) | SHIPPED |  | `karac catalog` is a command in 0.8 (it asks for a file). Out of date, or the command is unfinished: decide which. MOVED (review rule 4, 2026-11-26): design.md § `karac catalog`; field queries stay; deferred.md keeps a pointer. |
+| 6462 | `karac query affected-by` — Call-Graph Reach Query | SHIPPED |  | `karac query affected-by` ships (returns callers/callees/tests). Out of date. MOVED (review rule 4, 2026-11-26): design.md § Compiler query API; construction rules stay; deferred.md keeps a pointer. |
 | 6508 | Doctests as `#[example]` Blocks on `pub` Items | DEFERRED REFUSED | example_doctest_refused | E_ATTRIBUTE_DEFERRED, naming this section (B-2026-11-25-61). |
 | 6585 | Structured Runtime Traces Keyed to Source Spans | NO SURFACE |  |  |
-| 6596 | Language Server (`kara-lsp`) | SHIPPED |  | `kara-lsp` ships as its own binary (release note B-2026-11-20-55). Out of date. |
+| 6596 | Language Server (`kara-lsp`) | SHIPPED |  | `kara-lsp` ships as its own binary (release note B-2026-11-20-55). Out of date. MOVED (review rule 4, 2026-11-26): design.md § Language server; editor integrations beyond VS Code stay; deferred.md keeps a pointer. |
 | 6627 | Pre-checked Standard Library and Package Interfaces | NO SURFACE |  |  |
 | 6639 | Bidirectional Compiler Hints | NO SURFACE |  |  |
 | 6643 | Lint on Explicit `ref T` for Copy Primitives | NO SURFACE |  | Lint not written. |

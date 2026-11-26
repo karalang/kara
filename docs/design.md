@@ -71,7 +71,7 @@ Deliberate design boundaries, not missing features.
 
 **No named lifetime parameters.** No `'a`, no lifetime bounds. A returned `ref` borrows from `self` when the function has a borrowed `self` or `mut ref self` receiver, and otherwise from every borrowed parameter. A type that contains a reference is a view, and views cannot escape ([core-semantics.md §5](core-semantics.md)). No annotation is ever needed.
 
-**No `async fn` and no `.await`.** When coroutines arrive with the services track, suspension is an inferred effect (`suspends`), declared on public functions like any other effect. A function that waits on the network looks like one that computes.
+**No `async fn` and no `.await`.** Suspension is an inferred effect (`suspends`), declared on public functions like any other effect ([core-semantics.md §11.8](core-semantics.md#11-concurrency-c9)). A function that waits on the network looks like one that computes.
 
 **No garbage collector and no implicit reference counting.** Values are destroyed at the end of their scope, in reverse declaration order ([core-semantics.md §7](core-semantics.md)). Sharing exists only where the programmer writes a `shared`, `sync` or `frozen` type.
 
@@ -288,7 +288,7 @@ These words are reserved, so that a later feature can use them without breaking 
 
 | Keyword | Why reserved |
 |---|---|
-| `async`, `await` | Kāra marks suspension with the `suspends` execution effect (services track) rather than function colouring. Reserving these blocks accidental borrowing from the JS and Rust async tradition. |
+| `async`, `await` | Kāra marks suspension with the `suspends` execution effect rather than function colouring. Reserving these blocks accidental borrowing from the JS and Rust async tradition. |
 | `become` | Guaranteed tail calls. |
 | `box` | An owned heap-pointer primitive. Kāra uses owned values and `shared` types. |
 | `comptime` | Compile-time evaluation (comptime track, [deferred.md](deferred.md#comptime)). |
@@ -4730,7 +4730,7 @@ fn open_connection(addr: String) -> Result[Connection, AnyError] {
 
 A panic is for a bug or an unrecoverable condition. [core-semantics.md §10](core-semantics.md#10-panics-and-errors-c8) lists what panics and what a panic does: it writes the [panic record](#panic-record) to stderr, runs the program's [custom panic handler](#panic-handler) if it has one, and ends the process with exit code **101**. No `Drop` body, `defer` or `errdefer` runs.
 
-- **There is no way to catch a panic.** Kāra has no unwinding and no `catch_panic`. The `extern "C-unwind"` ABI is recognized, but every build aborts on a panic, so a `"C-unwind"` declaration is refused with `"C"` as the fix ([§15 `extern "C"`](#extern-c)). A service runs under a supervisor that restarts it; failure isolation per task comes with the services track.
+- **There is no way to catch a panic.** Kāra has no unwinding and no `catch_panic`. The `extern "C-unwind"` ABI is recognized, but every build aborts on a panic, so a `"C-unwind"` declaration is refused with `"C"` as the fix ([§15 `extern "C"`](#extern-c)). A service runs under a supervisor that restarts it. Failure isolation per task is an isolating `TaskGroup`, which contains a task's panic and reports it on the task's handle ([core-semantics.md §11.12](core-semantics.md#11-concurrency-c9)).
 - **The stream and the exit code are the contract.** On every backend, a panic report goes to stderr, never stdout, and the exit code is 101, never 1, so a script can tell a bug from an error exit (code 1, [below](#the-main-function-and-exit-codes)). The report's fields are in [§17 Panic record](#panic-record); its text is not specified.
 - **Tests** run each in its own process, so a panicking test fails alone ([§14](#14-testing)).
 
@@ -5805,7 +5805,7 @@ The built-in types are no exception. A built-in operation that runs a trait on t
 
 ### Design principles
 
-**1. An effect is a capability the function exercises, not control flow imposed from outside.** Effects answer "what does this function reach for?". They do not encode outside interruptions, which use the return channel. That is why `panics` is an effect (the function, or a callee, may choose to stop the process) while cancellation, which arrives with the services track, is not: a cancelled task is torn down at its suspension point and runs the cleanup of an error exit ([core-semantics.md §11.9](core-semantics.md#11-concurrency-c9)), so no signature has to mention it.
+**1. An effect is a capability the function exercises, not control flow imposed from outside.** Effects answer "what does this function reach for?". They do not encode outside interruptions, which use the return channel. That is why `panics` is an effect (the function, or a callee, may choose to stop the process) while cancellation is not: a cancelled task is torn down at its suspension point and runs the cleanup of an error exit ([core-semantics.md §11.9](core-semantics.md#11-concurrency-c9)), so no signature has to mention it.
 
 **2. Substrate effects are permitted by default; scoped capabilities are declared.** A *substrate* effect is one that nearly every non-trivial function exercises; a *scoped capability* is a deliberate access to a named resource, such as `reads(UserDb)` or `sends(Network)`. Declaring a substrate effect everywhere would make the declaration noise, present on nearly every function and so informative about none. Declaring a scoped capability carries information because it is the exception. The substrate set in v1 is exactly `{allocates(Heap), panics}`. A program for which a substrate effect is scoped, such as a real-time or embedded one, forbids it with `#[no_effect]`. A proposal to add a substrate effect must show that the great majority of functions exercise it.
 
@@ -5818,7 +5818,7 @@ The built-in types are no exception. A built-in operation that runs a trait on t
 
 ### Deferred
 
-Providers (`effect resource R: Trait`, `with_provider`, `providers {} in {}`, `#[with_provider]`) are in v1, brought forward from the services track on 2026-10-20: [core-semantics.md §14](core-semantics.md). Overriding `FileSystem`, `Network` and the standard streams stays with the services track.
+Providers (`effect resource R: Trait`, `with_provider`, `providers {} in {}`, `#[with_provider]`) are in v1, brought forward from the services track on 2026-10-20: [core-semantics.md §14](core-semantics.md). So is overriding `FileSystem`, `Network` and the standard streams ([library/io.md](library/io.md)).
 
 These return with later tracks:
 - effect groups, `stable` groups and effect semver rules; parameterized resources (`UserDb[id]`) with `alias` and `independent` ([effects expressiveness](deferred.md#effects-expressiveness));
@@ -6063,18 +6063,58 @@ The language-level rules:
 - **The element type must be `CrossTask`**, and no view may be sent ([What may cross a task boundary](#what-may-cross-a-task-boundary)).
 - **Effects are keyed by the channel.** `tx.send(v)` has `sends(tx)` and `rx.recv()` has `receives(rx)` ([Value-rooted resources](#value-rooted-resources)). Clones of one `Sender` name the same channel. So two branches that send on one channel conflict, two that receive from one channel conflict, and a branch that sends and a branch that receives do not.
 - **Fan-in uses `TaskGroup`.** Concurrent producers on one channel run as `TaskGroup` tasks, each with its own clone of the `Sender`. Tasks are not checked for effect conflicts, so their messages arrive in no fixed order; `par` stays deterministic.
-- **`send` and `recv` have `blocks`**, because they may wait. On sequential `wasm_wasi`, `recv` yields instead, and panics with kind `deadlock` if no task can run ([§16](#concurrency-across-targets)).
+- **`send` and `recv` have `blocks` and `suspends`**, because they may wait: inside a task, a wait suspends the task and other tasks run ([core-semantics.md §11.8](core-semantics.md#11-concurrency-c9)). On sequential `wasm_wasi`, `recv` yields instead, and panics with kind `deadlock` if no task can run ([§16](#concurrency-across-targets)).
 - **The ends are ordinary owned values.** They can be moved into tasks, passed to functions and returned.
 
-`select` across several channels, and send and receive timeouts, arrive with the services track (M4a); their rules are [core-semantics.md §11.11](core-semantics.md#11-concurrency-c9).
+`recv_timeout(d)` and `send_timeout(v, d)` bound one wait ([library/concurrency.md](library/concurrency.md#channels)).
+
+### `select`
+
+`select` waits on several channel operations at once and runs the first that is ready. It is the shape of a long-lived main loop: a new message, or a shutdown signal, or a timeout.
+
+```kara
+import std.time.{Duration};
+
+fn main() {
+    let (tx, requests): (Sender[i64], Receiver[i64]) = channel(4);
+    let (stop, shutdown): (Sender[()], Receiver[()]) = channel(1);
+    let _ = tx.send(1);
+    let _ = tx.send(2);
+    let _ = stop.send(());
+    let mut handled = 0;
+    loop {
+        select {
+            msg = requests.recv() => match msg {
+                Some(n) => handled += n,
+                None => break,
+            },
+            _ = shutdown.recv() => break,
+            _ = after(Duration.secs(30)) => println("tick"),
+        }
+    }
+    println(f"handled {handled}");
+}
+```
+
+```text
+handled 3
+```
+
+- **Arms.** Each arm is `pattern = op => body`, where `op` is `rx.recv()`, `tx.send(v)` or `after(d)`, and one `default => body` arm may come last. The pattern is irrefutable, as in `let`, and binds the operation's own result: `Option[T]` for `recv`, `Result[(), SendError[T]]` for `send`, `()` for `after`.
+- **The block is an expression.** Its value is the chosen arm's value, so every arm has the same type, as in `match`.
+- **The source-first ready arm wins** when several are ready, which is deterministic. In the example both messages are handled before the shutdown, because the `recv` arm comes first.
+- **Choosing an arm performs its operation**, and no other arm's. A send arm that is not chosen still owns its value, which drops as the `select` ends. A closed channel makes its arm ready, as the plain calls do.
+- **Without `default`, `select` waits** until an arm is ready, so it is a suspension point and a cancellation point. With `default`, it never waits.
+
+The full rules are [core-semantics.md §11.11](core-semantics.md#11-concurrency-c9).
 
 ### Failure
 
 What happens when a branch fails is [core-semantics.md §11.7](core-semantics.md#11-concurrency-c9):
 - **`?` in a branch** ends that branch as an error exit: its drops, `defer`s and `errdefer`s run ([§6](#6-expressions-and-statements)).
-- **The branches after it are cancelled** at their next suspension point (from the services track, [core-semantics.md §11.9](core-semantics.md#11-concurrency-c9)); the branches before it run to completion.
+- **The branches after it are cancelled** at their next suspension point ([core-semantics.md §11.9](core-semantics.md#11-concurrency-c9)); the branches before it run to completion.
 - **When every branch is done**, the enclosing function returns the source-earliest error (for `par for`, the earliest in iteration order), whichever failed first. The block's other values, errors included, drop in reverse source order.
-- **A panic** in any branch or task ends the process with exit code 101. No drops, `defer`s or `errdefer`s run ([core-semantics.md §10](core-semantics.md#10-panics-and-errors-c8)). From the services track, a task in an isolating `TaskGroup` is the exception: its panic is contained and reaches its handle ([core-semantics.md §11.12](core-semantics.md#11-concurrency-c9)).
+- **A panic** in any branch or task ends the process with exit code 101. No drops, `defer`s or `errdefer`s run ([core-semantics.md §10](core-semantics.md#10-panics-and-errors-c8)). A task in an isolating `TaskGroup` is the exception: its panic is contained and reaches its handle ([core-semantics.md §11.12](core-semantics.md#11-concurrency-c9)).
 
 **Every result, not only the first error.** A block whose branches produce `Result` values without `?` returns all of them, in source order. This is the form for validating several fields and reporting every invalid one:
 
@@ -6086,7 +6126,7 @@ fn validate(form: Form) -> (Result[Name, FieldError], Result[Email, FieldError],
 
 **`TaskGroup` tasks.** A task that returns `Err` does not affect its siblings. The error reaches whoever joins the task's handle.
 
-**From the services track (M4a):** cancellation, deadlines, `select` and isolating groups, specified in [core-semantics.md §11.8–§11.12](core-semantics.md#11-concurrency-c9). A cancelled task stops at its next suspension point, as an error exit; pure computation is never interrupted. Work still pending when its group is cancelled never starts: a `par for` whose body has `?` or `return` runs its iterations in order, so after a failing iteration the later ones never run, and their effects never happen. "Never interrupted" covers only an iteration or branch that has already started.
+**Cancellation, deadlines and isolating groups** are specified in [core-semantics.md §11.8–§11.12](core-semantics.md#11-concurrency-c9). `TaskGroup.cancel()` cancels a group's unfinished tasks, `std.time.timeout(d, f)` and `TaskGroup.with_deadline(d)` cancel the work they cover once `d` has passed, and `TaskGroup.isolating()` makes a group that contains its tasks' panics ([library/concurrency.md](library/concurrency.md)). A cancelled task stops at its next suspension point, as an error exit; pure computation is never interrupted. Work still pending when its group is cancelled never starts: a `par for` whose body has `?` or `return` runs its iterations in order, so after a failing iteration the later ones never run, and their effects never happen. "Never interrupted" covers only an iteration or branch that has already started.
 
 ### Determinism contract
 
@@ -6113,7 +6153,7 @@ fn validate(form: Form) -> (Result[Name, FieldError], Result[Email, FieldError],
 
 ### Runtime
 
-**The v1 model.** The language exposes tasks, not threads. On `native`, tasks run on a work-stealing pool of OS threads, one per core by default (`KARAC_THREADS=n` sets the count, `1` runs every task on one thread; a value that is not a whole number of 1 or more warns on stderr and the default is used), and I/O blocks the thread it runs on. The compiler's automatic parallelism (M4b) is on by default too; `KARAC_AUTO_PAR=0` builds every loop and statement in order, as a wasm build always does, since its tasks share one worker. A native build whose parallelism found work carries the program in both forms and picks one when the program starts: with one worker (`KARAC_THREADS=1`, or one core) it runs the in-order form, the code `KARAC_AUTO_PAR=0` builds. A blocked task holds its thread, which suits command-line tools, compilers, desktop applications and services with moderate concurrency. How each target runs tasks is [§16](#concurrency-across-targets). Non-blocking networking, with tasks that park instead of holding a thread, arrives with the services track (M4a); code written for v1 runs unchanged on it.
+**The v1 model.** The language exposes tasks, not threads. On `native`, tasks run on a work-stealing pool of OS threads, one per core by default (`KARAC_THREADS=n` sets the count, `1` runs every task on one thread; a value that is not a whole number of 1 or more warns on stderr and the default is used), and a task that waits on a timer, a channel, a join, a lock or a socket suspends, and the worker runs other tasks meanwhile ([core-semantics.md §11.8](core-semantics.md#11-concurrency-c9)); file I/O and `extern` calls hold the worker. The compiler's [automatic parallelism](#automatic-parallelism) is on by default too; `KARAC_AUTO_PAR=0` builds every loop and statement in order, as a wasm build always does, since its tasks share one worker. A native build whose parallelism found work carries the program in both forms and picks one when the program starts: with one worker (`KARAC_THREADS=1`, or one core) it runs the in-order form, the code `KARAC_AUTO_PAR=0` builds. A blocked task holds its thread, which suits command-line tools, compilers, desktop applications and services with moderate concurrency. How each target runs tasks is [§16](#concurrency-across-targets).
 
 **The runtime is a library linked into every binary.** It is not a separate program or service. The compiler distribution contains `bin/karac` and the runtime archive, and every `karac build` links the runtime statically. For the WebAssembly targets it also ships wasi-libc and the wasm runtime archives under `lib/`; linking a wasm build still needs a wasm linker on the machine (rustup's `rust-lld` or LLVM `wasm-ld` 20 or later). A compiled binary depends only on the system C library and threads library: there is no runtime to install and no version to keep in step.
 - **Why static.** A shared runtime would bring version skew between the runtime a binary was built against and the one installed where it runs, and a deployment dependency for every user. Static linking also allows link-time optimization across the runtime boundary. A shared-runtime option may come later; it is not specified here.
@@ -6126,10 +6166,51 @@ fn validate(form: Form) -> (Result[Name, FieldError], Result[Email, FieldError],
 
 Behavior under overload (queueing or refusing excess work) and fairness between unrelated tasks are left to the runtime. Any answer that keeps the three invariants conforms.
 
+### Automatic parallelism
+
+`karac build` runs independent work in parallel without being asked: there is no syntax for it, and the program's output does not change ([core-semantics.md §11.5](core-semantics.md#11-concurrency-c9)). `KARAC_AUTO_PAR=0` at build time turns it off. It parallelizes three shapes:
+- **statement groups**: consecutive statements of one function, such as three `let`s that each call a function;
+- **associative reductions**: a loop that folds into one accumulator with an associative operator, such as `+`, `*`, the bitwise operators, `min` and `max`;
+- **loops over provably disjoint indexed writes**: a `for` loop whose iterations write ranges of one buffer that cannot overlap, as in an image kernel (below).
+
+**Two analyses decide independence**, and work runs in parallel only when both find nothing:
+1. **Data dependency.** If one statement uses a value another binds, the second runs after the first.
+2. **Effect conflict.** If two statements touch the same resource with a conflicting pair of verbs (`reads` and `writes`, or two `writes`), they run in order. Different resources, or reads of one, are independent ([Resources](#resources)).
+
+**Serialization order is source order.** Whenever the compiler runs two operations one after the other, it runs them in the order they are written.
+
+```kara,fragment
+fn load_dashboard(user_id: u64) -> Dashboard {
+    let profile = fetch_profile(user_id);       // reads(UserDb)
+    let orders = fetch_orders(user_id);         // reads(OrderDb)
+    let notifications = fetch_notifs(user_id);  // reads(NotifDb)
+    // No call uses another's result and none conflict: the three may run at once.
+    build_dashboard(profile, orders, notifications)
+}
+```
+
+**Disjoint indexed writes.** The compiler writes each indexed write as a linear form over the loop variables, whose coefficients may be products of loop-invariant values (`dy * dw`). The outer variable's coefficient is the stride `S` and the inner variables' terms are bounded by their loops' ranges. If those terms stay within `[0, S)`, iteration `v` writes only inside `[base + v*S, base + (v+1)*S)`, and no two iterations overlap:
+
+```kara,fragment
+for dy in 0..dh {
+    for dx in 0..dw {
+        for c in 0..4 { out[(dy * dw + dx) * 4 + c] = sample(src, dy, dx, c); }
+    }
+}
+```
+
+There is no dependence solver: indirect indexing (`out[idx[i]]`), overlapping windows and writes into one shared slot decline, and the loop runs in order.
+
+**What declines even when the work is independent.** A body that writes to the console (parallel workers would interleave the output), one with a resource effect two iterations would reorder, one that touches a `shared` value, and one too small or too memory-bound for dispatch to pay, which the cost model judges. A build with one worker runs the in-order form ([Runtime](#runtime)).
+
+**`seq { }` keeps code in order.** When an ordering requirement is invisible to the effect system (a protocol step, a hardware register sequence), a `seq { }` block runs its statements in source order and suppresses automatic parallelism inside it. It is an ordinary block expression, scoped like any other: `let handle = seq { init_hardware() };`. Prefer making the dependency visible through data flow when a step returns a value. Normal builds never warn about `seq { }`.
+
+**Every decision is queryable.** `karac query concurrency` reports each group, reduction and loop: whether it fans out, and when it does not, which analysis or cost gate declined it and why ([Compiler query API](#compiler-query-api)).
+
 ### Deferred
 
-- Automatic parallelism of loops and statements, its cost model and `seq {}`: [M4b auto-par](deferred.md#m4b-auto-par).
-- Coroutines and `suspends`, the network event loop, `TaskGroup.cancel()` and cooperative cancellation, deadlines and `select`: [M4a services](deferred.md#m4a-services).
+- Automatic parallelism's remaining work, which includes a user-selectable saturation policy, runtime work estimates for hot bodies and the resource-modeling lints ([M4b auto-par](deferred.md#m4b-auto-par)).
+- The rest of the services track, which includes the channel combinators beyond `select` and the timeouts (unbounded channels, fan-out, priority), unstructured `spawn`, cross-task `?` and custom executors ([M4a services](deferred.md#m4a-services)).
 
 ---
 
@@ -7464,7 +7545,11 @@ $ karac query effects src/order.kara.process_order        # inferred and declare
 $ karac query ownership src/order.kara.process_order      # declared parameter modes, body usage classification
 $ karac query monomorphization src/order.kara             # per-generic instance counts and type arguments
 $ karac query queries                                     # the compiler queries report
+$ karac query concurrency src/order.kara                  # what automatic parallelism decided, and why
+$ karac query affected-by src/order.kara:process_order    # the callers and callees a change reaches
 ```
+
+The kinds are `effects`, `ownership`, `concurrency`, `cost-summary` (static counts of the runtime costs the compiler inserted: reference-count operations, borrow-flag fields, partition guards, automatic clones), `attributes` (every tool-namespaced attribute, filtered with `--tool=PREFIX`), `queries`, `monomorphization` and `affected-by`. `karac query --help` gives each one's target forms.
 
 Each query returns JSON. AI agents ask directly instead of compiling, parsing and guessing.
 
@@ -7473,6 +7558,22 @@ Each query returns JSON. AI agents ask directly instead of compiling, parsing an
 `karac query queries` returns the compiler queries report: the optimization decisions the compiler hedged on, and how to resolve them ([§2 Compiler queries](#compiler-queries)).
 
 **Scope: batch, one-shot, narrow.** A client runs `karac query ...`; the compiler runs enough of the pipeline to answer and replies once. There is no subscription, no recomputation on file edits, and no broader surface ("type of the expression at this position", "visible trait impls here"). A reactive query-based compiler of the rust-analyzer class is a direction for after v1. The function-local principles of the [Compilation model](#compilation-model) are the substrate that would make it feasible.
+
+**`karac query concurrency` output.** For a function target, or every function of a file, one record per function with the decisions of [automatic parallelism](#automatic-parallelism), statements numbered from 0 in source order:
+
+| Field | What it holds |
+|---|---|
+| `statement_spans` | The `file`, `line` and `column` of each top-level statement. |
+| `parallel_groups` | Each group of statements that may run at once: `statements` and a `reason`. |
+| `serialization_points` | Each pair that runs in order: `statements`, a `reason`, and `serialized_by`, whose `category` is `data_dependency` (with its `vars`), `effect_conflict` (with the `resource` and the two `verbs`), `seq_ordering` or `polymorphic_effect`. |
+| `reorder_opportunities` | Independent statements that other statements separate: moving `movable_statement` next to its partner would let them run at once. |
+| `loop_reductions` | Each reduction loop: its `accumulator` and `op`, `fanned_out`, and the `cost_gate` with its `reason`. |
+| `disjoint_write_loops` | Each indexed-write loop: whether the footprint proof held (`disjoint_writes`, and the `gate` that declined it when not), each written `targets` entry with its `stride` and `base`, `fanned_out`, and the `cost_gate` and `cost_reason`. |
+| `declined_par_loops` | Annotated loops that did not fan out, with the obligation that stopped each. |
+
+The answer also has `auto_par`: each loop or run of statements that the build's parallelism considered, in the program and in the standard-library bodies it instantiates, with `tasks`, whether a build runs it as tasks, and the `reason` when it does not. The answer to "why isn't my loop parallel" is the `gate` or `cost_gate` and its reason, not an override keyword.
+
+**`karac query affected-by` output.** The target is a file, a line (`<file>:42`), an inclusive range (`<file>:42-58`) or a function (`<file>:process_order`, a method as `<file>:Type.method`). The answer is one JSON line, `{"type":"affected_by","input":..,"callers":[..],"callees":[..],"tests":[..]}`, each entry a function with its `file` and `line`: every function that transitively calls the seed, every function it transitively calls, and the tests that reach it. `--direction=callers` leaves out the callees, `--direction=callees` the callers and tests, and `--tests-only` prints only `tests`. In 0.8, `tests` lists no `test` block, so it is always empty (B-2026-11-26-92).
 
 **`karac query monomorphization` output.** One entry per generic function, with its instance count and the resolved type arguments of each instance:
 
@@ -7506,7 +7607,19 @@ Each query returns JSON. AI agents ask directly instead of compiling, parsing an
 - `qualified_prelude_variant`: `Option.Some(x)`, `Option.None`, `Result.Ok(v)` and `Result.Err(e)`, in an expression or a pattern, lose the qualifier;
 - `unused_variable`: a `let`, `for`, `match`-arm, `if let` or `while let` binding that nothing names again becomes `_name`, which marks it unused on purpose ([CN-5](#rules)) and keeps the binding, so its value is dropped where it was before. A binding that is only assigned is named, and is not reported; neither is a function's or closure's parameter, a name an or-pattern binds, a struct pattern's shorthand field or an `@` binding.
 
-**`karac explain`** explains a diagnostic code from the code catalogue, and a [concept id](#concept-ids) by the sections that specify it. For an item (`karac explain src/order.kara.process`, a method as `<file>.Type.method`), it shows the inferred effect set with its derivation, and the would-be parameter mode beside the declared one ([§2](#2-specification-layers)). A function with a `with` clause is trusted for what it declares, so its derivation ends at the clause.
+**`karac explain`** explains a diagnostic code from the code catalogue, a diagnostic class, a lint by its name, and a [concept id](#concept-ids) by the sections that specify it. For an item (`karac explain src/order.kara.process`, a method as `<file>.Type.method`), it shows the inferred effect set with its derivation, and the would-be parameter mode beside the declared one ([§2](#2-specification-layers)). A function with a `with` clause is trusted for what it declares, so its derivation ends at the clause.
+
+**`karac explain --format=json`** prints the same answer as one JSON object, whose `kind` names what was explained:
+- `diagnostic_code`: the `code` and its `entries`, each with the emitting `phase`, the compiler's error `kind`, the `class`, the `concept` id and a `description`. A lint name answers in this shape too, under the lint's code;
+- `diagnostic_class`: the `class` and its `description`. The classes are the `class` field of `karac check --output=json` records, a closed list (`TYPE_MISMATCH`, `OWNERSHIP_MOVE_AFTER_USE`, `TARGET_INCOMPATIBLE`, `LINT_WARNING`, `OTHER` and the rest) that `karac explain` prints when a name is unknown;
+- `concept`: the concept page's `body`, and `concept_id`: the `sections` (`file`, `section`, `anchor`) that specify the id and the `codes` that carry it;
+- `item`: the function's `inferred_effects` and `declared_effects`, each effect with its `derivation` (`file`, `line`, `reason`), and its `parameters` with `declared_mode` and `would_be_mode`.
+
+An unknown name exits 1 with a message on stderr. The class list and the record fields are reported behavior ([§2](#2-specification-layers)): a later version may add classes and fields.
+
+### `karac catalog`
+
+`karac catalog <file.kara>` prints the file's public API surface as JSONL, one record per exported item: `fn`, `struct`, `enum`, `trait`, `const`, `type_alias`, `distinct_type`, `effect_resource` and `extern_fn`, and an `impl_method` record for each `pub` method of an `impl`. Each record carries the item's `name`, its `generics` with their bounds, its `params` (each with `name`, `mode` and `ty`), its `return_type`, its declared `effects`, its refinement constraints and its `span` (`file`, `line`, `col`, `offset`, `length`). A parameter's `mode` is the declared one, as [§7](#parameter-modes) reads it: a bare `T` is `ref`, `own T` is `own`, `mut ref T` is `mut ref`. Private items are left out, because their effect sets are inferred and not stable enough to index. LLM agents, editor plugins and documentation generators read it.
 
 ### Language server
 
@@ -7573,7 +7686,7 @@ A debugger attaching to a Kāra binary needs more than DWARF: the runtime model 
 3. **An await-chain pointer per suspended task.** A task suspended at a waiting point carries a pointer to the task it waits on, or to the I/O handle it is blocked on, as a typed `WaitTarget` enum. The pointer is per task, because tasks have distinct awaiters and the wait tree cannot be rebuilt from per-block data.
 4. **`std.runtime.list_tasks()` and `std.runtime.list_par_blocks()`.** `list_tasks()` returns every suspended task with its `WaitTarget`, source location and effect summary. `list_par_blocks()` returns every active `par {}` block with its `SpawnSiteId`, worker count and each worker's `file:line`. In a binary without the metadata both return an empty list, not an error, so generic tools can try and degrade.
 
-Tasks suspend only once coroutines arrive with the services track (M4a); until then element 3 and `list_tasks()` have nothing to report.
+A task suspends at the waits of [core-semantics.md §11.8](core-semantics.md#11-concurrency-c9), and element 3 and `list_tasks()` report the tasks suspended there.
 
 **Gating.** The structures cost memory and some CPU on every spawn. `std.runtime.has_debug_metadata() -> bool` reports whether a binary carries them.
 

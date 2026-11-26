@@ -3252,8 +3252,8 @@ impl super::Parser {
         })
     }
 
-    /// `select { arms }` (core-semantics §11.11, docs/deferred.md
-    /// § `select` Across Channels). Each arm is `pat = <rx>.recv() =>
+    /// `select { arms }` (core-semantics §11.11, docs/design.md
+    /// § `select`). Each arm is `pat = <rx>.recv() =>
     /// body`, `pat = <tx>.send(v) => body`, `pat = after(d) => body`, or
     /// `default => body`, the last at most once. The result is
     /// `match __select { pat if op => body, .., _ => default }`: the op is

@@ -850,7 +850,7 @@ fn render_where_json(wc: &WhereClause) -> String {
 
 /// The declared mode, as `karac explain` and `karac query ownership`
 /// report it: a bare `T` borrows (D5), so it is `ref`, the same as the
-/// redundant `ref T`; only a written `own T` is `own` (B-2026-11-26-80).
+/// redundant `ref T`; only a written `own T` is `own` (B-2026-11-26-91).
 fn param_mode_and_inner(p: &Param) -> (&'static str, String) {
     let ty = &p.ty;
     match &ty.kind {

@@ -411,17 +411,7 @@ User code can rely on this order: the counter side-effect is visible to any obse
 
 #### Cooperative Cancellation
 
-These rules describe the cooperative cancellation planned in [design.md §13](design.md#failure). Once a branch fails or a deadline passes, a sibling's next I/O or suspending call returns `Err(Cancelled)`, which converts into the branch's error type through `From` and propagates with `?`. Nothing is cancelled in v1. `TaskGroup.cancel(ref self)` is declared in the standard library and has no semantics until this track returns ([library/concurrency.md](library/concurrency.md)).
-
-**Cancellation is cooperative, not asynchronous.** When the scope decides to cancel siblings, it sets a flag; each sibling observes the flag at its next compiler-inserted effect-boundary check and exits with `Err(Cancelled)`. There is no `pthread_cancel`-style asynchronous interruption. The worst-case latency between a failing branch and a sibling observing cancellation is the distance between two effect-boundary checks in the sibling's control flow. Tight pure loops without effect boundaries are not cancellable mid-iteration — this is a deliberate tradeoff, because inserting preemption points into pure computation would defeat the single-pass compilation and zero-runtime-tax goals.
-
-**Cancellation is not an effect.** A function that may cause sibling cancellation — by failing inside a `par` region, or by calling another function that does — declares nothing extra. Cancellation is a control-flow outcome of the enclosing structured-concurrency scope, not a resource interaction the effect system tracks. Making it an effect would force every `-> Result` function called inside a parallel region to widen its caller's declared effect set transitively, which would be both pervasive and un-actionable (the caller cannot opt out of being cancellable while still participating in a parallel region). Readers who want to know whether a function can be cancelled should read the surrounding `par` structure, not look for a verb in the signature.
-
-**`Cancelled` in error return traces.** `Cancelled` is excluded from the `?`-propagation error trace ([design.md §17](design.md#error-return-traces)). A sibling propagating `Cancelled` through `?` does not push a frame onto the trace's ring buffer (the intrinsic skips the push when the `Err` variant is `Cancelled`); a frame would pollute traces with cancellation noise unrelated to the actual failure. Only the originating branch's error contributes trace frames.
-
-**Completion wins cancellation.** A sibling branch that has already passed its last compiler-inserted effect-boundary check when cancellation fires completes naturally and returns `Ok`. Cancellation is cooperative (observed at effect boundaries), so a branch past its final check has no place left to observe the flag — it is logically already done, and its result is real work. The language rule is: **real work is never retroactively converted to `Cancelled`.** Whether that `Ok` reaches the caller is a separate question governed by the scope's return precedence: a source-earlier `Err` still dominates and the completed `Ok` is not exposed to the scope's return value (though its `defer` blocks still run normally, and its effects on mutable state remain).
-
-**Cancellation cascades into nested regions through the same cooperative mechanism.** When an outer scope cancels a child that contains its own inner `par` region, the outer cancellation becomes an effect-boundary observation inside the child, which triggers the child's own fail-fast path, which propagates cancellation to the inner region's siblings. No special cross-scope machinery is required — the existing next-effect-boundary-check rule composes through any depth of nesting. The worst-case latency from an outer cancel to an inner sibling observing it is the sum of the effect-boundary distances along the nesting path, not a constant. This is adequate for structured concurrency; programs that need hard preemption latency bounds must use platform-specific mechanisms outside the language's standard model.
+**Shipped in v1.** Cancellation is specified by [core-semantics.md §11.9](core-semantics.md#11-concurrency-c9) and summarized in [design.md § Failure](design.md#failure). It supersedes the design this section held: a cancelled task is torn down at its suspension point as an error exit, no `Err(Cancelled)` reaches its code, and `TaskGroup.cancel()` cancels a group's unfinished tasks.
 
 #### Scheduler-layer concerns and minimum invariants
 
@@ -454,32 +444,13 @@ State-machine codegen for *every* `suspends` function, not just network-boundary
 
 ### `select` Across Channels
 
-**Decision:** `select` comes with this track, together with timeouts. It waits on multiple channels at once (plus `after()` timers), taking the first ready arm. It is the *first* wall a real concurrent server hits: a long-lived main loop routinely needs "a new message **or** a shutdown signal **or** a timeout," and the v1 channel API (`recv` blocks on one channel) cannot express that. The other four channel combinators (recv/send timeout, unbounded, fan-out/fan-in, priority) are in [Channel Combinators](#channel-combinators).
-
-**Why after the channel core:** The v1 channel API (`channel[T](cap) -> (Sender[T], Receiver[T])`) is independently useful for single-producer/single-consumer handoff. `select` is the next layer once a multi-channel consumer exists — it is not needed for the channel surface to be correct, only for the server main-loop shape.
-
-**Why non-breaking:** New syntax over existing channel ops; introduces no change to the `Sender` / `Receiver` surface. Programs without `select` are unaffected.
-
-**Design shape:**
-
-```kara
-select {
-    msg = requests.recv()  => handle(msg),
-    _   = shutdown.recv()  => break,
-    _   = after(30s)       => tick(),
-    default                => idle(),   // optional; omit for blocking select
-}
-```
-
-A block expression. Each arm is a channel op (`recv` / `send`) or an `after(Duration)` timer, followed by `=>` and a handler. The first ready arm runs; with no `default`, `select` blocks (carries `blocks` / `suspends` per the channel-op effect surface) until one arm is ready. Arms are otherwise like `match` arms — the block's value is the chosen arm's value, all arms must agree on type.
-
-**Cross-reference:** [Channel Combinators](#channel-combinators); [design.md §13 Channels](design.md#channels) and [library/concurrency.md](library/concurrency.md) (the v1 surface this extends).
+**Shipped in v1.** `select` is specified in [design.md § `select`](design.md#select) and [core-semantics.md §11.11](core-semantics.md#11-concurrency-c9). The remaining channel combinators are [Channel Combinators](#channel-combinators).
 
 ### Channel Combinators
 
 **Decision:** Advanced channel patterns come after the v1 channel API. v1 has one bounded channel, `channel[T](cap) -> (Sender[T], Receiver[T])`, with blocking `send` and `recv` ([library/concurrency.md](library/concurrency.md)). The combinators below are the next layer, each independently shippable, together with the broader async message-passing story. `select` across channels, the most valuable of them, has its own entry: [`select` Across Channels](#select-across-channels).
 
-1. **`recv` / `send` timeout.** Shapes fixed in [core-semantics.md §11.11](core-semantics.md#11-concurrency-c9) (2026-10-24): `recv_timeout(d) -> Result[T, RecvTimeoutError]` and `send_timeout(value, d) -> Result[(), SendTimeoutError[T]]`, replacing the `Option[T]` / `Result[(), T]` sketch here. Precedent exists in the standard library (`RequestBuilder.timeout(ms)`, `Semaphore.acquire(timeout)`); this extends the same deadline shape to channels. Subsumed by `select` with `after`, but useful standalone.
+1. **`recv` / `send` timeout.** Shipped in v1: `recv_timeout(d)` and `send_timeout(value, d)` ([library/concurrency.md](library/concurrency.md#channels), [core-semantics.md §11.11](core-semantics.md#11-concurrency-c9)).
 2. **Unbounded channels.** A `channel` constructor variant with no capacity; `send` never blocks. Deliberately **not** the default — bounded-with-blocking is the safe default because it propagates backpressure; unbounded is opt-in for producers provably rate-limited elsewhere.
 3. **Fan-out / fan-in combinators.** MPMC convenience over the existing `Sender: Clone` (fan-in is already expressible by cloning senders; fan-out needs a shared-receiver / work-stealing wrapper). Library-level, no language change.
 4. **Priority / selective receive — lowest priority.** Erlang-style "handle messages matching a pattern first." No committed design shape yet; likely a `PriorityChannel[T, Pri]` library type rather than a `recv` pattern-match, since arbitrary selective receive interacts badly with bounded buffers.
@@ -658,144 +629,15 @@ Neither escape hatch relaxes the rule; both restructure the code so the provider
 
 ### `providers { } in { }` Block (multi-provider bootstrapping)
 
-Programs typically need several providers active simultaneously. Nested `with_provider` calls create a callback pyramid; the `providers` block flattens it:
-
-```kara
-fn main() -> Result[(), AppError] {
-    let config = load_config("app.toml")?;
-
-    providers {
-        OrderDB => PostgresOrderDB.connect(config.db_url)?,
-        UserDB  => PostgresUserDB.connect(config.db_url)?,
-        Cache   => RedisCache.connect(config.cache_url)?,
-    } in {
-        run_server()
-    }
-}
-```
-
-**Desugaring.** `providers` is syntactic sugar for nested `with_provider` calls with evaluate-all-then-scope semantics. The `in` keyword separates the provider bindings from the body block. All provider expressions are evaluated **before** any provider scope is entered:
-
-```kara
-// The above desugars to:
-let __p0 = PostgresOrderDB.connect(config.db_url)?;
-let __p1 = PostgresUserDB.connect(config.db_url)?;
-let __p2 = RedisCache.connect(config.cache_url)?;
-with_provider[OrderDB](__p0, || {
-    with_provider[UserDB](__p1, || {
-        with_provider[Cache](__p2, || {
-            run_server()
-        })
-    })
-})
-```
-
-**Semantics:**
-
-- **Evaluation order:** Top-to-bottom. All provider expressions are evaluated sequentially before any scope starts.
-- **Fail-fast:** If the third provider expression fails (via `?`), the first two are plain values with no active scope, so there is nothing to clean up.
-- **Scope nesting:** First-listed = outermost scope (last to clean up). Cleanup runs innermost-first when the body exits.
-- **Error handling:** `?` in provider expressions propagates to the enclosing function's return type. The body's return value becomes the block's return value.
-- **`providers` is a reserved keyword.** It is not a contextual identifier — using `providers` as a variable name is a compile error.
-- **`in` disambiguation.** `in` is already a keyword (`for x in collection`). The parser disambiguates: after `providers { ... }`, the `in` keyword is unambiguous because `providers {...}` cannot appear as the left-hand side of a `for ... in ...` expression.
-- **Trailing comma:** The trailing comma after the last provider binding is optional.
-- **Expression position.** `providers { ... } in { body }` is an expression — its value is the value of the body block. It may appear anywhere an expression is valid, including `let x = providers { ... } in { ... }`.
-- **`?` in provider expressions** propagates to the enclosing function's return type, as shown in the desugaring above.
-
-**When to use each form:**
-
-| Pattern | Use |
-|---|---|
-| `providers { ... } in { body }` | Bootstrapping multiple providers — `main()`, test setup, server init |
-| `with_provider[R](p, \|\| body)` | Single provider, mid-function scope, dynamic/conditional swapping |
-
-`with_provider` remains the primitive for cases where `providers` adds ceremony for no benefit: single-provider injection, conditional provider swapping, or scoping a provider to part of a function.
-
-**Provider interdependency.** Since all expressions evaluate before any scope starts, one provider cannot use another provider during construction. Use `let` bindings before the block for shared setup values:
-
-```kara
-fn main() -> Result[(), AppError] {
-    // config is a plain value, not a provider — available to all expressions
-    let config = load_config("app.toml")?;
-
-    providers {
-        Config  => config,                                    // also inject as provider for runtime access
-        UserDB  => PostgresUserDB.connect(config.db_url)?,   // uses config value, not Config provider
-        Cache   => RedisCache.connect(config.cache_url)?,
-    } in {
-        run_server()
-    }
-}
-```
+**Shipped in v1.** `providers { R1 => e1, .. } in { body }` is specified in [core-semantics.md §14.8](core-semantics.md#14-providers-brought-forward-from-m4a-2026-10-20).
 
 ### Deterministic Replay via Provider Injection
 
-The nondeterminism resources (`Clock`, `RandomSource`, `Env`; [design.md §12](design.md#resources)) are named so that they become first-class targets for `#[with_provider]`-based test injection. A test supplies a fake `Clock` that returns a fixed timestamp, a fake `RandomSource` seeded from a test vector, a fake `Env` with controlled variables, and the function under test runs deterministically with zero runtime hooks and zero test-only code paths in the function body. This is the same mechanism already described for user-defined resources ([Provider-Rooted Resources](#provider-rooted-resources-trait-based-injection)); the nondeterminism resources are blessed so that every Kāra program can use the same pattern without having to wrap the stdlib.
-
-```
-#[with_provider(Clock, FakeClock.at(1_700_000_000))]
-#[with_provider(RandomSource, FakeRandom.from_seed(42))]
-test "request id is deterministic under a fake clock" {
-    assert_eq(generate_request_id(), "req-1700000000-6b86b273");
-}
-```
+**Shipped in v1.** `#[with_provider(R, e)]` on a test, including over `Clock`, `RandomSource` and `Env`, is specified in [design.md § Test attributes](design.md#test-attributes) and [core-semantics.md §14.8](core-semantics.md#14-providers-brought-forward-from-m4a-2026-10-20).
 
 ### Test Attributes for Live and Substituted Resources
 
-These test attributes depend on effect resources and providers. They extend the v1 test runner ([design.md §14](design.md#14-testing)).
-
-Tests that require live external services (databases, APIs) are marked with `#[test(requires: [...])]` on the test case. `karac test` skips tests with unsatisfied `requires`; `karac test --all` fails if any required resource is unavailable:
-
-```
-#[test(requires: [db.UserDB, payment.PaymentAPI])]
-test "checkout flow" {
-    // needs real database and payment service running
-}
-```
-
-Names in `requires` are module-qualified paths matching the effect resource declaration (e.g., `db.UserDB`, not bare `UserDB`). This avoids collisions when multiple modules define resources with similar names.
-
-**Resource availability probing.** The compiler uses a two-level check:
-
-1. **Environment variable (default, zero-config).** For each resource, the compiler derives an env var by uppercasing the qualified name and replacing `.` with `_`, prefixed with `KARA_RESOURCE_`. For example, `db.UserDB` → `KARA_RESOURCE_DB_USERDB`. If the variable is set and non-empty, the resource is considered available.
-
-2. **Health-check command (explicit override).** A `[test.resources]` table in `kara.toml` maps resource paths to shell commands. If a command is present, it takes precedence over the env var probe — the resource is available iff the command exits 0:
-
-```toml
-[test.resources]
-"db.UserDB" = "pg_isready -d $DATABASE_URL"
-"payment.PaymentAPI" = "curl -sf $PAYMENT_API_URL/health"
-```
-
-When a test is skipped due to an unavailable resource, `karac test` prints which resource is missing and which env var or config key to set. `karac test --all` treats any skipped test as a failure.
-
-**Per-test provider injection.** Tests for stateful providers (e.g., an in-memory database) should receive a fresh provider instance per test. Use `#[with_provider(...)]` on the test case — the test runner wraps the test body in `with_provider(Provider.new(), || { ... })` automatically:
-
-```
-#[with_provider(db.UserDB, InMemoryUserDB.new)]
-test "create user" {
-    // InMemoryUserDB.new() is called fresh for this test
-    create_user("alice");
-    assert(find_user("alice") != None);
-}
-```
-
-The argument to `#[with_provider]` is `(resource_path, constructor_fn)`. Multiple `#[with_provider]` attributes are allowed on a single test for tests that use several resources. This is distinct from `#[test(requires: [...])]`, which is for tests that need a real external service — `#[with_provider]` is for tests that supply their own in-memory implementation.
-
-**Multi-attribute order.** When several `#[with_provider]` attributes decorate one test, source order is outer-to-inner: the first attribute is the outermost scope, the last is innermost. All constructors are evaluated before any provider scope is entered (evaluate-all-then-scope), matching `providers { } in { }`'s semantics. If a constructor fails, later constructors don't run and the test fails with `reason = "provider_construction_failed"` (see the runner output additions below).
-
-**`requires` and `with_provider` on the same resource are rejected.** A test decorated with both `#[test(requires: [X])]` and `#[with_provider(X, ...)]` for the same resource `X` is a contradiction — `requires` gates on an external service, `with_provider` supplies a fake. The runner rejects this at discovery time and emits `test_fail` with `reason = "requires_and_with_provider_conflict"`. Different resources in the two lists are fine (e.g., `requires: [db.UserDB]` + `with_provider(Clock, ...)`).
-
-**Built-in primitives use the same mechanism.** `#[with_provider(Clock, FakeClock.at(T))]` and `#[with_provider(RandomSource, FakeRandom.from_seed(42))]` work identically to user-declared resources. Built-in primitives (`Clock`, `RandomSource`, `Env`, `FileSystem`, etc.) register their default providers at program start; `#[with_provider]` pushes a replacement on the provider stack for the test's duration. The override is uniformly visible inside the test body via the same resource-using calls.
-
-**Runner output additions.** The `test_fail` and `test_skip` events of [design.md §14](design.md#runner-output) gain these fields and reasons:
-
-| Event | Fields | Notes |
-|---|---|---|
-| `test_fail` | `test: string`, `duration_ms: int`, `location: {file, line, col}`, `message: string` | Optional `assertion: string` (source text of the assertion), `left: string` + `right: string` for `assert_eq` / `assert_ne` failures. Optional `reason: string` for non-assertion failures. Reasons: `"provider_construction_failed"` (a `#[with_provider]` constructor panicked or returned `Err`; `duration_ms: 0` since the body never ran), `"requires_and_with_provider_conflict"` (same resource appears in both `#[test(requires: [X])]` and `#[with_provider(X, ...)]`). Optional `providers: [string]` lists fully-qualified resource paths that were active for this test (via `#[with_provider]` or program-rooted defaults); surfaced only on failure events so post-hoc triage is self-contained without source access. |
-| `test_skip` | `test: string`, `reason: string` | Reasons: `"unsatisfied_requires"` (with `resources: [string]` field listing missing resource paths). Future slices may introduce new reasons — consumers must tolerate unknown reason strings. |
-
-**Exit code.** `0` if every test passes (or is skipped under permitted conditions). Non-zero if any `test_fail` event was emitted, or if any `test_skip` event was emitted under `--all`.
+**Shipped in v1.** `#[test(requires: [..])]`, `#[with_provider(..)]` on a test, the `KARA_RESOURCE_<NAME>` and `[test.resources]` availability probes, `karac test --all` and the runner's `unsatisfied_requires` and `requires_and_with_provider_conflict` reasons are specified in [design.md § Test attributes](design.md#test-attributes) and [§ Runner output](design.md#runner-output).
 
 ### Diagnostics and Runtime Reports for Services
 
@@ -1154,13 +996,13 @@ Explicit `par` is v1 ([design.md §13](design.md#13-concurrency)). There, a conf
 
 ### Feature 5: Auto-Concurrency via Effect Analysis
 
-No `async fn`. No colored functions. The compiler builds a dependency graph from two independent analyses and parallelizes everything not constrained by either:
+**Shipped in v1.** Automatic parallelism is on by default in `karac build`. What it parallelizes, the two independence analyses, source-order serialization, `seq { }` and the queryable decisions are specified in [design.md § Automatic parallelism](design.md#automatic-parallelism), under the proof bar of [core-semantics.md §11.5](core-semantics.md#11-concurrency-c9). What stays here is the optimization design behind it.
 
 **Three layers, named.** Auto-concurrency separates three concerns that are easy to conflate. *Semantic independence* — when two operations *may* run concurrently — is defined by the effect-and-data-dependency rules below. *Compiler parallelization* — when the compiler *chooses* to parallelize independent work — is a cost model that weighs expected speedup against scheduling overhead. *Runtime scheduling* — how the scheduler actually places tasks on threads — is a runtime concern (see [Runtime Phases](#runtime-phases)). The layers compose top-down: only semantically independent operations are eligible for parallelization, and only parallelized operations reach the scheduler.
 
 **Two delivery mechanisms, named.** The three layers above describe *when* work may run concurrently; this is a separate axis — *how* eligible work reaches the runtime. There are two distinct mechanisms, easy to conflate because both are called "auto-concurrency," and they should be reasoned about as two systems rather than one. *Compute fan-out* partitions independent CPU-bound operations across a worker pool and joins their results — the path for parallel `let`-groups, associative reductions, and **loops over provably-disjoint indexed writes** (`out[f(i)] = ...`, where the compiler proves each iteration's write footprint is a contiguous range that no other iteration touches; see *Auto-Parallel Loops over Provably-Disjoint Indexed Writes* below). *Cooperative suspension* takes operations that suspend on network I/O — those whose effects include `sends` / `receives(Network)` — and, via a state-machine transform, parks them on the network event loop so a single OS thread services many in-flight operations. Both are driven by the same semantic-independence analysis above, and a program may use either or both; but they are separate codegen paths over separate runtime substrates (a thread pool vs. an epoll / kqueue / IOCP reactor) with different scaling characteristics (cores vs. connections). They are specified separately: compute fan-out in this track, cooperative suspension under [Network Event Loop and State-Machine Transform](#network-event-loop-and-state-machine-transform) in M4a.
 
-**Independence is an optimization asset, not just a concurrency input.** The semantic-independence relation defined by rules 1–2 below is not consumed only by the thread-level fan-out this feature is named for. The same proof — that two operations cannot interfere — is exactly what the *backend* needs to widen instruction-level parallelism and autovectorize, and it is information LLVM's own pointer-level alias analysis cannot reconstruct once Kāra has lowered away the types and effects that proved it. The design commitment is therefore that the independence relation drives a **tiered** set of optimizations, cheapest and most universal first, and that *independence is necessary but not sufficient* for any of them; a cost model selects the axis:
+**Independence is an optimization asset, not just a concurrency input.** The semantic-independence relation defined by the two analyses ([design.md § Automatic parallelism](design.md#automatic-parallelism)) is not consumed only by the thread-level fan-out this feature is named for. The same proof — that two operations cannot interfere — is exactly what the *backend* needs to widen instruction-level parallelism and autovectorize, and it is information LLVM's own pointer-level alias analysis cannot reconstruct once Kāra has lowered away the types and effects that proved it. The design commitment is therefore that the independence relation drives a **tiered** set of optimizations, cheapest and most universal first, and that *independence is necessary but not sufficient* for any of them; a cost model selects the axis:
 
 - **Tier 0 — backend alias facts (ILP + autovectorization).** The proven disjointness is lowered to LLVM as `noalias` / scoped-alias (`!alias.scope` / `!noalias`) metadata, enabling instruction-level parallelism, memory-op reordering across the out-of-order window, and — the dominant win — autovectorization, which is a compile-time transform the hardware cannot perform at runtime. It composes with bounds-check elision (see [Karac-Side Bounds-Check Elimination Pass](#karac-side-bounds-check-elimination-pass)), which already removes the per-iteration exits that otherwise block the autovectorizer; Tier 0 supplies the *aliasing* half BCE does not. Zero runtime cost, fully static, deterministic — and it is the tier that makes *single-threaded* code faster. It is a principled, compiler-*derived* form of the no-aliasing guarantee that gave Fortran its historical HPC edge over C (and that C99 `restrict` and Rust's `noalias` express by annotation) — except Kāra derives it from ownership + effects rather than requiring the programmer to assert it.
 - **Tier 1 — explicit portable SIMD (`Vector[T, N]`).** Programmer-directed data parallelism (see [Portable SIMD](#portable-simd--vectort-n)).
@@ -1171,58 +1013,6 @@ No `async fn`. No colored functions. The compiler builds a dependency graph from
 **Profitability (the cost model).** Independence gates *eligibility*; a *data-to-code ratio* — arithmetic / operational intensity in the roofline sense — gates *profitability* and selects the axis. That ratio is frequently a **static structural** property of the code even when the iteration count N is not, giving an N-independent profitability gate compatible with the ahead-of-time determinism commitment: the compiler need not see N to know that low-intensity work (much control flow, little data) is not worth a heavier axis at any N. Pointer density is a negative signal and is statically visible from types (a dense `Vec[f64]` versus a pointer-chasing aggregate); value-semantics-by-default and SoA layout blocks push programs toward the dense, alias-free, vectorizable regime where Tiers 0 and 1 pay off.
 
 **Determinism.** Axis selection and Tier-0 lowering are compile-time and deterministic — the same source, compiler, and target yield the same optimization decisions, with no runtime-adaptive forking. This is what keeps the `karac query` audit surfaces stable.
-
-**1. Data dependency analysis** — if the return value of call A is used as an input to call B, B depends on A and must run after it. This is read directly from the AST; no annotation needed.
-
-**2. Effect conflict analysis** — if A and B access the same resource with a conflicting verb pair (`reads`+`writes` or `writes`+`writes`), they are serialized. Non-conflicting accesses to different resources are independent.
-
-Only when *both* analyses find no dependency can the compiler parallelize.
-
-**Serialization order is always source order.** When either analysis forces two operations to be sequential, they execute in the order they appear in the source file. This applies to both data-dependency serialization and effect-conflict serialization. The programmer can rely on this: writing A before B in source is a guarantee that A completes before B starts, whenever the compiler determines they cannot be parallelized.
-
-```
-fn load_dashboard(user_id: u64) -> Dashboard {
-    let profile = fetch_profile(user_id);       // reads(UserDB)
-    let orders = fetch_orders(user_id);         // reads(OrderDB)
-    let notifications = fetch_notifs(user_id);  // reads(NotifDB)
-
-    // No data dependencies between the three calls (none uses another's return value)
-    // No effect conflicts (different resources, all reads)
-    // → compiler runs all three concurrently
-    // All three results used here → sync point inserted automatically
-    build_dashboard(profile, orders, notifications)
-}
-
-fn update_then_fetch(user: User) -> User {
-    let id = user.id;
-    save_user(user);                        // writes(UserDB)
-    let updated = fetch_user(id);           // reads(UserDB)
-    updated
-    // Effect conflict: writes(UserDB) + reads(UserDB) → serialized
-}
-
-fn enrich_profile(id: u64) -> Profile {
-    let user = fetch_user(id);              // reads(UserDB)
-    let orders = fetch_orders(user.id);     // reads(OrderDB) — uses user.id
-    build_profile(user, orders)
-    // Data dependency: fetch_orders takes user.id → sequential
-    // Effect analysis alone would permit parallelism; data dependency overrides
-}
-```
-
-The dual analysis correctly handles the common cases. The remaining edge cases — cross-resource semantic dependencies not expressed via data flow (e.g., FK relationships between independently-declared resources), or side effects inside `unsafe` blocks — are the programmer's responsibility to express via explicit data flow or effect aliasing.
-
-**`seq { }` block — forcing source-order execution.** When two operations have no data dependency and no conflicting effects, the compiler will parallelize them. If there is a semantic ordering requirement the effect system cannot see (a protocol step, a hardware register sequence, a precondition not expressible as a resource), use a `seq { }` block:
-
-```
-seq {
-    init_hardware();    // returns ()
-    configure_mode();   // returns ()
-    enable_output();    // returns ()
-}
-```
-
-All statements inside execute in source order. Auto-parallelism is suppressed for the block. The block is an expression: if the final element is a bare expression (no trailing `;`), the block evaluates to that expression's value; if the final element is a statement (trailing `;`), the block evaluates to `()`. **Scoping: `seq { }` is a normal block** — bindings declared inside are scoped to the block, consistent with all other blocks in the language. To extract values, use the block's expression value: `let handle = seq { init_hardware() };`. For multiple values, use a tuple: `let (a, b) = seq { ... (a, b) };`. This is the correct tool when `step_a()` returns `()` and threading an artificial return value would be noise. If `step_a()` returns a meaningful value, prefer expressing the dependency via data flow instead (natural and self-documenting). `seq { }` is for cases where making the dependency visible in the effect system would require an artificial resource declaration — use it sparingly.
 
 **`seq { }` is not a code smell on its own, and the compiler does not treat it as one.** Normal builds emit no warning, note, or lint when a `seq { }` block appears, regardless of how many exist in a module or project. Some domains (hardware initialization, protocol state machines, explicit register sequences) legitimately need many sequential regions, and a threshold-based lint would either fire on correct code or be silenced project-wide — both outcomes destroy the signal. However, the *frequency* of `seq { }` across a codebase is a useful **language-health metric**: if real-world Kāra code reaches for this escape hatch often, that is feedback to the language designers that the effect system may need additional resources, finer-grained parameterization, or new built-in verbs to capture the ordering constraint users are expressing manually. When `karac build --perf-report` lands (future tooling, not specified here), `seq { }` block count and locations will be one signal among several — alongside monomorphization sizes, unblocked-parallel-region counts, and other auto-parallelism diagnostics — surfaced only when the user opts in. The distinction is deliberate: the language-health metric belongs in a tool users run occasionally and designers read regularly, not in the noisy feedback loop of normal compilation.
 
@@ -1240,28 +1030,9 @@ Compile-time advisory lints that flag suspicious resource-modeling patterns in u
 
 ### Auto-Parallel Loops over Provably-Disjoint Indexed Writes
 
-The third compute-fan-out shape, alongside parallel `let`-groups and associative reductions. **There is no syntax for it** — the ordinary sequential `for` is the surface, and a qualifying loop fans out unchanged:
-
-```kara
-// Runs on the worker pool. Nothing in the source says so.
-for dy in 0..dh {
-    for dx in 0..dw {
-        for c in 0..4 { out[(dy * dw + dx) * 4 + c] = sample(src, dy, dx, c); }
-    }
-}
-```
-
-**What is proven.** The compiler expands each indexed write into a linear form over the loop variables in scope, whose coefficients are symbolic polynomials in loop-invariant quantities — linear in the loop variables, deliberately *non-linear* in the invariants, because `dy * dw` is not affine over `{dy, dw}` but is `dy` scaled by the symbolic coefficient `dw`, which is what a contiguous footprint looks like. The outer variable's coefficient is the **stride** `S`, the invariant part is the tiling's **base** `B`, and the inner variables' terms form the **residual** `R` bounded by each inner loop's range. Two obligations discharge the proof: `Rmin >= 0` and `Rmax < S`. Together they place iteration `v`'s writes in `[B + v*S, B + (v+1)*S)` — half-open ranges at a fixed positive stride, hence pairwise disjoint. This covers image kernels, Game of Life steps, row-wise matrix multiply, and volumetric nests.
-
-**This is not dependence analysis.** There is no solver and no polyhedral model. Indirect indexing (`out[idx[i]]`), overlapping windows, and reductions into a shared slot are out of scope and **decline** — falling back to sequential execution plus a queryable reason.
-
-**Every decision is queryable, and that is what replaces an annotation.** Silent parallelization is only trustworthy if a developer can ask whether it happened; `karac query concurrency` reports, per loop, whether the footprint proof discharged, whether the binary actually fans out, and — when it does not — which obligation or cost gate declined it. The answer to "why isn't my loop parallel" is a compiler explanation, not an override keyword.
-
-**What still declines even when the footprint is disjoint.** A body that writes to the console (the fan-out substrate does not replay output in source order, and *auto-par never changes what your program prints*), one that performs a resource effect two concurrent iterations would reorder, one that touches a `shared` value (whose refcount is not atomic), and one whose per-iteration work is too small or too memory-bandwidth-bound for dispatch to pay.
+**Shipped in v1.** The footprint proof, what declines and how `karac query concurrency` reports each loop are specified in [design.md § Automatic parallelism](design.md#automatic-parallelism) and [§ Compiler query API](design.md#compiler-query-api).
 
 **Hard gate: differential harness before broad enablement.** Wrong disjointness on indexed writes is a **silent miscompile**, never a perf regression; the cautionary precedent is rustc's multi-year `-Zmutable-noalias` stabilization. Fan-out-on must be observationally identical to fan-out-off across a fuzzed corpus, with an order-sensitive oracle (a position-folded digest over the whole output, not a single element: a spot-check passes under reordering).
-
-**Why non-breaking:** purely additive to what the compiler *chooses* to do. No syntax changes; `seq {}` remains the opt-out; programs that don't qualify are unaffected. Programs that do qualify get faster with byte-identical output, which the differential harness proves.
 
 ### Composition with SIMD
 
@@ -1321,63 +1092,7 @@ These rules extend `defer` and `errdefer` ([design.md §6](design.md#defer-and-e
 
 ### `karac query concurrency` Output Schema
 
-This query joins the compiler query API ([design.md §17](design.md#compiler-query-api)) with this track. It returns the compiler's full parallelization graph for a function — every call, which stage it runs in, why calls are sequential or parallel, and (where applicable) what the programmer would need to declare to unlock parallelism:
-
-```json
-{
-  "function": "load_dashboard",
-  "stages": [
-    {
-      "type": "parallel_group",
-      "calls": [
-        {"call": "fetch_profile(user_id)", "line": 2, "effects": ["reads(UserDB)"]},
-        {"call": "fetch_orders(user_id)",  "line": 3, "effects": ["reads(OrderDB)"]},
-        {"call": "fetch_notifs(user_id)",  "line": 4, "effects": ["reads(NotifDB)"]}
-      ],
-      "derivation": [
-        {"reason": "no data dependencies between fetch_profile, fetch_orders, fetch_notifs"},
-        {"reason": "no effect conflicts — different resources, all reads"}
-      ]
-    },
-    {
-      "type": "sync_point",
-      "derivation": [
-        {"reason": "build_dashboard takes return values of all three fetches"}
-      ]
-    },
-    {
-      "type": "sequential",
-      "call": "build_dashboard(profile, orders, notifications)",
-      "line": 7,
-      "effects": []
-    }
-  ],
-  "serialized_pairs": []
-}
-```
-
-Each serialized pair includes a `"kind"` tag (`"data_dependency"` or `"effect_conflict"`) and a `"would_parallelize_if"` hint — `null` when the ordering is semantically required (read-after-write, data dependency); a description of the declaration needed (e.g., `independent` resources) when parallelism is blocked only by conservative defaults:
-
-```json
-"serialized_pairs": [
-  {
-    "a": "save_user(user)",
-    "b": "fetch_user(user.id)",
-    "kind": "effect_conflict",
-    "conflict": "writes(UserDB) vs reads(UserDB)",
-    "would_parallelize_if": null
-  },
-  {
-    "a": "write_audit_log(event)",
-    "b": "update_record(id, data)",
-    "kind": "effect_conflict",
-    "conflict": "writes(AuditDB) vs writes(UserDB)",
-    "would_parallelize_if": "declare `independent AuditDB, UserDB;` — safe if audit and user tables are on separate connections"
-  }
-]
-```
-
-`"would_parallelize_if"` is a hint string, not a machine-applicable diff — declaring resources `independent` has semantic implications the programmer must verify. Machine-applicable diffs (e.g., missing effect annotations) appear only in `karac build --output=json`.
+**Shipped in v1,** with a different shape from the sketch this section held: per-function `parallel_groups`, `serialization_points`, `reorder_opportunities`, `loop_reductions` and `disjoint_write_loops`, specified in [design.md § Compiler query API](design.md#compiler-query-api). Still to come: a `would_parallelize_if` hint on a serialized pair, naming the declaration (such as `independent A, B;`) that would let it run at once. It is a hint string, not a machine-applicable diff, because declaring resources `independent` has semantic implications the programmer must verify.
 
 ### Deterministic Parallel Runtime as a Standalone Library
 
@@ -6286,15 +6001,7 @@ Key behaviors to settle with the package manager:
 
 ### Structured Diagnostics and Error Class Enum (`karac explain --format=json`)
 
-**Decision:** Defer machine-parseable output for `karac explain` — `karac explain --format=json` with a finite error-class enum, typed `expected` / `got` fields, and ranked candidate patches. In v1, `karac explain` prints human-readable prose; the class enum is not frozen until the catalogue of diagnostics has matured. (Compiler diagnostics themselves are already structured JSON in v1: [design.md §17](design.md#structured-compiler-output).)
-
-**Shape when delivered:** each JSON record carries `class` (enum from a published catalogue — `TYPE_MISMATCH`, `EFFECT_UNDECLARED`, `OWNERSHIP_MOVE_AFTER_USE`, target-incompatibility classes, etc.), `span` (byte offsets + file), typed `expected` / `got` where applicable (effect sets, type names, generic bounds), and `fixes: [{ description, edits: [{ span, replacement }] }]` for machine-applicable candidate patches. Enum values live in the reported-behavior tier (unstable across releases, stable within a release) per the specification layers ([design.md §2](design.md#2-specification-layers)) — the same policy already governs `karac explain` prose.
-
-**Target-incompatibility errors** are one class in the enumeration, not a standalone diagnostic category — file-suffix conditional compilation mismatches, target-feature-gated intrinsics, and cross-target effect violations all land under a shared `TARGET_INCOMPATIBLE` family.
-
-**Why deferred:** enumerating error classes before the diagnostic surface has stabilized locks in a shape that may not match how the diagnostics actually land. Diagnostics keep being written as features ship — waiting until the catalogue is ~20+ entries deep gives enough signal to finalize the enum and the patch-edit shape without retrofitting. The human-readable output format continues to be reported-behavior in the interim.
-
-**Why non-breaking:** purely additive CLI flag. Default `karac explain` behavior unchanged; JSON output is opt-in.
+**Shipped in v1.** `karac explain --format=json` and the closed class list are specified in [design.md § `karac fix` and `karac explain`](design.md#karac-fix-and-karac-explain). Still to come: typed `expected` / `got` fields (effect sets, type names, bounds) and ranked candidate patches in the records.
 
 ### Signature-from-Call-Site Stub Diagnostic
 
@@ -6451,39 +6158,11 @@ The exit code is `0` on success (file written or appended); non-zero on any of t
 
 ### Signature Catalog (`karac catalog`)
 
-**Decision:** Defer a tooling subcommand — `karac catalog` — that indexes the public API surface (fully qualified name, kind, generic parameters with bounds, parameter modes and types, return type, declared effect row, refinement constraints, source span) and emits JSONL for downstream consumers (LLM agents, IDE plugins, documentation generators).
-
-**Shape when delivered:** public surface only — private functions have inferred, reported-tier effect rows that are not stable enough to index. One entry per exported item (`fn`, `struct`, `trait`, `impl`, `const`, type alias). Queryable by any field component: "find all public fns that take a `Path` and produce `writes(Fs)`," "find all traits with a `Display` bound in their supertrait set," etc.
-
-**Why deferred:** pure tooling, blocks on no language decisions. Natural fit once the language surface is stable and real consumers (LLM agents, IDE tooling) materialize. Overlaps with **Structured Diagnostics and Error Class Enum** above — both are JSONL-emitting tooling that benefits from a shared schema vocabulary; build them in concert when their respective consumers are real.
-
-**Why non-breaking:** new `karac` subcommand; no language-surface impact.
+**Shipped in v1.** `karac catalog` is specified in [design.md § `karac catalog`](design.md#karac-catalog). Still to come: querying the catalog by a field component ("every public fn that takes a `Path` and has `writes(Fs)`"), and a schema vocabulary shared with `karac explain --format=json`.
 
 ### `karac query affected-by` — Call-Graph Reach Query
 
-Extension to the query API ([design.md §17](design.md#compiler-query-api)) that exposes the compiler's call graph as a queryable surface, alongside `karac query effects` / `ownership` / `monomorphization`. Inputs: a file path with optional line range, or a fully-qualified function path. Outputs: the transitive callers and callees that the call graph already computes for effect inference, plus the test functions that reach the input through that graph.
-
-**Invocation:**
-
-```bash
-karac query affected-by src/sort.kara                    # all functions affected by changes to file
-karac query affected-by src/sort.kara:42-58              # affected by changes to specific line range
-karac query affected-by math::sort                       # affected by changes to a specific function
-karac query affected-by math::sort --tests-only          # only test functions reaching this
-karac query affected-by math::sort --direction=callees   # transitive callees only (not callers)
-```
-
-**Output format (JSONL):**
-
-```json
-{"type":"affected_by","input":"math::sort","callers":[{"fn":"app::main","file":"src/main.kara","line":12}],"callees":[{"fn":"std::cmp::min","file":"std/cmp.kara","line":34}],"tests":[{"fn":"math_test::test_sort_preserves_length","file":"src/math_test.kara","line":3}]}
-```
-
-Schema:
-- `input`: the function or file the query was issued against (echoed for client correlation).
-- `callers`: array of `{fn, file, line}` for every function that transitively calls into the input. Direct callers first, then their callers, etc. — partial topological order.
-- `callees`: array of `{fn, file, line}` for every function the input transitively calls.
-- `tests`: array of test cases (the `test "..." { }` blocks in `_test.kara` files) that reach the input through the call graph. Subset of `callers` filtered to test cases, surfaced separately because the test-selection consumers (`--related`, `--since`) want this view directly.
+**Shipped in v1.** The targets, flags and output are specified in [design.md § Compiler query API](design.md#compiler-query-api). In 0.8 its `tests` array lists no `test` block (B-2026-11-26-92). The construction rules and the entries that build on it stay here.
 
 **Call-graph construction subtleties** (well-understood engineering, not research):
 
@@ -6595,27 +6274,7 @@ fn abs_handles_negatives() {
 <a id="language-server-kara-lsp--v1-editor-surface"></a>
 ### Language Server (`kara-lsp`)
 
-**Decision:** Ship a `kara-lsp` binary and a VS Code extension close to the v1 release, followed by Neovim and JetBrains integrations.
-
-**Why ship early.** Editor friction is a momentum-killer. A general-purpose language v1 launched without working VS Code / Neovim / JetBrains support out of the box does not get past the "I tried it but my editor was useless" early-adopter filter. Every successful general-purpose language post-2015 (Rust, Go, Swift, Kotlin, Zig late, Gleam) shipped editor integration at or before v1. The cohort that tries Kāra in week 1 leaves and does not come back if VS Code support is missing.
-
-**Why non-breaking:** New binary + extension; no compiler API changes beyond exposing the existing query surface over LSP protocol.
-
-**Engineering surface — the analysis is reused.** `karac query` and structured-diagnostic JSON are part of v1 ([design.md §17](design.md#17-tooling-contract)). The LSP binary is a long-lived process wrapping the existing analysis surface and translating to LSP wire protocol. Work is plumbing + IDE-side glue, not new compiler design.
-
-**Floor (must ship):**
-- Syntax highlighting (TextMate grammar — book infrastructure mostly exists).
-- Diagnostics streaming (`textDocument/publishDiagnostics` over existing `karac` structured-diagnostic JSON).
-- Go-to-definition (resolver symbol table).
-- Hover (type + effect signature; typechecker + effectchecker already produce this).
-- Find references (resolver symbol table).
-- Document symbols / outline (parser AST).
-- **Type-aware completion** (`.`-completion of methods/fields on the receiver type — requires partial-parse + typecheck-of-incomplete-source; ~4-6 weeks engineering; the line below which the LSP feels half-broken).
-- Formatting via LSP (wraps `karac fmt`).
-- Signature help (parameter-info popup).
-
-**Stretch (ship if engineering time allows):**
-- Rename symbol; code actions (apply structured fix-diffs from `karac` diagnostics); semantic tokens (beyond TextMate); workspace symbols / global search.
+**Shipped in v1.** `kara-lsp` and the requests it serves are specified in [design.md § Language server](design.md#language-server), and the VS Code extension is `editors/vscode`. Still to come: Neovim and JetBrains integrations, semantic tokens, workspace symbols, and the items below.
 
 **After launch:**
 - **Effect-aware completion** — `.`-completions filtered by effect compatibility with the surrounding `with`-clause. Kāra-specific differentiator, ~2-3 weeks on top of type-aware. Ship post-launch as a "Kāra LSP now does X" announcement.

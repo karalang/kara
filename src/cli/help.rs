@@ -518,8 +518,7 @@ KINDS:
                          <file.kara>:<fn|Type.fn>   single fn seed
                        Emits one JSONL record with `callers`,
                        `callees`, and reaching `tests` arrays. See
-                       design.md § AI-First Compiler Interface and
-                       `docs/deferred.md § karac query affected-by`.
+                       design.md § Compiler query API.
 
 OPTIONS:
     --tool=PREFIX                 attributes only: first-segment match filter
