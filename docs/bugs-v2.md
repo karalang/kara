@@ -58,8 +58,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 776 |
-| false-positive | 390 |
+| diagnostics | 777 |
+| false-positive | 391 |
 | missing-feature | 263 |
 | perf | 205 |
 | other | 157 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 943 |
+| typecheck | 944 |
 | mir | 345 |
 | mir-llvm | 334 |
 | cli | 320 |
@@ -85,7 +85,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | runtime | 114 |
 | interp | 112 |
 | effect | 70 |
-| resolver | 58 |
+| resolver | 59 |
 | other | 56 |
 | codegen | 22 |
 | autopar | 7 |
@@ -151,6 +151,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-12 | 2026-11-26 | typecheck | low | `SortedSet` has no `clear`, though Vec, VecDeque, Map, Set, SortedMap and PriorityQueue all have one | — |
 | B-2026-11-26-13 | 2026-11-26 | typecheck | low | Remainder of B-2026-11-21-63: `(0..250).map(|i| f"{i % 10}q").collect()` into a `String` gets no fix, because the rewrite's span starts inside the `(` that opens the receiver chain, so the edit would leave a stray `(` and `karac fix`'s parse guard refuses it | — |
 | B-2026-11-26-14 | 2026-11-26 | ownership | medium | `karac check` misses the move of a place that is the FIRST branch of an `if` or `match` used as a method receiver: `if c { b1 } else { mk() }.len(); println(b1)` checks clean, and interp and JIT stop at the internal MIR move check | — |
+| B-2026-11-26-15 | 2026-11-26 | typecheck | medium | A hand-written `impl PartialOrd` (with `partial_cmp`) is refused by every `T: PartialOrd` bound: free `min`/`max`, a user `fn g[T: PartialOrd]` and an `impl[T: PartialOrd]` block | — |
+| B-2026-11-26-16 | 2026-11-26 | resolver | medium | `karac fix` copies a std import's misspelled item into correct uses (`import std.time.{Duratoin}`), leaves a std module typo unfixed or rewrites its uses (`std.tiem`, `std.randmo` to `rand.`), and loses a method typo's edit before a `(` argument (`v.psuh((1))`) | — |
 
 ### Relocated
 
