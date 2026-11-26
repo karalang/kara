@@ -128,7 +128,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-73 | 2026-11-26 | interp | medium | `Vector[T, N]` lane arithmetic that wraps stops the MIR interpreter with the internal "unchecked Add overflowed; the builder must use CheckedBinaryOp", where JIT and build wrap each lane (`Vector[u8, 4].splat(200) + itself` gives 144) | — |
 | B-2026-11-26-74 | 2026-11-26 | ownership | medium | A returned closure that captures a borrowed parameter directly is refused E0515 ("an escaping closure captures `p` by move, but `p` borrows its value"), though core-semantics §5.7/§9.3 (ruled 69d8fa070) make it a view result that borrows the argument, as the same capture through an inner closure already is | — |
 | B-2026-11-26-75 | 2026-11-26 | typecheck+mir | low | `[]` as a method receiver (`let n = [].len();`, `let v: Vec[i64] = [].iter().map(|x| *x).collect();`) gets only the internal E0516 "a type that failed to check is not lowered yet", not the element-type diagnostic `let mut w = [];` gets | — |
-| B-2026-11-26-76 | 2026-11-26 | ownership | medium | A `match` whose moving arm reassigns the scrutinee, beside an arm that leaves it untouched, makes a later use E0500 "may have been moved", though the place is initialized on every path (core-semantics §3.4) | — |
 | B-2026-11-26-77 | 2026-11-26 | typecheck+mir | low | Three refusals with the right verdict print an internal E0516 instead of the user diagnostic: a `ref` binding of a `Vec[Vector[..]]` element as a receiver, a `break` aimed through a `with_provider` closure body, and a let-bound closure's `collect()` with no target type | — |
 | B-2026-11-26-79 | 2026-11-26 | mir-llvm | low | A hand-written element shift down a slice (`while i > 0 { p[i] = p[i - 1]; i -= 1; }`) compiles to a scalar copy with a bounds check per element, where rustc and clang turn the same loop into one `memmove` | — |
 
@@ -2379,6 +2378,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-67 | interp+mir-llvm | medium | The deprecated `String.slice(a, b)` checks neither bounds nor code-point boundaries: `"héllo".slice(1, 2)` gives a `Str` holding half of `é` (invalid… | d9f4226b4b |
 | B-2026-11-26-68 | typecheck | medium | A trait impl on a const-generic `Array[T, N]` never resolves: `impl[T: Tally, const N: i64] Tally for Array[T, N]` then `a.tally()` on an `Array[i64,… | 06de4537e8 |
 | B-2026-11-26-72 | typecheck | low | E0200's annotation suggestion for an untyped `.try_into()` writes `let r: Result[Target, _] = v.try_into();`, which does not parse (E0001 "Expected t… | c46b0b1b30 |
+| B-2026-11-26-76 | ownership | medium | A `match` whose moving arm reassigns the scrutinee, beside an arm that leaves it untouched, makes a later use E0500 "may have been moved", though the… | b1c327f77c |
 | B-2026-11-26-78 | typecheck | low | `let w: (Vec[i32], i64) = ([1, 2].to_vec(), 3)` is refused as a `(Vec[i64], i64)`, with advice to annotate the binding that already is and no fix, th… | a648c7a471 |
 
 </details>
