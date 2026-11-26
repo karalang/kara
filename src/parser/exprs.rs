@@ -3829,6 +3829,11 @@ impl super::Parser {
         } else {
             // Parenthesized expression
             self.expect(&Token::RightParen)?;
+            // The outermost parentheses win: they close last.
+            self.paren_starts.insert(
+                crate::resolver::SpanKey::from_span(&first.span),
+                start.offset,
+            );
             // `(k as i64)`: see `Program::paren_casts`.
             if let ExprKind::Cast { expr: operand, .. } = &first.kind {
                 let whole = self.span_from(&start);

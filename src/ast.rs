@@ -1108,6 +1108,11 @@ pub struct Program {
     /// them with the `as T` and leaves `x * k` (kata 1121), where only the
     /// operand is a single term that needs none.
     pub paren_casts: rustc_hash::FxHashMap<crate::resolver::SpanKey, (Span, String)>,
+    /// Where the outermost parentheses around an expression open, keyed by
+    /// the expression's span: a parenthesized expression leaves no node, so
+    /// its node starts after the `(`. A fix that edits the text before an
+    /// argument (`v.psuh((1))` to `v.push((1))`, B-2026-11-26-16) starts there.
+    pub paren_starts: rustc_hash::FxHashMap<crate::resolver::SpanKey, usize>,
     /// A `let`'s whole value that is a cast of a parenthesized operand,
     /// `let run = (j - i) as i64;`, keyed by the cast's span: the span from
     /// the operand's `(` to the end of the type, and the operand's text.

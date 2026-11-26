@@ -2415,9 +2415,11 @@ impl<'a> super::TypeChecker<'a> {
         errors_before: usize,
     ) {
         let from = object.span.offset + object.span.length;
+        // A parenthesized first argument, `v.psuh((1))`, starts at its `(`
+        // (B-2026-11-26-16).
         let to = args
             .first()
-            .map_or(args_close_span.offset, |a| a.value.span.offset);
+            .map_or(args_close_span.offset, |a| self.written_start(&a.value));
         if to != from + method.len() + 2 {
             return;
         }
@@ -2450,6 +2452,28 @@ impl<'a> super::TypeChecker<'a> {
             });
             return;
         }
+    }
+
+    /// Where `e` starts in the source: its node's start, or the `(` of
+    /// parentheses around it or around its leftmost operand
+    /// (`(1 + 2) * 3`), which leave no node ([`crate::ast::Program::paren_starts`]).
+    fn written_start(&self, e: &Expr) -> usize {
+        let own = self
+            .program
+            .paren_starts
+            .get(&SpanKey::from_span(&e.span))
+            .copied()
+            .unwrap_or(e.span.offset);
+        let left = match &e.kind {
+            ExprKind::Binary { left, .. } => Some(left),
+            ExprKind::MethodCall { object, .. }
+            | ExprKind::FieldAccess { object, .. }
+            | ExprKind::TupleIndex { object, .. }
+            | ExprKind::Index { object, .. } => Some(object),
+            ExprKind::Cast { expr, .. } => Some(expr),
+            _ => None,
+        };
+        left.map_or(own, |l| own.min(self.written_start(l)))
     }
 
     /// `None`, `Some(x)`, `Ok(x)`, `Err(e)`, written bare.

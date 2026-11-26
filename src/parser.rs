@@ -600,6 +600,8 @@ pub struct Parser {
     pub(crate) cast_operand_ends: rustc_hash::FxHashMap<crate::resolver::SpanKey, usize>,
     /// See [`crate::ast::Program::paren_casts`].
     pub(crate) paren_casts: rustc_hash::FxHashMap<crate::resolver::SpanKey, (Span, String)>,
+    /// See [`crate::ast::Program::paren_starts`].
+    pub(crate) paren_starts: rustc_hash::FxHashMap<crate::resolver::SpanKey, usize>,
     /// See [`crate::ast::Program::whole_value_casts`].
     pub(crate) whole_value_casts: rustc_hash::FxHashMap<crate::resolver::SpanKey, (Span, String)>,
     /// See [`crate::ast::Program::self_rebinding_lets`].
@@ -971,6 +973,7 @@ impl Parser {
             paren_return_types: rustc_hash::FxHashSet::default(),
             cast_operand_ends: rustc_hash::FxHashMap::default(),
             paren_casts: rustc_hash::FxHashMap::default(),
+            paren_starts: rustc_hash::FxHashMap::default(),
             whole_value_casts: rustc_hash::FxHashMap::default(),
             self_rebinding_lets: rustc_hash::FxHashMap::default(),
             dollar_literals: rustc_hash::FxHashMap::default(),
@@ -1500,6 +1503,7 @@ impl Parser {
             paren_return_types: std::mem::take(&mut self.paren_return_types),
             cast_operand_ends: std::mem::take(&mut self.cast_operand_ends),
             paren_casts: std::mem::take(&mut self.paren_casts),
+            paren_starts: std::mem::take(&mut self.paren_starts),
             whole_value_casts: std::mem::take(&mut self.whole_value_casts),
             self_rebinding_lets: std::mem::take(&mut self.self_rebinding_lets),
             dollar_literals: std::mem::take(&mut self.dollar_literals),

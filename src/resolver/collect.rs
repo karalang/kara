@@ -1517,7 +1517,12 @@ impl<'a> super::Resolver<'a> {
         }
         let (suggestion, replacement) = match prelude {
             Some((_, edit)) => (None, Some(edit)),
-            None => (suggestion, None),
+            None => {
+                let edit = suggestion
+                    .as_deref()
+                    .and_then(|s| self.module_typo_edit(imp, &deepest, s));
+                (suggestion, edit)
+            }
         };
         self.errors.push(ResolveError {
             message,
@@ -1527,6 +1532,58 @@ impl<'a> super::Resolver<'a> {
             replacement,
             stub_hint: None,
         });
+    }
+
+    /// The edit for a misspelled `std` module path, `wanted`, that
+    /// `suggest_similar` matched to `fix`: the one segment that differs,
+    /// renamed where the import spells it (`std.tiem` in
+    /// `import std.tiem.{Duration};`, `randmo` in `import std.randmo;`).
+    /// The names the fixed import binds are recorded, so a use of one is not
+    /// reported, or corrected, beside it (B-2026-11-26-16). `None` unless exactly
+    /// one segment differs.
+    fn module_typo_edit(
+        &mut self,
+        imp: &ImportDecl,
+        wanted: &[String],
+        fix: &str,
+    ) -> Option<Box<TextEdit>> {
+        let fixed: Vec<&str> = fix.split('.').collect();
+        if fixed.len() != wanted.len() {
+            return None;
+        }
+        let mut differ = wanted
+            .iter()
+            .zip(&fixed)
+            .enumerate()
+            .filter(|(_, (w, f))| w != *f);
+        let (i, (bad, good)) = differ.next()?;
+        if differ.next().is_some() {
+            return None;
+        }
+        let span = if i < imp.path.len() {
+            *imp.path_spans.get(i)?
+        } else {
+            // The bare form's module is its one item (`import std.randmo;`).
+            let it = imp.items.first().filter(|it| it.alias.is_none())?;
+            it.span
+        };
+        if span.length != bad.len() {
+            return None;
+        }
+        if i >= imp.path.len() {
+            self.failed_import_fixes
+                .insert((self.current_module, good.to_string()), bad.clone());
+        } else {
+            for it in imp.items.iter().filter(|it| it.alias.is_none()) {
+                self.failed_import_fixes
+                    .insert((self.current_module, it.name.clone()), it.name.clone());
+            }
+        }
+        Some(Box::new(TextEdit {
+            offset: span.offset,
+            length: span.length,
+            replacement: good.to_string(),
+        }))
     }
 
     /// An import from `std` whose every item is visible without one
@@ -1751,20 +1808,72 @@ impl<'a> super::Resolver<'a> {
         // Every item a prelude name: one deletion of the whole import, on
         // the first item's error, and the note on each.
         let mut prelude = Self::prelude_import_note(imp);
+        let gated = crate::prelude::is_gated_stdlib_module(&imp.path);
         for it in &imp.items {
+            // A module of globals that also has Kāra items (`std.time`): an
+            // item it defines was spliced, not left to report.
+            if gated && crate::prelude::gated_module_defines(&imp.path, &it.name) {
+                continue;
+            }
             if let Some(mut message) =
                 crate::prelude::library_module_item_error(&imp.path, &it.name, it.alias.as_deref())
             {
                 let mut replacement = None;
+                let mut suggestion = None;
                 if let Some((note, edit)) = prelude.take() {
                     message = format!("`{}` has no item `{}`{note}", imp.path.join("."), it.name);
                     replacement = Some(edit);
+                } else if message.starts_with(&format!("`{}` has no item", imp.path.join("."))) {
+                    // The module's globals and, for one that also has Kāra
+                    // items (`std.time.{Duratoin}`), those items: the name the
+                    // item meant, and the edit that renames it where it spans
+                    // its name alone (B-2026-11-26-16).
+                    let (have, spec) =
+                        crate::prelude::library_global_module(&imp.path).unwrap_or_default();
+                    let items: Vec<String> = if gated {
+                        crate::prelude::gated_module_public_items(
+                            &imp.path,
+                            crate::token::Span::default(),
+                        )
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|ii| ii.name)
+                        .collect()
+                    } else {
+                        Vec::new()
+                    };
+                    let names: Vec<&str> = have
+                        .iter()
+                        .chain(spec.iter())
+                        .copied()
+                        .chain(items.iter().map(String::as_str))
+                        .collect();
+                    suggestion = suggest_similar(&it.name, &names);
+                    if let Some(s) = &suggestion {
+                        if !message.contains("did you mean") {
+                            message.push_str(&format!(", did you mean `{s}`?"));
+                        }
+                        if it.span.length == it.name.len() {
+                            replacement = Some(Box::new(TextEdit {
+                                offset: it.span.offset,
+                                length: it.span.length,
+                                replacement: s.clone(),
+                            }));
+                        }
+                    }
+                }
+                // A name only this failed import binds is no correction for a
+                // use (B-2026-11-26-16); the name its fix binds is reported here.
+                if it.alias.is_none() {
+                    let bound = suggestion.clone().unwrap_or_else(|| it.name.clone());
+                    self.failed_import_fixes
+                        .insert((self.current_module, bound), it.name.clone());
                 }
                 self.errors.push(ResolveError {
                     message,
                     span: it.span,
                     kind: ResolveErrorKind::UnknownItemInModule,
-                    suggestion: None,
+                    suggestion,
                     replacement,
                     stub_hint: None,
                 });
