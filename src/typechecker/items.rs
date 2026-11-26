@@ -43,8 +43,9 @@ const MODULE_CELL_TYPES: [&str; 10] = [
     "Receiver",
 ];
 
-/// The types library/README.md § The prelude lists: in scope in every
-/// module without an import. The primitive types are keywords.
+/// The types library/README.md § The prelude lists (its Types, Error types
+/// and Other types lines): in scope in every module without an import. The
+/// primitive types are keywords.
 const DOCUMENTED_PRELUDE_TYPES: &[&str] = &[
     "Option",
     "Result",
@@ -61,6 +62,14 @@ const DOCUMENTED_PRELUDE_TYPES: &[&str] = &[
     "VecDeque",
     "PriorityQueue",
     "Entry",
+    // § The prelude's error types, and the other type the core methods take.
+    "AnyError",
+    "IoError",
+    "VarError",
+    "AllocError",
+    "ParseError",
+    "Utf8Error",
+    "NormalizationForm",
 ];
 
 impl<'a> super::TypeChecker<'a> {

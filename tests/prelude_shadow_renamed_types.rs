@@ -4,7 +4,7 @@
 //! `?` and `get` keep the prelude's), and the `prelude_shadow` lint saw that
 //! name and said nothing. It warns, naming the type as written; the
 //! declaration's `#[allow(prelude_shadow)]` silences it; and a program's own
-//! `Client` or `IoError`, renamed apart the same way but not a prelude name
+//! `Client`, renamed apart the same way but not a prelude name
 //! (library/README.md § The prelude), stays silent.
 
 use std::process::Command;
@@ -34,6 +34,8 @@ fn a_programs_own_option_or_result_warns_prelude_shadow() {
         ("enum_option", "enum Option[T] { Some(T), None }", "Option"),
         ("struct_option", "struct Option { a: i64 }", "Option"),
         ("enum_result", "enum Result { A }", "Result"),
+        // README lists the core error types in the prelude too.
+        ("io_error", "struct IoError { code: i64 }", "IoError"),
     ] {
         let out = check(tag, src);
         assert!(out.contains("warning[prelude_shadow]"), "{tag}: {out}");
@@ -60,7 +62,6 @@ fn allow_prelude_shadow_silences_a_renamed_option() {
 fn a_renamed_domain_type_is_not_a_prelude_shadow() {
     for (tag, src) in [
         ("client", "struct Client { id: i64 }"),
-        ("io_error", "struct IoError { code: i64 }"),
         ("server", "struct Server { port: i64 }"),
         ("request", "struct Request { path: String }"),
         ("channel", "struct Channel { id: i64 }"),
