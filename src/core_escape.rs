@@ -442,7 +442,11 @@ impl Walker<'_> {
     }
 
     fn escapes(&mut self, k: SpanKey, why: &'static str) {
-        if why != CLOSURE_RESULT {
+        // Returned from the function is a result too: a closure that
+        // captures a borrowed parameter is then a view result borrowing the
+        // argument, which MIR checks where the caller keeps it (core
+        // semantics §5.7, §9.3, B-2026-11-26-74).
+        if why != CLOSURE_RESULT && why != "returned" {
             self.out.closure_result_only.remove(&k);
         } else if !self.out.escaping_closures.contains(&k) {
             self.out.closure_result_only.insert(k);

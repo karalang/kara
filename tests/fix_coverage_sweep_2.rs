@@ -120,26 +120,41 @@ fn an_undefined_type_is_not_renamed_to_a_primitive_or_a_local() {
     assert!(!text.contains("'Pooll', did you mean"), "{text}");
 }
 
-/// B-2026-11-16-188: an escaping closure that captures a bare parameter
-/// takes it by value.
+/// B-2026-11-16-188: an escaping closure that captured a bare parameter
+/// was refused E0515, and `karac fix` took the parameter `own`. Since
+/// B-2026-11-26-74 (review ruling 2026-11-26, core-semantics §5.7, §9.3)
+/// such a closure is a view result borrowing the argument: `make` checks
+/// as written, and a temporary argument is the caller's E0516, bound first.
 #[test]
-fn an_escaping_capture_of_a_bare_parameter_takes_it_own() {
-    let (after, check) = fixed(
-        "escape",
-        "fn make(p: String, base: i64) -> Fn(i64) -> i64 {
+fn an_escaping_capture_of_a_bare_parameter_borrows_the_argument() {
+    let make = "fn make(p: String, base: i64) -> Fn(i64) -> i64 {
     |n| p.len() + base + n
 }
-fn main() {
-    let f = make(\"abc\".to_string(), 1);
-    println(f\"{f(2)}\");
-}
-",
+";
+    let check = |tag: &str, main: &str| {
+        let dir = std::env::temp_dir().join(format!("karac-fixcov2-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("main.kara");
+        std::fs::write(&f, format!("{make}{main}")).unwrap();
+        let out = karac(&["check", f.to_str().unwrap()]);
+        let _ = std::fs::remove_dir_all(&dir);
+        String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr)
+    };
+    let temp = check(
+        "escape-temp",
+        "fn main() {\n    let f = make(\"abc\".to_string(), 1);\n    println(f\"{f(2)}\");\n}\n",
     );
+    assert!(temp.contains("E0516"), "{temp}");
     assert!(
-        after.contains("fn make(p: own String, base: i64)"),
-        "{after}"
+        temp.contains("Bind the expression to a variable first"),
+        "{temp}"
     );
-    assert!(check.contains("All checks passed"), "{check}");
+    let bound = check(
+        "escape-bound",
+        "fn main() {\n    let s = \"abc\".to_string();\n    let f = make(s, 1);\n    println(f\"{f(2)}\");\n}\n",
+    );
+    assert!(bound.contains("All checks passed"), "{bound}");
 }
 
 /// B-2026-11-16-189: `assert_eq` on the program's own type without `Debug`
