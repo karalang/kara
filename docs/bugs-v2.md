@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 784 |
+| diagnostics | 786 |
 | false-positive | 398 |
 | missing-feature | 267 |
 | perf | 206 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 956 |
+| typecheck | 958 |
 | mir | 348 |
 | mir-llvm | 337 |
 | cli | 321 |
@@ -127,6 +127,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-77 | 2026-11-26 | typecheck+mir | low | Three refusals with the right verdict print an internal E0516 instead of the user diagnostic: a `ref` binding of a `Vec[Vector[..]]` element as a receiver, a `break` aimed through a `with_provider` closure body, and a let-bound closure's `collect()` with no target type | — |
 | B-2026-11-26-79 | 2026-11-26 | mir-llvm | low | A hand-written element shift down a slice (`while i > 0 { p[i] = p[i - 1]; i -= 1; }`) compiles to a scalar copy with a bounds check per element, where rustc and clang turn the same loop into one `memmove` | — |
 | B-2026-11-26-80 | 2026-11-26 | ownership+cli | low | E0516 on a temporary argument that a view result borrows (`let f = make("abc".to_string(), 1);` with `make` returning a closure over its bare parameter) has the bind-it-first help but no machine-applicable fix, so `karac fix` stops on it | — |
+| B-2026-11-26-81 | 2026-11-26 | typecheck | low | After "no method 'fold' on type 'Slice'" (`s.bytes().fold(0, |c, b| c * 31 + b as i64)`, the `.iter()` left out), the closure's parameter stays an open type and its cast adds a second error naming an internal variable, "cannot cast '?T1' to 'i64'" | — |
+| B-2026-11-26-82 | 2026-11-26 | typecheck | low | The fix for `a + b.as_str()` (a `String` plus a `Str`, as Rust writes it) appends `.to_string()`, giving `a + b.as_str().to_string()`, a view copied back into a new `String`, where `a + ref b` checks with no copy and is what `karac fix` makes of Rust's `a + &b` | — |
 
 ### Relocated
 
