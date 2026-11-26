@@ -1191,6 +1191,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- A `match` whose moving arm assigns the scrutinee again, beside an arm
+  whose pattern is a unit variant (`None`, `E.Y`) or a constant, leaves
+  the scrutinee usable after it (core-semantics §3.4, §4.6). The
+  unit-variant arm was counted as binding a part, so a later use was
+  E0500 "may have been moved" (B-2026-11-26-76).
+
 - A trait impl on a const-generic fixed array resolves: `impl[T: Tally,
   const N: i64] Tally for Array[T, N]` is found for `a.tally()` on an
   `Array[i64, 3]`, through a `T: Tally` bound and on a nested

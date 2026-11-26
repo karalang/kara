@@ -1,0 +1,10 @@
+source = "B-2026-11-26-76"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["ownership", "moves", "patterns"]
+expected_from = "spec"
+rules = ["3.4", "4.6"]
+backends = []
+env = {}
+note = "core-semantics §3.4 (an assignment to a moved place initializes it again) with §4.6 (a place scrutinee moves only in an arm whose pattern binds a part): a `match` whose moving arm assigns the scrutinee again, beside an arm whose pattern is a unit variant (`None`, `E.Y`), leaves it whole. The unit-variant arm, which the parser writes as a binding pattern, was counted as binding a part, so a later use was E0500 'may have been moved'."

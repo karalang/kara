@@ -1,0 +1,28 @@
+// An arm that moves the scrutinee's payload and then assigns the scrutinee
+// again leaves it initialized, and an arm whose pattern is a unit variant
+// (`None`, `E.Y`) or a constant binds nothing and moves nothing, so the
+// scrutinee is whole on every path after the `match` (core semantics
+// §3.4, §4.6).
+struct S { tag: i64, name: String }
+enum E { X(S), Y }
+
+const LIMIT: i64 = 3;
+
+fn main() {
+    let mut g: Option[String] = Some("a".to_string());
+    match g { Some(t) => { println(t); g = Some("b".to_string()); } None => {} }
+    match g { Some(t) => println(t), None => println("none") }
+
+    let mut h: Option[String] = None;
+    match h { None => {} Some(t) => { println(t); h = Some("c".to_string()); } }
+    println(f"{h.is_some()}");
+
+    let mut e = E.X(S { tag: 22, name: "x".to_string() });
+    match e { E.X(s) => { println(f"{s.tag} {s.name}"); e = E.X(S { tag: 4, name: "y".to_string() }); } E.Y => { println("y") } }
+    match e { E.X(s) => println(f"{s.tag} {s.name}"), E.Y => println(0) }
+
+    let mut o: Option[String] = Some("d".to_string());
+    let n = 3;
+    match n { LIMIT => { if let Some(t) = o { println(t); o = None; } } _ => {} }
+    println(f"{o.is_none()}");
+}

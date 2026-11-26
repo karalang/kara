@@ -1,0 +1,8 @@
+// The arm that binds `t` moves the payload out of `g` and does not assign
+// `g` again, so after the `match` it may have been moved, whatever the
+// `None` arm does (core semantics §3.4, §4.6).
+fn main() {
+    let mut g: Option[String] = Some("a".to_string());
+    match g { Some(t) => { println(t); } None => { g = None; } }
+    match g { Some(t) => println(t), None => println("none") }
+}

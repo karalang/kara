@@ -1,0 +1,11 @@
+source = "B-2026-11-26-76"
+dedup_of = []
+expect = "error:E0500"
+exit = 1
+tags = ["ownership", "moves", "patterns"]
+class = "a"
+expected_from = "spec"
+rules = ["3.4", "4.6"]
+backends = []
+env = {}
+note = "core-semantics §3.4, §4.6: the moving arm leaves `g` moved, so the later use is refused even though the other arm assigns it. The boundary of B-2026-11-26-76's fix. The expected.out wording of an error pin is guidance, not a byte oracle."

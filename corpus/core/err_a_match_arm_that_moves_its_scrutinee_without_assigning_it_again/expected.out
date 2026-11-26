@@ -1,0 +1,1 @@
+ERROR at line 7: value 'g' may have been moved (moved at line 6:11 on some path), used again here

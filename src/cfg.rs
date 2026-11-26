@@ -1341,7 +1341,7 @@ impl<'a> CfgBuilder<'a> {
                 // B-2026-10-15-32), so its use goes on the matching path.
                 let on_match = crate::ownership::core_rules()
                     && crate::ownership::is_place_projection(value)
-                    && !pattern_bindings(pattern).is_empty();
+                    && binds_a_value(pattern);
                 let after_scrutinee = if on_match {
                     cur
                 } else {
@@ -1405,9 +1405,7 @@ impl<'a> CfgBuilder<'a> {
                 // B-2026-10-15-32), so its use goes in those arms.
                 let per_arm = crate::ownership::core_rules()
                     && crate::ownership::is_place_projection(scrutinee)
-                    && arms
-                        .iter()
-                        .any(|a| !pattern_bindings(&a.pattern).is_empty());
+                    && arms.iter().any(|a| binds_a_value(&a.pattern));
                 let after_scrut = if per_arm {
                     cur
                 } else {
@@ -1420,7 +1418,11 @@ impl<'a> CfgBuilder<'a> {
                     for arm in arms {
                         let arm_entry = self.new_block();
                         self.add_edge(after_scrut, arm_entry);
-                        let arm_entry = if per_arm && !pattern_bindings(&arm.pattern).is_empty() {
+                        // A unit variant (`None`, `E.Y`) or a constant,
+                        // which the parser writes as a binding pattern,
+                        // binds nothing and moves nothing: that arm leaves
+                        // the scrutinee whole (B-2026-11-26-76).
+                        let arm_entry = if per_arm && binds_a_value(&arm.pattern) {
                             self.lower_expr(scrutinee, arm_entry, exit, loops)
                         } else {
                             arm_entry
@@ -1889,6 +1891,16 @@ fn resolve_loop_frame<'f>(loops: &'f [LoopFrame], label: Option<&str>) -> Option
 /// the cleanup-rename pass (defer/errdefer body lowering) to register
 /// inner-local introductions, and exposed for the integrated dataflow
 /// pass.
+/// Whether `pattern` binds a name of its own. The parser writes a unit
+/// variant (`None`, `Dir.Up`) and a constant as a binding pattern, but a
+/// binding's name is Value-class (snake_case, design.md §3 CN-5), so those
+/// bind nothing (B-2026-11-26-76).
+fn binds_a_value(pattern: &Pattern) -> bool {
+    pattern_bindings(pattern).iter().any(|n| {
+        !n.contains('.') && crate::lexer::classify_ident(n) == crate::lexer::IdentClass::Value
+    })
+}
+
 pub(crate) fn pattern_bindings(pattern: &Pattern) -> Vec<String> {
     fn walk(p: &Pattern, out: &mut Vec<String>) {
         match &p.kind {
