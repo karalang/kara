@@ -687,9 +687,12 @@ pub(super) fn impl_table_key(ty: &Type) -> Option<(String, Vec<Type>)> {
         // stores empty args for a generic `Slice[T]` impl, which
         // `impl_args_match` then treats as generic-on-name).
         //
-        // `Array` / `Vector` are still absent: registration deliberately keeps
-        // them out, so a key here would only ever miss.
+        // `Array` keys the same way, as `env_add_impl` registers it: the
+        // element alone (the length is not part of the key), and a generic
+        // `impl[T, const N: i64] .. for Array[T, N]` with empty args
+        // (B-2026-11-26-68). `Vector` is still absent.
         Type::Slice { element, .. } => Some(("Slice".to_string(), vec![(**element).clone()])),
+        Type::Array { element, .. } => Some(("Array".to_string(), vec![(**element).clone()])),
         Type::Named { name, args } => Some((name.clone(), args.clone())),
         // A refinement keys its own inherent / trait impls under its
         // nominal name (`impl Positive { ... }`), distinct from the base's

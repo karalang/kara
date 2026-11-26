@@ -334,8 +334,26 @@ fn bind_impl_param_one(d: &Type, a: &Type, out: &mut HashMap<String, Type>) {
         (Type::Ref(x), Type::Ref(y))
         | (Type::MutRef(x), Type::MutRef(y))
         | (Type::Weak(x), Type::Weak(y)) => bind_impl_param_one(x, y, out),
-        (Type::Slice { element: x, .. }, Type::Slice { element: y, .. })
-        | (Type::Array { element: x, .. }, Type::Array { element: y, .. }) => {
+        (Type::Slice { element: x, .. }, Type::Slice { element: y, .. }) => {
+            bind_impl_param_one(x, y, out)
+        }
+        // A `const` parameter written as the length (`Array[T, N]`, or the
+        // `Array[(), N]` a struct's `Buf[T, N]` carries it as) binds to the
+        // receiver's length, as a `const_arg_type` (B-2026-11-26-68).
+        (
+            Type::Array {
+                element: x,
+                size: ConstArg::ConstParam(p),
+            },
+            Type::Array { element: y, size },
+        ) => {
+            bind_impl_param_one(x, y, out);
+            if !matches!(size, ConstArg::ConstParam(q) if q == p) {
+                out.entry(p.clone())
+                    .or_insert_with(|| super::types::const_arg_type(size.clone()));
+            }
+        }
+        (Type::Array { element: x, .. }, Type::Array { element: y, .. }) => {
             bind_impl_param_one(x, y, out)
         }
         (Type::Tuple(xs), Type::Tuple(ys)) if xs.len() == ys.len() => bind_impl_params(xs, ys, out),

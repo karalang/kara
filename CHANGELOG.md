@@ -1180,6 +1180,16 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- A trait impl on a const-generic fixed array resolves: `impl[T: Tally,
+  const N: i64] Tally for Array[T, N]` is found for `a.tally()` on an
+  `Array[i64, 3]`, through a `T: Tally` bound and on a nested
+  `Array[Array[i64, 2], 2]`, with `T` and `N` read off the receiver. It was
+  refused E0236 "no method 'tally' on type 'Array'", and `impl[const N:
+  i64] .. for Array[i64, N]` passed `karac check` and then failed "call of
+  unknown function" on every backend (B-2026-11-26-68). A method whose
+  signature names an impl's `const N` (`-> Array[T, N]`, or `-> Buf[T, N]`
+  for a struct's) now infers it from the receiver instead of asking for
+  an annotation.
 - A function type held in a `let`'s annotated `Vec`, `Map`, `Option`,
   tuple or nested `Vec` borrows its bare parameters, as a `Fn(T)`
   parameter does: `let fs: Vec[Fn(String) -> i64] = [nf]; fs[0](s);

@@ -1286,9 +1286,7 @@ impl FnItem<'_> {
         self.impl_target.is_none()
             && self.impl_prim.is_none()
             && self.impl_generics.is_some()
-            && self
-                .impl_target_ty
-                .is_some_and(|t| matches!(t.kind, ast::TypeKind::Tuple(_)))
+            && self.impl_target_ty.is_some_and(is_structural_target)
     }
 
     /// The impl's target's arguments, from the impl's own `args` in its
@@ -1417,6 +1415,22 @@ fn trait_defaults(program: &ast::Program, tc: &TypeCheckResult) -> Vec<TraitDefa
         }
     }
     out
+}
+
+/// Whether `t`, an impl's written target, is a tuple or a fixed array
+/// (`(A, B)`, `Array[T, N]`): a type with no definition of its own whose
+/// generic impl is instanced at each receiver the target fits
+/// (B-2026-11-26-68).
+fn is_structural_target(t: &ast::TypeExpr) -> bool {
+    match &t.kind {
+        ast::TypeKind::Tuple(_) | ast::TypeKind::Array { .. } => true,
+        ast::TypeKind::Path(p) => {
+            p.segments.len() == 1
+                && p.segments[0] == "Array"
+                && p.generic_args.as_deref().is_some_and(|a| a.len() == 2)
+        }
+        _ => false,
+    }
 }
 
 /// Whether `b` is `impl[T] Slice[T]`, the library's slice methods.
@@ -2159,11 +2173,13 @@ impl<'a> Lcx<'a> {
                     // A trait impl for a tuple over its own parameters
                     // (`impl[A, B] Show for (A, B)`): its methods are
                     // instanced at a tuple receiver its target fits.
+                    // So is one for a fixed array over them (`impl[T,
+                    // const N: i64] Sum for Array[T, N]`, B-2026-11-26-68).
                     let generic_tuple = target.is_none()
                         && prim.is_none()
                         && b.trait_name.is_some()
                         && b.generic_params.is_some()
-                        && matches!(b.target_type.kind, ast::TypeKind::Tuple(_));
+                        && is_structural_target(&b.target_type);
                     if target.is_none() && prim.is_none() && !slice && !blanket && !generic_tuple {
                         continue;
                     }
@@ -3368,7 +3384,8 @@ impl<'a> Lcx<'a> {
         let key = self.fn_key(def);
         let (ty, frame) = self.tc.fn_self_types.get(&key)?;
         if !matches!(ty, Type::Named { args, .. } if !args.is_empty())
-            && !(matches!(ty, Type::Tuple(_)) && self.fns.get(&def)?.is_generic_tuple_impl())
+            && !(matches!(ty, Type::Tuple(_) | Type::Array { .. })
+                && self.fns.get(&def)?.is_generic_tuple_impl())
         {
             return None;
         }
@@ -14017,7 +14034,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         tr: Option<&str>,
         method: &str,
     ) -> Option<(DefId, Vec<Ty>)> {
-        if !matches!(self.tys().tcx().kind(t), HK::Tuple(_)) {
+        if !matches!(self.tys().tcx().kind(t), HK::Tuple(_) | HK::Array { .. }) {
             return None;
         }
         let label = tr.map(|tr| format!("impl {tr}#"));
@@ -14043,6 +14060,21 @@ impl<'l, 'a> Bx<'l, 'a> {
         });
         let hit = hits.next()?;
         hits.next().is_none().then_some(hit)
+    }
+
+    /// The parameters of `d`, a generic tuple or array impl's method, read
+    /// off `t` when the impl's written target fits it.
+    fn structural_impl_args(&self, d: DefId, t: Ty) -> Option<Vec<Ty>> {
+        let item = self.lcx.fns.get(&d)?;
+        let names: Vec<&str> = item
+            .impl_generics
+            .map(|g| g.params.iter().map(|p| p.name.as_str()).collect())
+            .unwrap_or_default();
+        let mut out: Vec<Option<Ty>> = vec![None; item.impl_params];
+        if !self.written_fits(item.impl_target_ty?, t, &names, &mut out) {
+            return None;
+        }
+        out.into_iter().collect()
     }
 
     /// `method` of the `n`th impl of `tr` for `t`'s type, in source order.
@@ -14207,6 +14239,18 @@ impl<'l, 'a> Bx<'l, 'a> {
                         };
                     }
                 }
+                // `Array[T, N]` at `Array[i64, 3]`: the element, and the
+                // length as the `Array[(), 3]` a const argument is carried
+                // as (B-2026-11-26-68).
+                if let (HK::Array { elem, len }, "Array", Some([w, n])) =
+                    (tcx.kind(t), last.as_str(), q.generic_args.as_deref())
+                {
+                    let ast::GenericArg::Type(w) = w else {
+                        return false;
+                    };
+                    return self.written_fits(w, elem, names, out)
+                        && self.written_len_fits(n, len, names, out);
+                }
                 let (name, args) = match tcx.kind(t) {
                     HK::Adt { def, args } | HK::Shared { def, args } => {
                         (self.lcx.def_name(def), tcx.list(args))
@@ -14235,6 +14279,18 @@ impl<'l, 'a> Bx<'l, 'a> {
                 HK::Unit => ws.is_empty(),
                 _ => false,
             },
+            ast::TypeKind::Array { element, size } => match tcx.kind(t) {
+                HK::Array { elem, len } => {
+                    self.written_fits(element, elem, names, out)
+                        && self.written_len_fits(
+                            &ast::GenericArg::Const((**size).clone()),
+                            len,
+                            names,
+                            out,
+                        )
+                }
+                _ => false,
+            },
             ast::TypeKind::Ref(w) => {
                 matches!(tcx.kind(t), HK::Ref(i) if self.written_fits(w, i, names, out))
             }
@@ -14242,6 +14298,51 @@ impl<'l, 'a> Bx<'l, 'a> {
                 matches!(tcx.kind(t), HK::MutRef(i) if self.written_fits(w, i, names, out))
             }
             _ => false,
+        }
+    }
+
+    /// Whether an array target's written length `w` (`3`, or a const
+    /// parameter `N` among `names`) fits `len`, binding the parameter to
+    /// the `Array[(), len]` a const argument is carried as.
+    fn written_len_fits(
+        &self,
+        w: &ast::GenericArg,
+        len: crate::ty::ArrayLen,
+        names: &[&str],
+        out: &mut [Option<Ty>],
+    ) -> bool {
+        let crate::ty::ArrayLen::Known(n) = len else {
+            return false;
+        };
+        let name = match w {
+            ast::GenericArg::Type(te) => match &te.kind {
+                ast::TypeKind::Path(q) if q.generic_args.is_none() && q.segments.len() == 1 => {
+                    Some(q.segments[0].as_str())
+                }
+                _ => None,
+            },
+            ast::GenericArg::Const(e) => match &e.kind {
+                ExprKind::Identifier(x) => Some(x.as_str()),
+                ExprKind::Integer(v, _) => return *v >= 0 && *v as u64 == n,
+                _ => None,
+            },
+            ast::GenericArg::Shape(_) => None,
+        };
+        let Some(i) = name.and_then(|x| names.iter().position(|p| *p == x)) else {
+            return false;
+        };
+        let tcx = self.tys().tcx();
+        let carried = tcx.intern(HK::Array {
+            elem: tcx.unit(),
+            len: crate::ty::ArrayLen::Known(n),
+        });
+        match out.get_mut(i) {
+            Some(Some(b)) => *b == carried,
+            Some(slot) => {
+                *slot = Some(carried);
+                true
+            }
+            None => false,
         }
     }
 
@@ -26662,6 +26763,35 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
         match callee {
             Callee::Def(d) if self.lcx.fns.get(&d).is_some_and(|i| i.impl_dyn.is_none()) => {
+                // A generic tuple or array impl's parameters are read off the
+                // receiver its written target fits: the checker records an
+                // array impl's callee at the element alone, with no length
+                // for a `const N` (B-2026-11-26-68).
+                if self.lcx.fns[&d].is_generic_tuple_impl() {
+                    let rt = self.expr_ty(object)?;
+                    let base = self.strip_ty_full(rt).1;
+                    if let Some(inst) = self.structural_impl_args(d, base) {
+                        let own = self.lcx.fns[&d]
+                            .f
+                            .generic_params
+                            .as_ref()
+                            .is_some_and(|g| !g.params.is_empty());
+                        let inst_args = if own {
+                            let ret = if self.lcx.node_types.contains_key(&e.id) {
+                                Some(self.expr_ty(e)?)
+                            } else {
+                                None
+                            };
+                            match self.own_generics_from_args(d, inst.clone(), args, ret)? {
+                                Some((_, full)) => full,
+                                None => inst,
+                            }
+                        } else {
+                            inst
+                        };
+                        return self.user_method_call(e, object, d, inst_args, args, dest);
+                    }
+                }
                 let inst_args = self.instance_args(e.span, &substs)?;
                 let mut inst_args = inst_args;
                 if method == "collect" && args.is_empty() && inst_args.len() >= 2 {
@@ -26963,7 +27093,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 .is_some_and(|g| !g.params.is_empty());
             return (prim.next().is_none() && !generic).then(|| (d, Vec::new()));
         }
-        if let HK::Tuple(_) = kind {
+        if let HK::Tuple(_) | HK::Array { .. } = kind {
             // One with parameters of its own reads them off the call
             // (`generic_method_by_receiver`).
             let (d, inst) = self.generic_tuple_impl_method(base, None, method)?;
@@ -27098,7 +27228,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
         // A generic tuple impl's method, its impl parameters read off the
         // tuple and its own off the arguments.
-        if let HK::Tuple(_) = kind {
+        if let HK::Tuple(_) | HK::Array { .. } = kind {
             return match self.generic_tuple_impl_method(base, None, method) {
                 Some((d, inst)) if generic(&self.lcx.fns[&d]) => {
                     self.own_generics_from_args(d, inst, args, ret)

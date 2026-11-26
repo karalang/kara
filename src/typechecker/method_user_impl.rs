@@ -537,6 +537,12 @@ impl<'a> super::TypeChecker<'a> {
         // `a.map(...)` and a plain typo both went from a clear rejection to
         // "All checks passed". So only a receiver with a MATCHING user impl is
         // normalized, and everything else keeps the diagnostic it had.
+        // The receiver's length, which an impl's `const N` written there
+        // binds to (B-2026-11-26-68).
+        let array_len = match receiver_for_lookup {
+            Type::Array { size, .. } => Some(super::types::const_arg_type(size.clone())),
+            _ => None,
+        };
         let array_user_impl_receiver: Option<Type> = match receiver_for_lookup {
             Type::Array { element, .. } if self.array_user_impl_declares(method) => {
                 Some(Type::Named {
@@ -1450,6 +1456,13 @@ impl<'a> super::TypeChecker<'a> {
                         let mut padded = type_args.clone();
                         padded.push(super::types::default_hasher());
                         padded
+                    }
+                    // An array's length after its element, as its impl's
+                    // written target carries it.
+                    _ if type_name == "Array" && type_args.len() == 1 && array_len.is_some() => {
+                        let mut with_len = type_args.clone();
+                        with_len.extend(array_len.clone());
+                        with_len
                     }
                     _ => type_args.clone(),
                 };

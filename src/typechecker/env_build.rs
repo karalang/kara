@@ -2887,6 +2887,13 @@ impl<'a> super::TypeChecker<'a> {
         let target_generic_args: Vec<Type> = match &lowered_target {
             Type::Named { args, .. } => args.clone(),
             Type::Slice { element, .. } => vec![(**element).clone()],
+            // An array's element, then its length as a `const_arg_type`, so
+            // `impl[T, const N: i64] .. for Array[T, N]` binds both against
+            // a receiver's (B-2026-11-26-68).
+            Type::Array { element, size } => vec![
+                (**element).clone(),
+                super::types::const_arg_type(size.clone()),
+            ],
             // A tuple's elements, so a generic tuple impl (`impl[A, B] Show
             // for (A, B)`) binds its params against a receiver's.
             Type::Tuple(elems) => elems.clone(),
@@ -3037,18 +3044,23 @@ impl<'a> super::TypeChecker<'a> {
             // is what catches those, and it catches the pre-existing `Tensor`
             // version of the same shape with them.
             //
-            // A NON-CONCRETE element is not registered, for the same reason
-            // the `Slice` arm gives: codegen mangles a generic impl's methods
-            // per instantiation, so no plain `Array.<method>` fn exists and
-            // the build would die while check and `--interp` passed.
+            // A NON-CONCRETE element registers generic-on-name for a trait
+            // impl (`impl[T, const N: i64] Sum for Array[T, N]`), as a
+            // generic tuple impl does: the MIR instances its methods at each
+            // array receiver the written target fits (B-2026-11-26-68). An
+            // inherent one stays unregistered.
             Type::Array { element, .. } => {
                 let Some(name) = method_callee_type_name(&lowered_target) else {
                     return;
                 };
                 if !type_is_fully_concrete(element) {
-                    return;
+                    if imp.trait_name.is_none() || !self.library_methods_from_source {
+                        return;
+                    }
+                    (name, Vec::new())
+                } else {
+                    (name, vec![(**element).clone()])
                 }
-                (name, vec![(**element).clone()])
             }
             // A blanket trait impl over its own parameter (`impl[I: Iterator]
             // IntoIterator for I`, design.md §9) registers under the
