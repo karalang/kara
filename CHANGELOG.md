@@ -590,6 +590,24 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Added
 
+- `String.to_ascii_lowercase()` and `to_ascii_uppercase()`, with Rust's
+  meaning: ASCII letters change case and every other byte is kept
+  (B-2026-11-26-63).
+
+- A list literal in a `Slice` slot of a tuple, array or struct literal
+  passed as an argument (`attrs([("objectClass", ["top", "domain"])])` for
+  a `Slice[(Str, Slice[Str])]`) is lent for the call, as one passed straight
+  to a `Slice` parameter is. It was refused with "expected '(Str,
+  Slice[Str])', found '(String, Vec[String])'" (B-2026-11-26-62).
+
+- `karac fix` rewrites more Rust: `F.Eq(..)` to `F.Eq { .. }`
+  (B-2026-11-26-60), `.map_err(|_| e)` on an `Option` to `.ok_or_else(|| e)`
+  where it suggested a `map_or` that does not fit (B-2026-11-26-64),
+  `assert_eq!(a, b, "got {}", x)` to `assert_eq(a, b, f"got {x}")`
+  (B-2026-11-26-65), and an enum variant constructor named as a value
+  (`.map(Some)`, `.map(Tag.Name)`) to the closure `|a0| Some(a0)`
+  (B-2026-11-26-66).
+
 - `..mut ref rest` over a `mut ref Array[T, N]` binds `rest` as a
   `mut ref Array[T, K]` into the array itself (design.md § Slice and array
   patterns): writes through it, element by element, through `iter_mut`,
@@ -1151,6 +1169,15 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   override compiles as before. Such bindings nest at most 16 deep: the 17th, and
   a recursion that binds a tee on every round, are refused with
   `E_PROVIDER_NEST` (`E0425`) (B-2026-11-25-50).
+- `Some`, `Ok` and `Err` named as a function value (`r.map(Some)`) passed
+  `karac check` and then failed to build ("no body for `Some`"). They are
+  now refused as any variant constructor named as a value is, with the
+  closure as the fix (B-2026-11-26-66).
+
+- `for (t, vs) in ref self.attrs { return Some(vs) }` in a method returning
+  `Option[ref Vec[String]]` was refused with E0509, as if `vs` borrowed a
+  local; the loop borrows the receiver's own field (B-2026-11-26-61).
+
 - `karac run` and `karac run --interp` now answer `has_debug_metadata()`
   from the package's `[profile.dev] runtime_debug_metadata`, on by default,
   as `karac build` does. `karac run` used to answer true whatever the

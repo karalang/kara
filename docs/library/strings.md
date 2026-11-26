@@ -71,6 +71,8 @@ An empty pattern matches at every char boundary, the start and the end included,
 | `to_uppercase` | `fn to_uppercase(self) -> String` | Unicode uppercasing |
 | `repeat` | `fn repeat(self, n: i64) -> String` | The text `n` times over, a new `String`: `"ab".repeat(3)` is `"ababab"`; a count of zero or less returns the empty string. A length the allocator cannot hold is an allocation failure, as for any `String` |
 | `to_lowercase` | `fn to_lowercase(self) -> String` | Unicode lowercasing |
+| `to_ascii_uppercase` | `fn to_ascii_uppercase(self) -> String` | Rust's: ASCII letters put in upper case, every other byte kept, so the byte length is the same (`"é"` stays `"é"`). For protocol tokens such as LDAP attribute names (B-2026-11-26-63) |
+| `to_ascii_lowercase` | `fn to_ascii_lowercase(self) -> String` | Rust's: ASCII letters put in lower case, every other byte kept (B-2026-11-26-63) |
 | `normalize` | `fn normalize(self, form: NormalizationForm) -> String` | See [Equality and normalization](#equality-and-normalization) |
 | `to_string` | `fn to_string(self) -> String` | An owned copy of a `Str`. For a `String`, use `clone()` |
 | `clone` | `fn clone(self) -> String` | The same owned copy as `to_string()`. A `Str` is a view, so `clone()` copies the text it views, not the view |

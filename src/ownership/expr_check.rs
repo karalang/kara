@@ -54,6 +54,8 @@ const RANGE_VIEW_COPY_OUT_METHODS: &[&str] = &[
     "ends_with",
     "to_uppercase",
     "to_lowercase",
+    "to_ascii_lowercase",
+    "to_ascii_uppercase",
 ];
 
 impl<'a> super::OwnershipChecker<'a> {

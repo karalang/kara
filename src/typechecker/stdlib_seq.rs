@@ -658,7 +658,8 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 Type::Str
             }
-            "trim" | "trim_start" | "trim_end" | "to_lowercase" | "to_uppercase" => {
+            "trim" | "trim_start" | "trim_end" | "to_lowercase" | "to_uppercase"
+            | "to_ascii_lowercase" | "to_ascii_uppercase" => {
                 // trim() -> String: a fresh owned copy with leading/trailing
                 // Unicode whitespace removed (Rust `str::trim`, owned rather
                 // than a borrowed view). trim_start()/trim_end() strip only the

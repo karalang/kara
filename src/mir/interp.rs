@@ -13849,6 +13849,16 @@ impl<'a> Interp<'a> {
                 let t = s.to_lowercase();
                 new_string(self, t)
             }
+            // Rust's `str::to_ascii_{upper,lower}case`: only ASCII letters
+            // change, so the byte length is kept (B-2026-11-26-63).
+            "to_ascii_uppercase" => {
+                let t = s.to_ascii_uppercase();
+                new_string(self, t)
+            }
+            "to_ascii_lowercase" => {
+                let t = s.to_ascii_lowercase();
+                new_string(self, t)
+            }
             "replace" => {
                 let t = s.replace(text(1)?, text(2)?);
                 new_string(self, t)
@@ -21830,6 +21840,8 @@ const STRING_TEXT_METHODS: &[&str] = &[
     "trim",
     "to_uppercase",
     "to_lowercase",
+    "to_ascii_lowercase",
+    "to_ascii_uppercase",
     "replace",
     "repeat",
     "substring",

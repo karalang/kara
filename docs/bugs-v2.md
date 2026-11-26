@@ -58,15 +58,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 777 |
-| false-positive | 391 |
-| missing-feature | 264 |
+| diagnostics | 780 |
+| false-positive | 393 |
+| missing-feature | 265 |
 | perf | 205 |
 | other | 157 |
 | soundness | 134 |
 | miscompile | 110 |
 | run-vs-build | 77 |
-| crash | 70 |
+| crash | 71 |
 | codegen-gap | 47 |
 | use-after-free | 13 |
 | leak | 5 |
@@ -76,14 +76,14 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 945 |
-| mir | 345 |
-| mir-llvm | 334 |
+| typecheck | 949 |
+| mir | 346 |
+| mir-llvm | 335 |
 | cli | 320 |
-| parser | 163 |
-| ownership | 139 |
-| runtime | 114 |
-| interp | 112 |
+| parser | 165 |
+| ownership | 140 |
+| runtime | 115 |
+| interp | 113 |
 | effect | 70 |
 | resolver | 59 |
 | other | 56 |
@@ -151,6 +151,13 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-15 | 2026-11-26 | typecheck | medium | A hand-written `impl PartialOrd` (with `partial_cmp`) is refused by every `T: PartialOrd` bound: free `min`/`max`, a user `fn g[T: PartialOrd]` and an `impl[T: PartialOrd]` block | — |
 | B-2026-11-26-16 | 2026-11-26 | resolver | medium | `karac fix` copies a std import's misspelled item into correct uses (`import std.time.{Duratoin}`), leaves a std module typo unfixed or rewrites its uses (`std.tiem`, `std.randmo` to `rand.`), and loses a method typo's edit before a `(` argument (`v.psuh((1))`) | — |
 | B-2026-11-26-17 | 2026-11-26 | typecheck | low | A built-in method with no library wrapper cannot be named as a value: `let f = i64.checked_add;` and `let g = Vec.windows;` are refused (E0200 / E0236, with the closure to write), though `i64.abs`, `i64.pow`, `Vec.len`, `Vec.first` are function values | — |
+| B-2026-11-26-60 | 2026-11-26 | parser | low | Rust's rest pattern for a tuple variant, `F.Eq(..)`, had no fix to Kāra's `F.Eq { .. }` | — |
+| B-2026-11-26-61 | 2026-11-26 | ownership | medium | `for (t, vs) in ref self.attrs { return Some(vs) }` in a method returning `Option[ref Vec[String]]` was refused with E0509, as if `vs` borrowed a local | — |
+| B-2026-11-26-62 | 2026-11-26 | typecheck | medium | A list literal in a tuple literal's `Slice` slot inside a call argument (`attrs([("objectClass", ["top", "domain"])])` for a `Slice[(Str, Slice[Str])]`) was refused with "expected '(Str, Slice[Str])', found '(String, Vec[String])'" | — |
+| B-2026-11-26-63 | 2026-11-26 | typecheck+interp+mir-llvm+runtime | low | `String` / `Str` had no `to_ascii_lowercase` / `to_ascii_uppercase` ("no method 'to_ascii_lowercase' on type 'String'"), which LDAP attribute names and DNs want | — |
+| B-2026-11-26-64 | 2026-11-26 | typecheck | low | `.map_err(|_| e)` on an `Option` (Rust's `u8::from_str_radix(..).map_err(..)?`, an `Option` here) was "fixed" to `.map_or(|_| e)`, which takes two arguments | — |
+| B-2026-11-26-65 | 2026-11-26 | parser | low | `assert_eq!(a, b, "fmt '{}'", x)` lost its `!` and then failed with "`assert_eq` takes two operands and an optional message, but 4 arguments were given", with no fix | — |
+| B-2026-11-26-66 | 2026-11-26 | typecheck+mir | medium | `Some` / `Ok` / `Err` named as a function value (`parse_message(raw).map(Some)`) passed `karac check` and failed to build with "a call to this function value is not lowered yet; no body for `Some`" | — |
 
 ### Relocated
 

@@ -2674,6 +2674,32 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// B-2026-11-26-62 — whether a tuple literal of element types `found`
+    /// fits `expected` once each list literal filling a `Slice` slot is
+    /// viewed, as it is passed for a `Slice` parameter: `("a", ["x"])` for
+    /// a `(Str, Slice[Str])`. The MIR pipeline asks only this, so a `ref`
+    /// slot keeps its own rule; the view of a temporary that outlives its
+    /// statement is borrowck's to refuse (E0516).
+    fn views_into_slice_slots(expected: &Type, found: &Type) -> bool {
+        match (expected, found) {
+            (Type::Tuple(es), Type::Tuple(fs)) if es.len() == fs.len() => es
+                .iter()
+                .zip(fs)
+                .all(|(e, f)| Self::views_into_slice_slots(e, f)),
+            (Type::Slice { element, .. }, Type::Named { name, args })
+                if name == "Vec" && args.len() == 1 =>
+            {
+                super::types::types_compatible(&args[0], element)
+                    && super::types::types_compatible(element, &args[0])
+            }
+            (Type::Slice { element, .. }, Type::Array { element: a, .. }) => {
+                super::types::types_compatible(a, element)
+                    && super::types::types_compatible(element, a)
+            }
+            _ => super::types::types_compatible(found, expected),
+        }
+    }
+
     /// A borrowed receiver reads as its value type, so `self` from a
     /// `ref self` method lent where a `ref Self` is wanted (`Chars { s: self,
     /// .. }` in `impl String`) is that borrow, not a value that needs one.
@@ -4522,6 +4548,13 @@ impl<'a> super::TypeChecker<'a> {
                         || (is_collection_literal(e)
                             && matches!(slot, Type::Named { .. })
                             && expectation_is_concrete(slot))
+                        // B-2026-11-26-62 — a list literal filling a
+                        // `Slice` slot is typed by it, as one passed for a
+                        // `Slice` parameter is: inside a call argument the
+                        // temporary is lent for the call (design.md §
+                        // Slices), and at a `let` borrowck refuses the view
+                        // of a temporary that would dangle.
+                        || (is_collection_literal(e) && matches!(slot, Type::Slice { .. }))
                         || is_dyn_slot(slot)
                         // A closure literal into a function slot takes its
                         // parameter types from the slot, as at a `let`:
@@ -4600,7 +4633,9 @@ impl<'a> super::TypeChecker<'a> {
                         self.record_expr_type(&expr.span, &result);
                         return result;
                     }
-                    if strict && self.lends_into_tuple_slots(expected, &result) {
+                    if (strict && self.lends_into_tuple_slots(expected, &result))
+                        || (library && Self::views_into_slice_slots(expected, &result))
+                    {
                         self.record_expr_type(&expr.span, expected);
                         return expected.clone();
                     }
@@ -18506,6 +18541,31 @@ impl<'a> super::TypeChecker<'a> {
                     // `Type::Error`, as for any type name in value position:
                     // one diagnostic, no "moved here" or mismatch after it.
                     self.refuse_bare_unit_struct(name, &expr.span, false);
+                    return Type::Error;
+                }
+                // B-2026-11-26-66: `Some`, `Ok` and `Err` named as a value
+                // (Rust's `.map(Some)`) are refused as any variant
+                // constructor is (B-2026-09-14-3): the checker took them as a
+                // function and MIR had no body to call ("no body for
+                // `Some`"). The fix writes the closure.
+                if !as_callee
+                    && matches!(name.as_str(), "Some" | "Ok" | "Err")
+                    && self.local_scope.lookup(name).is_none()
+                    && !self.program_defines_fn(name, &expr.span)
+                    && matches!(ty, Type::Function { .. })
+                {
+                    self.type_error_with_fix_it(
+                        format!(
+                            "enum variant constructor '{name}' cannot be used as a function \
+                             value — wrap it in a closure: `|a0| {name}(a0)`"
+                        ),
+                        expr.span,
+                        TypeErrorKind::TypeMismatch,
+                        super::FixIt {
+                            span: expr.span,
+                            replacement: format!("|a0| {name}(a0)"),
+                        },
+                    );
                     return Type::Error;
                 }
                 // B-2026-11-19-70: a function whose named parameter has no

@@ -1676,7 +1676,9 @@ impl<'a> super::TypeChecker<'a> {
                                     let params: Vec<String> =
                                         (0..fields.len()).map(|i| format!("a{i}")).collect();
                                     let joined = params.join(", ");
-                                    self.type_error(
+                                    // The closure is the fix, so `karac fix`
+                                    // writes it (B-2026-11-26-66).
+                                    self.type_error_with_fix_it(
                                         format!(
                                             "enum variant constructor '{type_name}.{member}' cannot be used as a \
                                              function value — wrap it in a closure: \
@@ -1684,6 +1686,12 @@ impl<'a> super::TypeChecker<'a> {
                                         ),
                                         *span,
                                         TypeErrorKind::TypeMismatch,
+                                        super::FixIt {
+                                            span: *span,
+                                            replacement: format!(
+                                                "|{joined}| {type_name}.{member}({joined})"
+                                            ),
+                                        },
                                     );
                                     return Type::Error;
                                 }

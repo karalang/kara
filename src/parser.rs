@@ -2480,6 +2480,21 @@ impl Parser {
             }
             return;
         }
+        if let Some(edit) = self.assert_macro_rewrite(name) {
+            // B-2026-11-26-65: `assert_eq!(a, b, "got {}", x)` carries a
+            // format string and its arguments where the function takes one
+            // message, so deleting the `!` left an arity error with no fix.
+            self.error_at(
+                &format!(
+                    "Kāra has no macros; `{name}!(...)` is Rust syntax: `{name}` takes one \
+                     message string, so its format arguments go into an f-string, \
+                     `{name}(.., f\"{{x}} and {{y}}\")`"
+                ),
+                bang_span,
+            );
+            self.fix_edits.insert(key, edit);
+            return;
+        }
         if !MACRO_FUNCTION_TWINS.contains(&name) {
             let instead = match name {
                 "vec" => "write a list literal, `[a, b]`, or `Vec.new()`".to_string(),
@@ -2605,6 +2620,56 @@ impl Parser {
         body.replace("{{", "").contains('{')
     }
 
+    /// `assert!(c, "fmt", args..)`, `assert_eq!(a, b, "fmt", args..)` or
+    /// `assert_ne!`, the `!` current: the call with its message written as
+    /// one f-string. `None` when the message is a plain string (deleting the
+    /// `!` is the fix then) or has no rewrite.
+    fn assert_macro_rewrite(&self, name: &str) -> Option<crate::resolver::TextEdit> {
+        let operands = match name {
+            "assert" => 1,
+            "assert_eq" | "assert_ne" => 2,
+            _ => return None,
+        };
+        let (source, base) = self.source.as_ref()?;
+        let open = self.tokens.get(self.pos + 1)?;
+        if !matches!(open.token, Token::LeftParen) {
+            return None;
+        }
+        // The depth-0 commas, up to the close.
+        let mut depth = 0usize;
+        let mut commas = Vec::new();
+        let mut i = self.pos + 2;
+        loop {
+            match self.tokens.get(i)?.token {
+                Token::EOF => return None,
+                Token::LeftParen | Token::LeftBracket | Token::LeftBrace => depth += 1,
+                Token::RightParen if depth == 0 => break,
+                Token::RightParen | Token::RightBracket | Token::RightBrace => {
+                    depth = depth.checked_sub(1)?
+                }
+                Token::Comma if depth == 0 => commas.push(i),
+                _ => {}
+            }
+            i += 1;
+        }
+        let lit_at = *commas.get(operands - 1)? + 1;
+        let Token::StringLiteral(body) = &self.tokens.get(lit_at)?.token else {
+            return None;
+        };
+        let formats = commas.len() > operands + 1
+            && !(commas.len() == operands + 2 && commas[operands + 1] + 1 == i);
+        if !formats && !body.replace("{{", "").contains('{') {
+            return None;
+        }
+        let edit = self.format_rewrite_from(lit_at)?;
+        let lit = &self.tokens[lit_at].span;
+        let head = source.get(open.span.offset - base..lit.offset - base)?;
+        Some(crate::resolver::TextEdit {
+            replacement: format!("{name}{head}{})", edit.replacement),
+            ..edit
+        })
+    }
+
     /// Whether the format string of the macro whose `!` is current has a
     /// Debug hole, `{:?}` or `{x:?}` (B-2026-11-20-18).
     fn macro_has_debug_hole(&self) -> bool {
@@ -2616,6 +2681,13 @@ impl Parser {
     }
 
     fn format_macro_rewrite(&self) -> Option<crate::resolver::TextEdit> {
+        self.format_rewrite_from(self.pos + 2)
+    }
+
+    /// The f-string for the macro whose `!` is current, its format string
+    /// being the token at `lit_at` and its format arguments the rest up to
+    /// the close; the edit spans from the macro's name to the close.
+    fn format_rewrite_from(&self, lit_at: usize) -> Option<crate::resolver::TextEdit> {
         let (source, base) = self.source.as_ref()?;
         let text = |span: &Span| {
             source.get(span.offset.checked_sub(*base)?..span.offset - base + span.length)
@@ -2624,7 +2696,7 @@ impl Parser {
         if !matches!(self.tokens.get(self.pos + 1)?.token, Token::LeftParen) {
             return None;
         }
-        let lit = self.tokens.get(self.pos + 2)?;
+        let lit = self.tokens.get(lit_at)?;
         if !matches!(lit.token, Token::StringLiteral(_)) {
             return None;
         }
@@ -2638,19 +2710,19 @@ impl Parser {
         let mut depth = 0usize;
         let mut first: Option<Span> = None;
         let mut last: Option<Span> = None;
-        let mut i = self.pos + 3;
+        let mut i = lit_at + 1;
         let close = loop {
             let t = self.tokens.get(i)?;
             match t.token {
                 Token::EOF => return None,
                 Token::RightParen if depth == 0 => break t.span,
                 Token::Comma if depth == 0 => {
-                    if i != self.pos + 3 {
+                    if i != lit_at + 1 {
                         args.push((first.take()?, last.take()?));
                     }
                 }
                 _ => {
-                    if i == self.pos + 3 {
+                    if i == lit_at + 1 {
                         return None;
                     }
                     match t.token {

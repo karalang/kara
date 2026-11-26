@@ -1480,6 +1480,19 @@ let s3 = sum(v[1..3]);    // a sub-range is a Slice[i64] too
 let window = v.as_slice();    // Slice[i64] as a first-class value
 ```
 
+A list literal that fills a `Slice` slot inside a tuple, array or struct literal written as an argument is lent the same way: it is a temporary that lives for the length of the call, as a list literal passed straight to a `Slice` parameter does (B-2026-11-26-62). The same literal bound by a `let` is refused, because the view would outlive the temporary (`E0516`):
+
+```kara
+fn count(attrs: Slice[(Str, Slice[Str])]) -> i64 {
+    attrs.len()
+}
+
+fn main() {
+    let n = count([("objectClass", ["top", "domain"]), ("dc", ["kara"])]);
+    assert_eq(n, 2);
+}
+```
+
 **Comparison.** `==` and `!=` between a `Slice[T]`, a `Vec[T]` and an `Array[T, N]` compare elements, in either order, as Rust's do: `a == s` and `s == a` are both accepted and give the same answer, and an `Array` compared with a `Slice` of another length is `false`, not an error. No `.as_slice()` is needed on either side (review ruling 2026-11-13, B-2026-11-13-17).
 
 **Mutable slices.** An in-place view is written with the `mut` modifier, as with `ref T` and `mut ref T`:

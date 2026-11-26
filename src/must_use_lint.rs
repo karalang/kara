@@ -145,6 +145,8 @@ fn builtin_must_use(key: &str) -> Option<String> {
             method,
             "to_lowercase"
                 | "to_uppercase"
+                | "to_ascii_lowercase"
+                | "to_ascii_uppercase"
                 | "replace"
                 | "replacen"
                 | "repeat"

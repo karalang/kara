@@ -221,6 +221,8 @@ pub(crate) const STRING_BUILTIN_METHODS: &[&str] = &[
     "substring",
     "to_cstring",
     "to_lowercase",
+    "to_ascii_lowercase",
+    "to_ascii_uppercase",
     "to_string",
     "to_uppercase",
     "trim",
@@ -2191,6 +2193,7 @@ impl<'a> super::TypeChecker<'a> {
         }
         if self.errors.len() > errors_before {
             self.foreign_method_twin(object, method, args, args_close_span, errors_before);
+            self.fix_option_map_err(object, method, args, errors_before);
             self.fix_method_typo(object, method, args, args_close_span, errors_before);
         }
         if self.errors.len() > errors_before && matches!(method, "body" | "with_body") {
@@ -2404,6 +2407,63 @@ impl<'a> super::TypeChecker<'a> {
                 return;
             }
         }
+    }
+
+    /// B-2026-11-26-64 — `.map_err(|_| e)` on an `Option`: Rust's
+    /// `u8::from_str_radix(..)` is a `Result`, Kāra's `u8.from_str_radix`
+    /// an `Option` (library/core-types.md), so a ported `.map_err(..)?`
+    /// lands on an `Option`. The edit-distance suggestion was `map_or`,
+    /// which takes two arguments; the error-making closure belongs in
+    /// `ok_or_else`. Rewritten only when the closure ignores its one
+    /// parameter, so the body reads the same with none.
+    fn fix_option_map_err(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        args: &[CallArg],
+        errors_before: usize,
+    ) {
+        if method != "map_err" || args.len() != 1 {
+            return;
+        }
+        let head = "no method 'map_err' on type 'Option";
+        let Some(i) = (errors_before..self.errors.len()).find(|&i| {
+            let e = &self.errors[i];
+            matches!(e.kind, TypeErrorKind::NoMethodFound) && e.message.starts_with(head)
+        }) else {
+            return;
+        };
+        let msg = "no method 'map_err' on type 'Option': `map_err` is a `Result` method, and \
+                   this value is an `Option` (Kāra's `from_str_radix` gives one where Rust's \
+                   gives a `Result`); `.ok_or_else(|| e)` turns `None` into \
+                   `Err(e)`"
+            .to_string();
+        let fix = match &args[0].value.kind {
+            ExprKind::Closure {
+                params,
+                capture_mode: None,
+                body,
+                ..
+            } if params.len() == 1
+                && params[0].ty.is_none()
+                && matches!(params[0].pattern.kind, PatternKind::Wildcard) =>
+            {
+                let from = object.span.offset + object.span.length;
+                (body.span.offset > from).then(|| super::FixIt {
+                    span: Span {
+                        offset: from,
+                        length: body.span.offset - from,
+                        line: object.span.line,
+                        column: object.span.column,
+                    },
+                    replacement: ".ok_or_else(|| ".to_string(),
+                })
+            }
+            _ => None,
+        };
+        let err = &mut self.errors[i];
+        err.message = msg;
+        err.fix_it = fix;
     }
 
     fn fix_method_typo(

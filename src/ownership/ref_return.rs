@@ -1585,18 +1585,27 @@ fn core_defs_in_expr<'e>(
         // A `for` over a borrowing walk of a place lends each element of it
         // (B-2026-10-14-60): `for (k, it) in v.iter()` with `v: ref Vec[..]`.
         // So does a bare `for x in xs` over a place, which borrows it
-        // through Iterable (core §4.6; B-2026-11-07-39).
+        // through Iterable (core §4.6; B-2026-11-07-39), and `for x in ref
+        // xs`, which `karac fix` writes for Rust's `for x in &xs`, lends the
+        // same elements (B-2026-11-26-61).
         ExprKind::For {
             pattern, iterable, ..
         } => match borrowed_walk_place(iterable).or_else(|| {
+            let place = match &iterable.kind {
+                ExprKind::Unary {
+                    op: UnaryOp::Ref | UnaryOp::MutRef,
+                    operand,
+                } => &**operand,
+                _ => &**iterable,
+            };
             matches!(
-                iterable.kind,
+                place.kind,
                 ExprKind::Identifier(_)
                     | ExprKind::SelfValue
                     | ExprKind::FieldAccess { .. }
                     | ExprKind::TupleIndex { .. }
             )
-            .then_some(&**iterable)
+            .then_some(place)
         }) {
             Some(place) => {
                 for n in pattern.binding_names() {

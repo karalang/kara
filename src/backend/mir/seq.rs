@@ -1193,6 +1193,9 @@ impl<'ctx> Cx<'ctx, '_> {
             "trim_start" => Some(3),
             "trim_end" => Some(4),
             "sorted" => Some(5),
+            // Rust's `str::to_ascii_{upper,lower}case` (B-2026-11-26-63).
+            "to_ascii_uppercase" => Some(6),
+            "to_ascii_lowercase" => Some(7),
             _ => None,
         };
         match (method, args) {

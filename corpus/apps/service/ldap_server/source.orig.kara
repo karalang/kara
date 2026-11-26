@@ -1,0 +1,1449 @@
+// ldap_server: an LDAPv3 directory server on loopback TCP (RFC 4511), every
+// message BER-encoded, and the scripted clients that bind, search with RFC
+// 4515 filter strings, compare, add, modify and delete. Each connection is
+// a task; the directory is one tree behind a mutex, kept in tree order.
+
+use std::collections::BTreeMap;
+use std::io::{BufReader, Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+const ADDR: &str = "127.0.0.1:47787";
+const SESSIONS: usize = 6;
+const BASE: &str = "dc=kara,dc=test";
+const ADMIN: &str = "cn=admin,dc=kara,dc=test";
+// Obviously fake credentials.
+const ADMIN_PASSWORD: &str = "not-a-real-secret/admin";
+const NOTICE_OID: &str = "1.3.6.1.4.1.1466.20036";
+const MAX_MESSAGE: usize = 1 << 20;
+
+const SUCCESS: i64 = 0;
+const PROTOCOL_ERROR: i64 = 2;
+const SIZE_LIMIT_EXCEEDED: i64 = 4;
+const COMPARE_FALSE: i64 = 5;
+const COMPARE_TRUE: i64 = 6;
+const AUTH_METHOD_NOT_SUPPORTED: i64 = 7;
+const NO_SUCH_ATTRIBUTE: i64 = 16;
+const ATTRIBUTE_OR_VALUE_EXISTS: i64 = 20;
+const NO_SUCH_OBJECT: i64 = 32;
+const INVALID_DN_SYNTAX: i64 = 34;
+const INVALID_CREDENTIALS: i64 = 49;
+const INSUFFICIENT_ACCESS: i64 = 50;
+const NAMING_VIOLATION: i64 = 64;
+const OBJECT_CLASS_VIOLATION: i64 = 65;
+const NOT_ALLOWED_ON_NON_LEAF: i64 = 66;
+const ENTRY_ALREADY_EXISTS: i64 = 68;
+
+fn result_name(code: i64) -> String {
+    let name = match code {
+        0 => "success",
+        1 => "operationsError",
+        2 => "protocolError",
+        4 => "sizeLimitExceeded",
+        5 => "compareFalse",
+        6 => "compareTrue",
+        7 => "authMethodNotSupported",
+        16 => "noSuchAttribute",
+        20 => "attributeOrValueExists",
+        32 => "noSuchObject",
+        34 => "invalidDNSyntax",
+        49 => "invalidCredentials",
+        50 => "insufficientAccessRights",
+        64 => "namingViolation",
+        65 => "objectClassViolation",
+        66 => "notAllowedOnNonLeaf",
+        68 => "entryAlreadyExists",
+        _ => return code.to_string(),
+    };
+    name.to_string()
+}
+
+/// Attribute types whose values order and match as integers.
+fn is_numeric(t: &str) -> bool {
+    let t = t.to_ascii_lowercase();
+    t == "uidnumber" || t == "gidnumber"
+}
+
+/// Attribute types whose values match exactly, byte for byte.
+fn is_exact(t: &str) -> bool {
+    t.to_ascii_lowercase() == "userpassword"
+}
+
+#[derive(Debug)]
+struct BerError(String);
+
+// ---- BER
+
+fn enc_len(n: usize) -> Vec<u8> {
+    if n < 0x80 {
+        vec![n as u8]
+    } else if n < 0x100 {
+        vec![0x81, n as u8]
+    } else if n < 0x10000 {
+        vec![0x82, (n >> 8) as u8, (n & 0xff) as u8]
+    } else {
+        vec![0x83, (n >> 16) as u8, ((n >> 8) & 0xff) as u8, (n & 0xff) as u8]
+    }
+}
+
+fn tlv(tag: u8, content: &[u8]) -> Vec<u8> {
+    let mut out = vec![tag];
+    out.extend_from_slice(&enc_len(content.len()));
+    out.extend_from_slice(content);
+    out
+}
+
+fn enc_int(tag: u8, n: i64) -> Vec<u8> {
+    let mut out: Vec<u8> = Vec::new();
+    let mut n = n;
+    loop {
+        out.insert(0, (n & 0xff) as u8);
+        n >>= 8;
+        if (n == 0 && out[0] < 0x80) || (n == -1 && out[0] >= 0x80) {
+            break;
+        }
+    }
+    tlv(tag, &out)
+}
+
+fn enc_str(tag: u8, s: &str) -> Vec<u8> {
+    tlv(tag, s.as_bytes())
+}
+
+fn seq(tag: u8, parts: Vec<Vec<u8>>) -> Vec<u8> {
+    let mut body = Vec::new();
+    for p in parts {
+        body.extend_from_slice(&p);
+    }
+    tlv(tag, &body)
+}
+
+/// Reads TLVs off a byte string; every read checks the bounds.
+struct Reader {
+    data: Vec<u8>,
+    pos: usize,
+}
+
+impl Reader {
+    fn new(data: &[u8]) -> Reader {
+        Reader { data: data.to_vec(), pos: 0 }
+    }
+
+    fn done(&self) -> bool {
+        self.pos >= self.data.len()
+    }
+
+    fn read(&mut self) -> Result<(u8, Vec<u8>), BerError> {
+        if self.pos + 2 > self.data.len() {
+            return Err(BerError("truncated".to_string()));
+        }
+        let tag = self.data[self.pos];
+        if tag & 0x1f == 0x1f {
+            return Err(BerError("high tag numbers are not used".to_string()));
+        }
+        let first = self.data[self.pos + 1];
+        self.pos += 2;
+        let n = if first < 0x80 {
+            first as usize
+        } else {
+            let k = (first & 0x7f) as usize;
+            if k == 0 || k > 3 {
+                return Err(BerError("bad length".to_string()));
+            }
+            if self.pos + k > self.data.len() {
+                return Err(BerError("truncated".to_string()));
+            }
+            let mut n = 0usize;
+            for b in &self.data[self.pos..self.pos + k] {
+                n = n * 256 + *b as usize;
+            }
+            self.pos += k;
+            n
+        };
+        if self.pos + n > self.data.len() {
+            return Err(BerError("truncated".to_string()));
+        }
+        let body = self.data[self.pos..self.pos + n].to_vec();
+        self.pos += n;
+        Ok((tag, body))
+    }
+
+    fn expect(&mut self, tag: u8) -> Result<Vec<u8>, BerError> {
+        let (t, body) = self.read()?;
+        if t != tag {
+            return Err(BerError(format!("expected tag 0x{:02x}, got 0x{:02x}", tag, t)));
+        }
+        Ok(body)
+    }
+
+    fn int(&mut self, tag: u8) -> Result<i64, BerError> {
+        let body = self.expect(tag)?;
+        if body.is_empty() || body.len() > 8 {
+            return Err(BerError("bad integer".to_string()));
+        }
+        let mut n: i64 = if body[0] >= 0x80 { -1 } else { 0 };
+        for b in &body {
+            n = (n << 8) | *b as i64;
+        }
+        Ok(n)
+    }
+
+    fn text(&mut self, tag: u8) -> Result<String, BerError> {
+        let body = self.expect(tag)?;
+        String::from_utf8(body).map_err(|_| BerError("not UTF-8".to_string()))
+    }
+
+    fn boolean(&mut self) -> Result<bool, BerError> {
+        let body = self.expect(0x01)?;
+        if body.len() != 1 {
+            return Err(BerError("bad boolean".to_string()));
+        }
+        Ok(body[0] != 0)
+    }
+}
+
+// ---- distinguished names
+
+/// The RDNs of a DN string, split at unescaped commas; None if bad.
+fn split_dn(dn: &str) -> Option<Vec<(String, String)>> {
+    if dn.is_empty() {
+        return Some(Vec::new());
+    }
+    let chars: Vec<char> = dn.chars().collect();
+    let mut parts: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '\\' {
+            if i + 1 >= chars.len() {
+                return None;
+            }
+            cur.push(c);
+            cur.push(chars[i + 1]);
+            i += 2;
+            continue;
+        }
+        if c == ',' {
+            parts.push(cur.clone());
+            cur.clear();
+        } else {
+            cur.push(c);
+        }
+        i += 1;
+    }
+    parts.push(cur);
+    let mut out = Vec::new();
+    for p in &parts {
+        let k = p.find('=')?;
+        if k == 0 {
+            return None;
+        }
+        let t = p[..k].trim();
+        let v = p[k + 1..].trim();
+        if t.is_empty() || v.is_empty() {
+            return None;
+        }
+        out.push((t.to_string(), v.to_string()));
+    }
+    Some(out)
+}
+
+fn unescape(v: &str) -> String {
+    let chars: Vec<char> = v.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '\\' && i + 1 < chars.len() {
+            out.push(chars[i + 1]);
+            i += 2;
+        } else {
+            out.push(chars[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+/// The DN's identity, root first: its RDNs with types and values
+/// case-folded and the values unescaped. A map keyed by it walks the tree
+/// in order, each entry before its children.
+fn tree_key(rdns: &[(String, String)]) -> Vec<String> {
+    rdns.iter()
+        .rev()
+        .map(|(t, v)| format!("{}={}", t.to_ascii_lowercase(), unescape(v).to_ascii_lowercase()))
+        .collect()
+}
+
+fn parent_of(key: &[String]) -> Vec<String> {
+    key[..key.len() - 1].to_vec()
+}
+
+// ---- the directory
+
+#[derive(Clone)]
+struct Entry {
+    dn: String,
+    attrs: Vec<(String, Vec<String>)>,
+}
+
+impl Entry {
+    fn get(&self, name: &str) -> Option<&Vec<String>> {
+        for (t, vs) in &self.attrs {
+            if t.eq_ignore_ascii_case(name) {
+                return Some(vs);
+            }
+        }
+        None
+    }
+}
+
+struct State {
+    entries: BTreeMap<Vec<String>, Entry>,
+    ops: BTreeMap<String, i64>,
+    results: BTreeMap<i64, i64>,
+}
+
+fn attrs(pairs: &[(&str, &[&str])]) -> Vec<(String, Vec<String>)> {
+    pairs
+        .iter()
+        .map(|(t, vs)| (t.to_string(), vs.iter().map(|v| v.to_string()).collect()))
+        .collect()
+}
+
+fn seed() -> Vec<(String, Vec<(String, Vec<String>)>)> {
+    let people = format!("ou=people,{}", BASE);
+    vec![
+        (BASE.to_string(), attrs(&[("objectClass", &["top", "domain"]), ("dc", &["kara"])])),
+        (people.clone(), attrs(&[("objectClass", &["organizationalUnit"]), ("ou", &["people"])])),
+        (
+            format!("ou=groups,{}", BASE),
+            attrs(&[("objectClass", &["organizationalUnit"]), ("ou", &["groups"])]),
+        ),
+        (
+            ADMIN.to_string(),
+            attrs(&[
+                ("objectClass", &["person"]),
+                ("cn", &["admin"]),
+                ("sn", &["Admin"]),
+                ("userPassword", &[ADMIN_PASSWORD]),
+            ]),
+        ),
+        (
+            format!("uid=alice,{}", people),
+            attrs(&[
+                ("objectClass", &["person", "posixAccount"]),
+                ("uid", &["alice"]),
+                ("cn", &["Alice Liddell"]),
+                ("sn", &["Liddell"]),
+                ("mail", &["alice@kara.test"]),
+                ("uidNumber", &["1001"]),
+                ("userPassword", &["not-a-real-secret/alice"]),
+            ]),
+        ),
+        (
+            format!("uid=bob,{}", people),
+            attrs(&[
+                ("objectClass", &["person", "posixAccount"]),
+                ("uid", &["bob"]),
+                ("cn", &["Bob Builder"]),
+                ("sn", &["Builder"]),
+                ("mail", &["bob@kara.test", "builder@kara.test"]),
+                ("uidNumber", &["1002"]),
+                ("userPassword", &["not-a-real-secret/bob"]),
+            ]),
+        ),
+        (
+            format!("uid=carol,{}", people),
+            attrs(&[
+                ("objectClass", &["person", "posixAccount"]),
+                ("uid", &["carol"]),
+                ("cn", &["Carol Danvers"]),
+                ("sn", &["Danvers"]),
+                ("uidNumber", &["1010"]),
+                ("userPassword", &["not-a-real-secret/carol"]),
+            ]),
+        ),
+        (
+            format!("cn=Smith\\, John,{}", people),
+            attrs(&[
+                ("objectClass", &["person"]),
+                ("cn", &["Smith, John"]),
+                ("sn", &["Smith"]),
+                ("mail", &["jsmith@kara.test"]),
+            ]),
+        ),
+        (
+            format!("cn=staff,ou=groups,{}", BASE),
+            attrs(&[
+                ("objectClass", &["groupOfNames"]),
+                ("cn", &["staff"]),
+                ("member", &[&format!("uid=alice,{}", people), &format!("uid=bob,{}", people)]),
+            ]),
+        ),
+    ]
+}
+
+impl State {
+    fn new() -> State {
+        let mut entries = BTreeMap::new();
+        for (dn, attrs) in seed() {
+            let key = tree_key(&split_dn(&dn).unwrap());
+            entries.insert(key, Entry { dn, attrs });
+        }
+        State { entries, ops: BTreeMap::new(), results: BTreeMap::new() }
+    }
+
+    /// The DN of the deepest existing ancestor of `rdns`, as stored.
+    fn matched_dn(&self, rdns: &[(String, String)]) -> String {
+        for i in 1..=rdns.len() {
+            if let Some(e) = self.entries.get(&tree_key(&rdns[i..])) {
+                return e.dn.clone();
+            }
+        }
+        String::new()
+    }
+
+    fn count_op(&mut self, op: &str) {
+        *self.ops.entry(op.to_string()).or_insert(0) += 1;
+    }
+}
+
+// ---- filters
+
+enum Filter {
+    And(Vec<Filter>),
+    Or(Vec<Filter>),
+    Not(Box<Filter>),
+    Eq(String, String),
+    Ge(String, String),
+    Le(String, String),
+    Substr(String, Option<String>, Vec<String>, Option<String>),
+    Present(String),
+}
+
+/// Compares value `a` with assertion `b` for type `t`; None if they cannot
+/// be compared.
+fn value_cmp(t: &str, a: &str, b: &str) -> Option<std::cmp::Ordering> {
+    if is_numeric(t) {
+        let x: i64 = a.parse().ok()?;
+        let y: i64 = b.parse().ok()?;
+        return Some(x.cmp(&y));
+    }
+    if is_exact(t) {
+        return Some(a.cmp(b));
+    }
+    Some(a.to_ascii_lowercase().cmp(&b.to_ascii_lowercase()))
+}
+
+fn substr_match(v: &str, initial: &Option<String>, anys: &[String], fin: &Option<String>) -> bool {
+    let v = v.to_ascii_lowercase();
+    let mut pos = 0;
+    if let Some(i) = initial {
+        let i = i.to_ascii_lowercase();
+        if !v.starts_with(&i) {
+            return false;
+        }
+        pos = i.len();
+    }
+    for a in anys {
+        let a = a.to_ascii_lowercase();
+        match v[pos..].find(&a) {
+            Some(k) => pos += k + a.len(),
+            None => return false,
+        }
+    }
+    if let Some(f) = fin {
+        let f = f.to_ascii_lowercase();
+        if v.len() - pos < f.len() || !v.ends_with(&f) {
+            return false;
+        }
+    }
+    true
+}
+
+fn visible<'a>(e: &'a Entry, t: &str, admin: bool) -> Option<&'a Vec<String>> {
+    if is_exact(t) && !admin {
+        return None;
+    }
+    e.get(t)
+}
+
+fn matches(e: &Entry, f: &Filter, admin: bool) -> bool {
+    match f {
+        Filter::And(fs) => fs.iter().all(|g| matches(e, g, admin)),
+        Filter::Or(fs) => fs.iter().any(|g| matches(e, g, admin)),
+        Filter::Not(g) => !matches(e, g, admin),
+        Filter::Present(t) => visible(e, t, admin).is_some(),
+        Filter::Substr(t, initial, anys, fin) => match visible(e, t, admin) {
+            Some(vs) => vs.iter().any(|v| substr_match(v, initial, anys, fin)),
+            None => false,
+        },
+        Filter::Eq(t, want) | Filter::Ge(t, want) | Filter::Le(t, want) => {
+            let vs = match visible(e, t, admin) {
+                Some(vs) => vs,
+                None => return false,
+            };
+            for v in vs {
+                let c = match value_cmp(t, v, want) {
+                    Some(c) => c,
+                    None => continue,
+                };
+                let hit = match f {
+                    Filter::Eq(..) => c == std::cmp::Ordering::Equal,
+                    Filter::Ge(..) => c != std::cmp::Ordering::Less,
+                    _ => c != std::cmp::Ordering::Greater,
+                };
+                if hit {
+                    return true;
+                }
+            }
+            false
+        }
+    }
+}
+
+fn read_filter(r: &mut Reader) -> Result<Filter, BerError> {
+    let (tag, body) = r.read()?;
+    let mut inner = Reader::new(&body);
+    match tag {
+        0xa0 | 0xa1 => {
+            let mut parts = Vec::new();
+            while !inner.done() {
+                parts.push(read_filter(&mut inner)?);
+            }
+            if parts.is_empty() {
+                return Err(BerError("empty filter set".to_string()));
+            }
+            Ok(if tag == 0xa0 { Filter::And(parts) } else { Filter::Or(parts) })
+        }
+        0xa2 => {
+            let f = read_filter(&mut inner)?;
+            if !inner.done() {
+                return Err(BerError("trailing bytes in not".to_string()));
+            }
+            Ok(Filter::Not(Box::new(f)))
+        }
+        0xa3 | 0xa5 | 0xa6 | 0xa8 => {
+            let t = inner.text(0x04)?;
+            let v = inner.text(0x04)?;
+            Ok(match tag {
+                0xa5 => Filter::Ge(t, v),
+                0xa6 => Filter::Le(t, v),
+                _ => Filter::Eq(t, v),
+            })
+        }
+        0xa4 => {
+            let t = inner.text(0x04)?;
+            let mut subs = Reader::new(&inner.expect(0x30)?);
+            let mut initial: Option<String> = None;
+            let mut anys: Vec<String> = Vec::new();
+            let mut fin: Option<String> = None;
+            while !subs.done() {
+                let (st, sv) = subs.read()?;
+                let sv = String::from_utf8(sv).map_err(|_| BerError("not UTF-8".to_string()))?;
+                if st == 0x80 && initial.is_none() && anys.is_empty() && fin.is_none() {
+                    initial = Some(sv);
+                } else if st == 0x81 && fin.is_none() {
+                    anys.push(sv);
+                } else if st == 0x82 && fin.is_none() {
+                    fin = Some(sv);
+                } else {
+                    return Err(BerError("bad substrings".to_string()));
+                }
+            }
+            Ok(Filter::Substr(t, initial, anys, fin))
+        }
+        0x87 => Ok(Filter::Present(String::from_utf8_lossy(&body).to_string())),
+        _ => Err(BerError(format!("unknown filter tag 0x{:02x}", tag))),
+    }
+}
+
+// ---- operations
+
+/// A result code, a matched DN and a diagnostic message.
+type Outcome = (i64, String, String);
+
+fn fail(code: i64, message: String) -> Outcome {
+    (code, String::new(), message)
+}
+
+fn ok() -> Outcome {
+    (SUCCESS, String::new(), String::new())
+}
+
+fn result(tag: u8, o: &Outcome) -> Vec<u8> {
+    seq(tag, vec![enc_int(0x0a, o.0), enc_str(0x04, &o.1), enc_str(0x04, &o.2)])
+}
+
+fn entry_attrs(e: &Entry, wanted: &[String], types_only: bool, admin: bool) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    let all_user = wanted.is_empty() || wanted.iter().any(|w| w == "*");
+    let names: Vec<String> = wanted.iter().map(|w| w.to_ascii_lowercase()).collect();
+    if names.len() > 0 && names.iter().all(|n| n == "1.1") {
+        return out;
+    }
+    for (t, vs) in &e.attrs {
+        let lt = t.to_ascii_lowercase();
+        if is_exact(&lt) && !admin {
+            continue;
+        }
+        if all_user || names.contains(&lt) {
+            let vals: Vec<Vec<u8>> = if types_only {
+                Vec::new()
+            } else {
+                vs.iter().map(|v| enc_str(0x04, v)).collect()
+            };
+            out.push(seq(0x30, vec![enc_str(0x04, t), seq(0x31, vals)]));
+        }
+    }
+    out
+}
+
+fn do_search(
+    st: &State,
+    mid: i64,
+    r: &mut Reader,
+    admin: bool,
+    out: &mut Vec<u8>,
+) -> Result<Outcome, BerError> {
+    let base = r.text(0x04)?;
+    let scope = r.int(0x0a)?;
+    r.int(0x0a)?; // derefAliases
+    let size_limit = r.int(0x02)?;
+    r.int(0x02)?; // timeLimit
+    let types_only = r.boolean()?;
+    let f = read_filter(r)?;
+    let mut list = Reader::new(&r.expect(0x30)?);
+    let mut wanted = Vec::new();
+    while !list.done() {
+        wanted.push(list.text(0x04)?);
+    }
+    if scope < 0 || scope > 2 {
+        return Ok(fail(PROTOCOL_ERROR, "scope must be 0, 1 or 2".to_string()));
+    }
+    let rdns = match split_dn(&base) {
+        Some(rdns) => rdns,
+        None => return Ok(fail(INVALID_DN_SYNTAX, format!("invalid DN '{}'", base))),
+    };
+    let nb = tree_key(&rdns);
+    if !st.entries.contains_key(&nb) {
+        return Ok((NO_SUCH_OBJECT, st.matched_dn(&rdns), format!("no entry {}", base)));
+    }
+    let mut sent = 0;
+    for (n, e) in &st.entries {
+        let inside = match scope {
+            0 => *n == nb,
+            1 => n.len() == nb.len() + 1 && n.starts_with(&nb),
+            _ => n.starts_with(&nb),
+        };
+        if !inside || !matches(e, &f, admin) {
+            continue;
+        }
+        if size_limit > 0 && sent == size_limit {
+            return Ok(fail(SIZE_LIMIT_EXCEEDED, format!("more than {} entries", size_limit)));
+        }
+        let body = seq(
+            0x64,
+            vec![enc_str(0x04, &e.dn), seq(0x30, entry_attrs(e, &wanted, types_only, admin))],
+        );
+        out.extend_from_slice(&seq(0x30, vec![enc_int(0x02, mid), body]));
+        sent += 1;
+    }
+    Ok(ok())
+}
+
+/// SEQUENCE OF SEQUENCE { type, SET OF value }.
+fn read_attr_list(r: &mut Reader) -> Result<Vec<(String, Vec<String>)>, BerError> {
+    let mut out = Vec::new();
+    let mut rr = Reader::new(&r.expect(0x30)?);
+    while !rr.done() {
+        let mut one = Reader::new(&rr.expect(0x30)?);
+        let t = one.text(0x04)?;
+        let mut vals = Reader::new(&one.expect(0x31)?);
+        let mut vs = Vec::new();
+        while !vals.done() {
+            vs.push(vals.text(0x04)?);
+        }
+        out.push((t, vs));
+    }
+    Ok(out)
+}
+
+fn has_value(t: &str, vs: &[String], v: &str) -> bool {
+    vs.iter().any(|x| value_cmp(t, x, v) == Some(std::cmp::Ordering::Equal))
+}
+
+fn do_add(st: &mut State, r: &mut Reader, admin: bool) -> Result<Outcome, BerError> {
+    let dn = r.text(0x04)?;
+    let attrs = read_attr_list(r)?;
+    if !admin {
+        return Ok(fail(INSUFFICIENT_ACCESS, "add needs the admin bind".to_string()));
+    }
+    let rdns = match split_dn(&dn) {
+        Some(rdns) if !rdns.is_empty() => rdns,
+        _ => return Ok(fail(INVALID_DN_SYNTAX, format!("invalid DN '{}'", dn))),
+    };
+    let key = tree_key(&rdns);
+    if st.entries.contains_key(&key) {
+        return Ok(fail(ENTRY_ALREADY_EXISTS, format!("{} already exists", dn)));
+    }
+    if !st.entries.contains_key(&parent_of(&key)) {
+        return Ok((NO_SUCH_OBJECT, st.matched_dn(&rdns), format!("no parent for {}", dn)));
+    }
+    let e = Entry { dn: dn.clone(), attrs };
+    if e.get("objectClass").map_or(true, |v| v.is_empty()) {
+        return Ok(fail(OBJECT_CLASS_VIOLATION, "an entry needs an objectClass".to_string()));
+    }
+    let (t, v) = &rdns[0];
+    let naming = unescape(v);
+    let vs = e.get(t).cloned().unwrap_or_default();
+    if !has_value(t, &vs, &naming) {
+        return Ok(fail(NAMING_VIOLATION, format!("the entry has no {} value {}", t, naming)));
+    }
+    st.entries.insert(key, e);
+    Ok(ok())
+}
+
+fn do_delete(st: &mut State, body: &[u8], admin: bool) -> Result<Outcome, BerError> {
+    let dn = String::from_utf8(body.to_vec()).map_err(|_| BerError("not UTF-8".to_string()))?;
+    if !admin {
+        return Ok(fail(INSUFFICIENT_ACCESS, "delete needs the admin bind".to_string()));
+    }
+    let rdns = match split_dn(&dn) {
+        Some(rdns) if !rdns.is_empty() => rdns,
+        _ => return Ok(fail(INVALID_DN_SYNTAX, format!("invalid DN '{}'", dn))),
+    };
+    let key = tree_key(&rdns);
+    if !st.entries.contains_key(&key) {
+        return Ok((NO_SUCH_OBJECT, st.matched_dn(&rdns), format!("no entry {}", dn)));
+    }
+    if st.entries.keys().any(|m| !m.is_empty() && parent_of(m) == key) {
+        return Ok(fail(NOT_ALLOWED_ON_NON_LEAF, format!("{} has children", dn)));
+    }
+    st.entries.remove(&key);
+    Ok(ok())
+}
+
+fn do_modify(st: &mut State, r: &mut Reader, admin: bool, bound: &[String]) -> Result<Outcome, BerError> {
+    let dn = r.text(0x04)?;
+    let mut changes: Vec<(i64, String, Vec<String>)> = Vec::new();
+    let mut rr = Reader::new(&r.expect(0x30)?);
+    while !rr.done() {
+        let mut one = Reader::new(&rr.expect(0x30)?);
+        let op = one.int(0x0a)?;
+        let mut m = Reader::new(&one.expect(0x30)?);
+        let t = m.text(0x04)?;
+        let mut vals = Reader::new(&m.expect(0x31)?);
+        let mut vs = Vec::new();
+        while !vals.done() {
+            vs.push(vals.text(0x04)?);
+        }
+        if op < 0 || op > 2 {
+            return Ok(fail(PROTOCOL_ERROR, format!("unknown modify operation {}", op)));
+        }
+        changes.push((op, t, vs));
+    }
+    let rdns = match split_dn(&dn) {
+        Some(rdns) if !rdns.is_empty() => rdns,
+        _ => return Ok(fail(INVALID_DN_SYNTAX, format!("invalid DN '{}'", dn))),
+    };
+    let key = tree_key(&rdns);
+    if !st.entries.contains_key(&key) {
+        return Ok((NO_SUCH_OBJECT, st.matched_dn(&rdns), format!("no entry {}", dn)));
+    }
+    let self_mail = bound == key.as_slice() && changes.iter().all(|(_, t, _)| t.eq_ignore_ascii_case("mail"));
+    if !admin && !self_mail {
+        return Ok(fail(
+            INSUFFICIENT_ACCESS,
+            "only the admin, or a user changing their own mail".to_string(),
+        ));
+    }
+    let mut attrs = st.entries[&key].attrs.clone();
+    for (op, t, vs) in &changes {
+        let at = attrs.iter().position(|(x, _)| x.eq_ignore_ascii_case(t));
+        match op {
+            0 => {
+                let at = match at {
+                    Some(at) => at,
+                    None => {
+                        attrs.push((t.clone(), vs.clone()));
+                        continue;
+                    }
+                };
+                for v in vs {
+                    if has_value(t, &attrs[at].1, v) {
+                        return Ok(fail(ATTRIBUTE_OR_VALUE_EXISTS, format!("{} already has {}", t, v)));
+                    }
+                    attrs[at].1.push(v.clone());
+                }
+            }
+            1 => {
+                let at = match at {
+                    Some(at) => at,
+                    None => return Ok(fail(NO_SUCH_ATTRIBUTE, format!("no {} to delete", t))),
+                };
+                if vs.is_empty() {
+                    attrs.remove(at);
+                    continue;
+                }
+                for v in vs {
+                    let k = attrs[at]
+                        .1
+                        .iter()
+                        .position(|x| value_cmp(t, x, v) == Some(std::cmp::Ordering::Equal));
+                    match k {
+                        Some(k) => {
+                            attrs[at].1.remove(k);
+                        }
+                        None => return Ok(fail(NO_SUCH_ATTRIBUTE, format!("{} has no value {}", t, v))),
+                    }
+                }
+                if attrs[at].1.is_empty() {
+                    attrs.remove(at);
+                }
+            }
+            _ => match at {
+                None => {
+                    if !vs.is_empty() {
+                        attrs.push((t.clone(), vs.clone()));
+                    }
+                }
+                Some(at) => {
+                    if vs.is_empty() {
+                        attrs.remove(at);
+                    } else {
+                        attrs[at].1 = vs.clone();
+                    }
+                }
+            },
+        }
+    }
+    if !attrs.iter().any(|(t, _)| t.eq_ignore_ascii_case("objectClass")) {
+        return Ok(fail(OBJECT_CLASS_VIOLATION, "an entry needs an objectClass".to_string()));
+    }
+    let (rt, rv) = &rdns[0];
+    let naming = unescape(rv);
+    let rvs = attrs
+        .iter()
+        .find(|(t, _)| t.eq_ignore_ascii_case(rt))
+        .map(|(_, vs)| vs.clone())
+        .unwrap_or_default();
+    if !has_value(rt, &rvs, &naming) {
+        return Ok(fail(NAMING_VIOLATION, format!("the change removes the naming value {}", naming)));
+    }
+    st.entries.get_mut(&key).unwrap().attrs = attrs;
+    Ok(ok())
+}
+
+fn do_compare(st: &State, r: &mut Reader, admin: bool) -> Result<Outcome, BerError> {
+    let dn = r.text(0x04)?;
+    let mut ava = Reader::new(&r.expect(0x30)?);
+    let t = ava.text(0x04)?;
+    let v = ava.text(0x04)?;
+    let rdns = match split_dn(&dn) {
+        Some(rdns) => rdns,
+        None => return Ok(fail(INVALID_DN_SYNTAX, format!("invalid DN '{}'", dn))),
+    };
+    let key = tree_key(&rdns);
+    let e = match st.entries.get(&key) {
+        Some(e) => e,
+        None => return Ok((NO_SUCH_OBJECT, st.matched_dn(&rdns), format!("no entry {}", dn))),
+    };
+    match visible(e, &t, admin) {
+        None => Ok(fail(NO_SUCH_ATTRIBUTE, format!("no {}", t))),
+        Some(vs) if has_value(&t, vs, &v) => Ok(fail(COMPARE_TRUE, String::new())),
+        Some(_) => Ok(fail(COMPARE_FALSE, String::new())),
+    }
+}
+
+/// The bind's outcome, and who is bound after it (None: anonymous).
+fn do_bind(st: &State, r: &mut Reader) -> Result<(Outcome, Option<Vec<String>>), BerError> {
+    let version = r.int(0x02)?;
+    let name = r.text(0x04)?;
+    let (tag, cred) = r.read()?;
+    if version != 3 {
+        return Ok((fail(PROTOCOL_ERROR, format!("version {} is not supported", version)), None));
+    }
+    if tag != 0x80 {
+        return Ok((fail(AUTH_METHOD_NOT_SUPPORTED, "only simple binds".to_string()), None));
+    }
+    let password = String::from_utf8_lossy(&cred).to_string();
+    if name.is_empty() && password.is_empty() {
+        return Ok((ok(), None));
+    }
+    let rdns = match split_dn(&name) {
+        Some(rdns) => rdns,
+        None => return Ok((fail(INVALID_DN_SYNTAX, format!("invalid DN '{}'", name)), None)),
+    };
+    let key = tree_key(&rdns);
+    let known = match st.entries.get(&key).and_then(|e| e.get("userPassword")) {
+        Some(pw) => pw.contains(&password),
+        None => false,
+    };
+    if !known {
+        return Ok((fail(INVALID_CREDENTIALS, String::new()), None));
+    }
+    Ok((ok(), Some(key)))
+}
+
+/// One whole message off the stream: its tag, its length and its content.
+/// None at a clean close.
+fn read_message(r: &mut BufReader<TcpStream>) -> Result<Option<Vec<u8>>, BerError> {
+    let mut head = [0u8; 2];
+    match r.read(&mut head[..1]) {
+        Ok(0) => return Ok(None),
+        Ok(_) => {}
+        Err(_) => return Ok(None),
+    }
+    r.read_exact(&mut head[1..2]).map_err(|_| BerError("truncated".to_string()))?;
+    let mut data = head.to_vec();
+    let first = head[1];
+    let n = if first >= 0x80 {
+        let k = (first & 0x7f) as usize;
+        if k == 0 || k > 3 {
+            return Err(BerError("bad length".to_string()));
+        }
+        let mut more = vec![0u8; k];
+        r.read_exact(&mut more).map_err(|_| BerError("truncated".to_string()))?;
+        data.extend_from_slice(&more);
+        more.iter().fold(0usize, |n, b| n * 256 + *b as usize)
+    } else {
+        first as usize
+    };
+    if n > MAX_MESSAGE {
+        return Err(BerError("message too large".to_string()));
+    }
+    let mut body = vec![0u8; n];
+    r.read_exact(&mut body).map_err(|_| BerError("truncated".to_string()))?;
+    data.extend_from_slice(&body);
+    Ok(Some(data))
+}
+
+fn parse_message(raw: &[u8]) -> Result<(i64, u8, Vec<u8>), BerError> {
+    let mut outer = Reader::new(raw);
+    let mut msg = Reader::new(&outer.expect(0x30)?);
+    let mid = msg.int(0x02)?;
+    let (tag, body) = msg.read()?;
+    Ok((mid, tag, body))
+}
+
+fn response_tag(op: u8) -> u8 {
+    match op {
+        0x60 => 0x61,
+        0x63 => 0x65,
+        0x68 => 0x69,
+        0x4a => 0x6b,
+        0x66 => 0x67,
+        0x6e => 0x6f,
+        _ => 0x78,
+    }
+}
+
+fn handle(st: &mut State, mid: i64, tag: u8, body: &[u8], bound: &mut Option<Vec<String>>, out: &mut Vec<u8>) -> Result<Outcome, BerError> {
+    let admin_key = tree_key(&split_dn(ADMIN).unwrap());
+    let admin = bound.as_ref() == Some(&admin_key);
+    let mut r = Reader::new(body);
+    match tag {
+        0x60 => {
+            st.count_op("bind");
+            let (o, who) = do_bind(st, &mut r)?;
+            *bound = who;
+            Ok(o)
+        }
+        0x63 => {
+            st.count_op("search");
+            do_search(st, mid, &mut r, admin, out)
+        }
+        0x68 => {
+            st.count_op("add");
+            do_add(st, &mut r, admin)
+        }
+        0x4a => {
+            st.count_op("delete");
+            do_delete(st, body, admin)
+        }
+        0x66 => {
+            st.count_op("modify");
+            let me = bound.clone().unwrap_or_default();
+            do_modify(st, &mut r, admin, &me)
+        }
+        0x6e => {
+            st.count_op("compare");
+            do_compare(st, &mut r, admin)
+        }
+        _ => {
+            st.count_op("unknown");
+            Ok(fail(PROTOCOL_ERROR, format!("unsupported operation 0x{:02x}", tag)))
+        }
+    }
+}
+
+fn serve(state: Arc<Mutex<State>>, conn: TcpStream) {
+    let mut w = conn.try_clone().unwrap();
+    let mut r = BufReader::new(conn);
+    let mut bound: Option<Vec<String>> = None;
+    loop {
+        let parsed = read_message(&mut r).and_then(|raw| match raw {
+            Some(raw) => parse_message(&raw).map(Some),
+            None => Ok(None),
+        });
+        let (mid, tag, body) = match parsed {
+            Ok(Some(m)) => m,
+            Ok(None) => break,
+            Err(BerError(why)) => {
+                let notice = seq(
+                    0x78,
+                    vec![
+                        enc_int(0x0a, PROTOCOL_ERROR),
+                        enc_str(0x04, ""),
+                        enc_str(0x04, &format!("malformed message: {}", why)),
+                        enc_str(0x8a, NOTICE_OID),
+                    ],
+                );
+                let _ = w.write_all(&seq(0x30, vec![enc_int(0x02, 0), notice]));
+                state.lock().unwrap().count_op("malformed");
+                break;
+            }
+        };
+        if tag == 0x42 {
+            state.lock().unwrap().count_op("unbind");
+            break;
+        }
+        let mut out = Vec::new();
+        {
+            let mut st = state.lock().unwrap();
+            let o = match handle(&mut st, mid, tag, &body, &mut bound, &mut out) {
+                Ok(o) => o,
+                Err(BerError(why)) => fail(PROTOCOL_ERROR, format!("bad request: {}", why)),
+            };
+            *st.results.entry(o.0).or_insert(0) += 1;
+            out.extend_from_slice(&seq(0x30, vec![enc_int(0x02, mid), result(response_tag(tag), &o)]));
+        }
+        if w.write_all(&out).is_err() {
+            break;
+        }
+    }
+}
+
+fn run_server(state: Arc<Mutex<State>>, listener: TcpListener) {
+    let group = TaskGroup::new();
+    for _ in 0..SESSIONS {
+        let (conn, _) = listener.accept().unwrap();
+        let st = state.clone();
+        group.spawn(move || serve(st, conn));
+    }
+}
+
+// ---- the clients: RFC 4515 filter strings to BER
+
+fn unescape_filter(v: &str) -> Result<String, String> {
+    let b = v.as_bytes();
+    let mut out: Vec<u8> = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'\\' {
+            if i + 2 >= b.len() {
+                return Err("bad escape".to_string());
+            }
+            let hex = std::str::from_utf8(&b[i + 1..i + 3]).map_err(|_| "bad escape".to_string())?;
+            out.push(u8::from_str_radix(hex, 16).map_err(|_| "bad escape".to_string())?);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).map_err(|_| "not UTF-8".to_string())
+}
+
+fn parse_filter(s: &str, i: usize) -> Result<(Vec<u8>, usize), String> {
+    let b = s.as_bytes();
+    if i >= b.len() || b[i] != b'(' {
+        return Err(format!("expected '(' at {}", i));
+    }
+    let mut i = i + 1;
+    if b[i] == b'&' || b[i] == b'|' {
+        let tag = if b[i] == b'&' { 0xa0 } else { 0xa1 };
+        i += 1;
+        let mut parts = Vec::new();
+        while i < b.len() && b[i] == b'(' {
+            let (p, next) = parse_filter(s, i)?;
+            parts.push(p);
+            i = next;
+        }
+        if i >= b.len() || b[i] != b')' {
+            return Err(format!("expected ')' at {}", i));
+        }
+        return Ok((seq(tag, parts), i + 1));
+    }
+    if b[i] == b'!' {
+        let (p, next) = parse_filter(s, i + 1)?;
+        if next >= b.len() || b[next] != b')' {
+            return Err(format!("expected ')' at {}", next));
+        }
+        return Ok((seq(0xa2, vec![p]), next + 1));
+    }
+    let end = match s[i..].find(')') {
+        Some(k) => i + k,
+        None => return Err("unclosed filter".to_string()),
+    };
+    let item = &s[i..end];
+    for (op, tag) in [(">=", 0xa5u8), ("<=", 0xa6), ("~=", 0xa8)] {
+        if let Some(k) = item.find(op) {
+            if k > 0 {
+                let v = unescape_filter(&item[k + 2..])?;
+                return Ok((seq(tag, vec![enc_str(0x04, &item[..k]), enc_str(0x04, &v)]), end + 1));
+            }
+        }
+    }
+    let k = match item.find('=') {
+        Some(k) if k > 0 => k,
+        _ => return Err(format!("no '=' in '{}'", item)),
+    };
+    let (t, v) = (&item[..k], &item[k + 1..]);
+    if v == "*" {
+        return Ok((enc_str(0x87, t), end + 1));
+    }
+    if v.contains('*') {
+        let pieces: Vec<&str> = v.split('*').collect();
+        let mut subs = Vec::new();
+        if !pieces[0].is_empty() {
+            subs.push(enc_str(0x80, &unescape_filter(pieces[0])?));
+        }
+        for p in &pieces[1..pieces.len() - 1] {
+            if !p.is_empty() {
+                subs.push(enc_str(0x81, &unescape_filter(p)?));
+            }
+        }
+        let last = pieces[pieces.len() - 1];
+        if !last.is_empty() {
+            subs.push(enc_str(0x82, &unescape_filter(last)?));
+        }
+        return Ok((seq(0xa4, vec![enc_str(0x04, t), seq(0x30, subs)]), end + 1));
+    }
+    let v = unescape_filter(v)?;
+    Ok((seq(0xa3, vec![enc_str(0x04, t), enc_str(0x04, &v)]), end + 1))
+}
+
+fn filter_ber(s: &str) -> Vec<u8> {
+    let (f, rest) = parse_filter(s, 0).unwrap();
+    assert_eq!(rest, s.len(), "trailing text in filter '{}'", s);
+    f
+}
+
+struct Client {
+    name: String,
+    sock: TcpStream,
+    r: BufReader<TcpStream>,
+    next_id: i64,
+}
+
+/// A received message: its id, its operation tag and the operation's body.
+type Received = Option<(i64, u8, Vec<u8>)>;
+
+impl Client {
+    fn connect(name: &str) -> Client {
+        let sock = TcpStream::connect(ADDR).unwrap();
+        sock.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let r = BufReader::new(sock.try_clone().unwrap());
+        Client { name: name.to_string(), sock, r, next_id: 1 }
+    }
+
+    fn say(&self, line: &str) {
+        println!("{} {}", self.name, line);
+    }
+
+    fn send(&mut self, op: Vec<u8>) -> i64 {
+        let mid = self.next_id;
+        self.next_id += 1;
+        self.sock.write_all(&seq(0x30, vec![enc_int(0x02, mid), op])).unwrap();
+        mid
+    }
+
+    fn recv(&mut self) -> Received {
+        match read_message(&mut self.r) {
+            Ok(Some(raw)) => parse_message(&raw).ok(),
+            Ok(None) => None,
+            Err(BerError(why)) => {
+                self.say(&format!("<- bad message: {}", why));
+                None
+            }
+        }
+    }
+
+    fn result_line(&self, mid: i64, got: &Received) -> String {
+        let (rid, tag, body) = match got {
+            Some(g) => g,
+            None => return "(closed)".to_string(),
+        };
+        let mut r = Reader::new(body);
+        let code = r.int(0x0a).unwrap();
+        let matched = r.text(0x04).unwrap();
+        let text = r.text(0x04).unwrap();
+        let mut out = result_name(code);
+        if *rid != mid {
+            out += &format!(" (for message {}, sent {})", rid, mid);
+        }
+        if !matched.is_empty() {
+            out += &format!(" matched={}", matched);
+        }
+        if !text.is_empty() {
+            out += &format!(": {}", text);
+        }
+        if *tag == 0x78 && !r.done() {
+            out += &format!(" [{}]", r.text(0x8a).unwrap());
+        }
+        out
+    }
+
+    fn bind(&mut self, dn: &str, password: &str, version: i64) {
+        let op = seq(0x60, vec![enc_int(0x02, version), enc_str(0x04, dn), enc_str(0x80, password)]);
+        let mid = self.send(op);
+        let got = self.recv();
+        let who = if dn.is_empty() { "anonymous" } else { dn };
+        self.say(&format!("bind {} -> {}", who, self.result_line(mid, &got)));
+    }
+
+    fn search(&mut self, base: &str, scope: &str, flt: &str, attrs: &[&str], size_limit: i64, types_only: bool) {
+        let scope_n = match scope {
+            "base" => 0,
+            "one" => 1,
+            _ => 2,
+        };
+        let op = seq(
+            0x63,
+            vec![
+                enc_str(0x04, base),
+                enc_int(0x0a, scope_n),
+                enc_int(0x0a, 0),
+                enc_int(0x02, size_limit),
+                enc_int(0x02, 0),
+                tlv(0x01, if types_only { &[0xff] } else { &[0x00] }),
+                filter_ber(flt),
+                seq(0x30, attrs.iter().map(|a| enc_str(0x04, a)).collect()),
+            ],
+        );
+        let mid = self.send(op);
+        let mut entries: Vec<String> = Vec::new();
+        let got = loop {
+            let got = self.recv();
+            let body = match &got {
+                Some((_, 0x64, body)) => body.clone(),
+                _ => break got,
+            };
+            let mut r = Reader::new(&body);
+            let dn = r.text(0x04).unwrap();
+            let mut list = Reader::new(&r.expect(0x30).unwrap());
+            let mut shown = Vec::new();
+            while !list.done() {
+                let mut one = Reader::new(&list.expect(0x30).unwrap());
+                let t = one.text(0x04).unwrap();
+                let mut vals = Reader::new(&one.expect(0x31).unwrap());
+                let mut vs = Vec::new();
+                while !vals.done() {
+                    vs.push(vals.text(0x04).unwrap());
+                }
+                if vs.is_empty() {
+                    shown.push(t);
+                } else {
+                    shown.push(format!("{}={}", t, vs.join("|")));
+                }
+            }
+            if shown.is_empty() {
+                entries.push(format!("  {}", dn));
+            } else {
+                entries.push(format!("  {}: {}", dn, shown.join("; ")));
+            }
+        };
+        let mut what = format!("search {} {} {}", scope, if base.is_empty() { "(root)" } else { base }, flt);
+        if !attrs.is_empty() {
+            what += &format!(" [{}]", attrs.join(","));
+        }
+        if size_limit > 0 {
+            what += &format!(" limit {}", size_limit);
+        }
+        self.say(&format!("{} -> {} entries, {}", what, entries.len(), self.result_line(mid, &got)));
+        for line in &entries {
+            println!("{}", line);
+        }
+    }
+
+    fn add(&mut self, dn: &str, attrs: &[(&str, &[&str])]) {
+        let list = attrs
+            .iter()
+            .map(|(t, vs)| {
+                seq(0x30, vec![enc_str(0x04, t), seq(0x31, vs.iter().map(|v| enc_str(0x04, v)).collect())])
+            })
+            .collect();
+        let mid = self.send(seq(0x68, vec![enc_str(0x04, dn), seq(0x30, list)]));
+        let got = self.recv();
+        self.say(&format!("add {} -> {}", dn, self.result_line(mid, &got)));
+    }
+
+    fn delete(&mut self, dn: &str) {
+        let mid = self.send(enc_str(0x4a, dn));
+        let got = self.recv();
+        self.say(&format!("delete {} -> {}", dn, self.result_line(mid, &got)));
+    }
+
+    fn modify(&mut self, dn: &str, changes: &[(&str, &str, &[&str])]) {
+        let mut list = Vec::new();
+        let mut what = Vec::new();
+        for (o, t, vs) in changes {
+            let code = match *o {
+                "add" => 0,
+                "delete" => 1,
+                _ => 2,
+            };
+            let vals = vs.iter().map(|v| enc_str(0x04, v)).collect();
+            list.push(seq(0x30, vec![enc_int(0x0a, code), seq(0x30, vec![enc_str(0x04, t), seq(0x31, vals)])]));
+            if vs.is_empty() {
+                what.push(format!("{} {}", o, t));
+            } else {
+                what.push(format!("{} {} {}", o, t, vs.join("|")));
+            }
+        }
+        let mid = self.send(seq(0x66, vec![enc_str(0x04, dn), seq(0x30, list)]));
+        let got = self.recv();
+        self.say(&format!("modify {} ({}) -> {}", dn, what.join(", "), self.result_line(mid, &got)));
+    }
+
+    fn compare(&mut self, dn: &str, t: &str, v: &str) {
+        let op = seq(0x6e, vec![enc_str(0x04, dn), seq(0x30, vec![enc_str(0x04, t), enc_str(0x04, v)])]);
+        let mid = self.send(op);
+        let got = self.recv();
+        self.say(&format!("compare {} {}={} -> {}", dn, t, v, self.result_line(mid, &got)));
+    }
+
+    fn raw(&mut self, label: &str, data: &[u8]) {
+        self.sock.write_all(data).unwrap();
+        let got = self.recv();
+        self.say(&format!("{} -> {}", label, self.result_line(0, &got)));
+        let after = self.recv();
+        self.say(&format!("then -> {}", if after.is_none() { "(closed)" } else { "more" }));
+    }
+
+    fn unbind(&mut self) {
+        self.send(tlv(0x42, &[]));
+        let got = self.recv();
+        self.say(&format!("unbind -> {}", if got.is_none() { "(closed)" } else { "more" }));
+    }
+}
+
+fn main() {
+    let listener = TcpListener::bind(ADDR).unwrap();
+    let state = Arc::new(Mutex::new(State::new()));
+    let group = TaskGroup::new();
+    let st = state.clone();
+    group.spawn(move || run_server(st, listener));
+
+    let people = format!("ou=people,{}", BASE);
+    let alice_dn = format!("uid=alice,{}", people);
+    let bob_dn = format!("uid=bob,{}", people);
+    let carol_dn = format!("uid=carol,{}", people);
+    let dave_dn = format!("uid=dave,{}", people);
+
+    println!("== anonymous reads");
+    let mut anon = Client::connect("anon");
+    anon.bind("", "", 3);
+    anon.search(BASE, "one", "(objectClass=*)", &["ou"], 0, false);
+    anon.search(BASE, "sub", "(&(objectClass=person)(uidNumber>=1002))", &["cn", "uidNumber"], 0, false);
+    anon.search(&people, "one", "(|(cn=*liddell)(sn=Dan*)(mail=*@kara.test))", &["uid"], 0, false);
+    anon.search(&people, "sub", "(cn=b*b*r)", &["cn"], 0, false);
+    anon.search(BASE, "sub", "(!(objectClass=posixAccount))", &["1.1"], 0, false);
+    anon.search(BASE, "sub", "(cn=Smith\\2c John)", &["cn", "mail"], 0, false);
+    anon.search(&format!("CN=smith\\, john,OU=People,{}", BASE), "base", "(objectClass=*)", &["sn"], 0, false);
+    anon.search(&bob_dn, "base", "(objectClass=*)", &[], 0, false);
+    anon.search(BASE, "sub", "(userPassword=*)", &["uid"], 0, false);
+    anon.search(BASE, "sub", "(uidNumber<=1001)", &["uid"], 0, true);
+    anon.search(&people, "one", "(objectClass=person)", &["uid"], 2, false);
+    anon.search(&format!("ou=robots,{}", BASE), "sub", "(objectClass=*)", &[], 0, false);
+    anon.search("not a dn", "sub", "(objectClass=*)", &[], 0, false);
+    anon.compare(&alice_dn, "mail", "ALICE@KARA.TEST");
+    anon.compare(&alice_dn, "uidNumber", "1002");
+    anon.compare(&alice_dn, "userPassword", "not-a-real-secret/alice");
+    anon.compare(&format!("uid=zed,{}", people), "cn", "Zed");
+    anon.add(&format!("uid=mallory,{}", people), &[("objectClass", &["person"]), ("uid", &["mallory"])]);
+    anon.unbind();
+
+    println!("== alice");
+    let mut alice = Client::connect("alice");
+    alice.bind(&alice_dn, "wrong", 3);
+    alice.bind(&format!("uid=nobody,{}", people), "x", 3);
+    alice.bind(&alice_dn, "not-a-real-secret/alice", 3);
+    alice.modify(&alice_dn, &[("add", "mail", &["liddell@kara.test"])]);
+    alice.modify(&alice_dn, &[("add", "mail", &["Alice@Kara.Test"])]);
+    alice.modify(&alice_dn, &[("replace", "cn", &["Alice"])]);
+    alice.modify(&bob_dn, &[("delete", "mail", &["bob@kara.test"])]);
+    alice.search(&alice_dn, "base", "(objectClass=*)", &["mail"], 0, false);
+    alice.delete(&carol_dn);
+    alice.unbind();
+
+    println!("== admin");
+    let mut admin = Client::connect("admin");
+    admin.bind(ADMIN, ADMIN_PASSWORD, 3);
+    admin.add(
+        &dave_dn,
+        &[
+            ("objectClass", &["person", "posixAccount"]),
+            ("uid", &["dave"]),
+            ("cn", &["Dave Lister"]),
+            ("sn", &["Lister"]),
+            ("uidNumber", &["1003"]),
+            ("userPassword", &["not-a-real-secret/dave"]),
+        ],
+    );
+    admin.add(&dave_dn, &[("objectClass", &["person"]), ("uid", &["dave"])]);
+    admin.add(&format!("uid=eve,ou=robots,{}", BASE), &[("objectClass", &["person"]), ("uid", &["eve"])]);
+    admin.add(&format!("uid=eve,{}", people), &[("uid", &["eve"])]);
+    admin.add(&format!("uid=eve,{}", people), &[("objectClass", &["person"]), ("cn", &["Eve"])]);
+    admin.add(&format!("uid eve,{}", people), &[("objectClass", &["person"])]);
+    admin.modify(
+        &bob_dn,
+        &[
+            ("delete", "mail", &["BOB@kara.test"]),
+            ("replace", "uidNumber", &["2002"]),
+            ("add", "description", &["builds things", "fixes things"]),
+        ],
+    );
+    admin.modify(&bob_dn, &[("delete", "mail", &["nobody@kara.test"]), ("replace", "sn", &["Gone"])]);
+    admin.modify(&bob_dn, &[("delete", "telephoneNumber", &[])]);
+    admin.modify(&bob_dn, &[("delete", "uid", &[])]);
+    admin.modify(&bob_dn, &[("replace", "objectClass", &[])]);
+    admin.modify(&bob_dn, &[("delete", "description", &[])]);
+    admin.search(&bob_dn, "base", "(objectClass=*)", &[], 0, false);
+    admin.search(BASE, "sub", "(uidNumber>=1003)", &["uid", "uidNumber", "userPassword"], 0, false);
+    admin.compare(&dave_dn, "userPassword", "not-a-real-secret/dave");
+    admin.compare(&dave_dn, "userPassword", "NOT-A-REAL-SECRET/DAVE");
+    admin.delete(&people);
+    admin.delete(&carol_dn);
+    admin.delete(&carol_dn);
+    admin.delete(&format!("cn=Smith\\, John,{}", people));
+    admin.unbind();
+
+    println!("== old client");
+    let mut old = Client::connect("old");
+    old.bind(&alice_dn, "not-a-real-secret/alice", 2);
+    drop(old);
+
+    println!("== broken client");
+    let mut bad = Client::connect("broken");
+    bad.raw("indefinite length", &[0x30, 0x80, 0x02, 0x01, 0x01, 0x00, 0x00]);
+    drop(bad);
+
+    println!("== final tree");
+    let mut last = Client::connect("anon");
+    last.search(BASE, "sub", "(objectClass=*)", &["1.1"], 0, false);
+    last.unbind();
+    drop(last);
+
+    drop(group);
+    let st = state.lock().unwrap();
+    println!("== server: {} entries", st.entries.len());
+    let ops: Vec<String> = st.ops.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
+    println!("ops {}", ops.join(" "));
+    let results: Vec<String> = st.results.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
+    println!("results {}", results.join(" "));
+}

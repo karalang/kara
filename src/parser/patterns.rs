@@ -115,6 +115,56 @@ impl super::Parser {
         Some(first)
     }
 
+    /// Rust's `Variant(..)`, which skips every field of a tuple variant or
+    /// tuple struct. In Kāra `..` is the rest marker only inside `[...]` or
+    /// `{ ... }`, and `Variant { .. }` is the same pattern for a tuple
+    /// variant: say so, offer the rewrite, and parse it as that pattern
+    /// (B-2026-11-26-60). The caller is at the `(`, before `..` and `)`.
+    fn rust_rest_parens(&mut self, path: Vec<String>, start: &crate::token::Span) -> Pattern {
+        let open = self.current_span();
+        self.advance();
+        self.advance();
+        let close = self.current_span();
+        self.advance();
+        let span = crate::token::Span {
+            length: close.offset + close.length - open.offset,
+            ..open
+        };
+        let name = path.join(".");
+        self.error_at(
+            &format!(
+                "`{name}(..)` is Rust syntax: in Kāra `..` is the rest marker inside \
+                 `[...]` or `{{ ... }}`, and `{name} {{ .. }}` skips every field of a tuple \
+                 variant (design.md § Pattern matching)"
+            ),
+            span,
+        );
+        self.fix_edits.insert(
+            crate::resolver::SpanKey::from_span(&span),
+            crate::resolver::TextEdit {
+                offset: span.offset,
+                length: span.length,
+                replacement: " { .. }".to_string(),
+            },
+        );
+        Pattern {
+            id: crate::ids::NodeId::DUMMY,
+            kind: PatternKind::Struct {
+                path,
+                fields: Vec::new(),
+                has_rest: true,
+            },
+            span: self.span_from(start),
+        }
+    }
+
+    /// Whether the parser is at `(..)`.
+    fn at_rust_rest_parens(&self) -> bool {
+        self.check(&Token::LeftParen)
+            && matches!(self.peek_token_ref_at(1), Token::DotDot)
+            && matches!(self.peek_token_ref_at(2), Token::RightParen)
+    }
+
     /// `&pat` and `&mut pat` are Rust's reference patterns (`for &(x, y) in
     /// v.iter()`, `|&x| ..`). A Kāra pattern already matches through a
     /// reference, so the sigil only goes: say so, offer deleting it, and
@@ -711,6 +761,8 @@ impl super::Parser {
                         },
                         span: self.span_from(&start),
                     })
+                } else if self.at_rust_rest_parens() {
+                    Some(self.rust_rest_parens(path, &start))
                 } else if self.check(&Token::LeftParen) {
                     self.advance();
                     let mut patterns = Vec::new();
@@ -798,6 +850,10 @@ impl super::Parser {
                         span: self.span_from(&start),
                     })
                 }
+                // Rust's `Name(..)`: `Name { .. }`.
+                else if self.at_rust_rest_parens() {
+                    Some(self.rust_rest_parens(vec![name], &start))
+                }
                 // Check for tuple variant: Name(...)
                 else if self.check(&Token::LeftParen) {
                     self.advance();
@@ -868,6 +924,8 @@ impl super::Parser {
                             },
                             span: self.span_from(&start),
                         })
+                    } else if self.at_rust_rest_parens() {
+                        Some(self.rust_rest_parens(path, &start))
                     } else if self.check(&Token::LeftParen) {
                         self.advance();
                         let mut patterns = Vec::new();

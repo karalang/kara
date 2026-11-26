@@ -1,0 +1,101 @@
+== anonymous reads
+anon bind anonymous -> success
+anon search one dc=kara,dc=test (objectClass=*) [ou] -> 3 entries, success
+  cn=admin,dc=kara,dc=test
+  ou=groups,dc=kara,dc=test: ou=groups
+  ou=people,dc=kara,dc=test: ou=people
+anon search sub dc=kara,dc=test (&(objectClass=person)(uidNumber>=1002)) [cn,uidNumber] -> 2 entries, success
+  uid=bob,ou=people,dc=kara,dc=test: cn=Bob Builder; uidNumber=1002
+  uid=carol,ou=people,dc=kara,dc=test: cn=Carol Danvers; uidNumber=1010
+anon search one ou=people,dc=kara,dc=test (|(cn=*liddell)(sn=Dan*)(mail=*@kara.test)) [uid] -> 4 entries, success
+  cn=Smith\, John,ou=people,dc=kara,dc=test
+  uid=alice,ou=people,dc=kara,dc=test: uid=alice
+  uid=bob,ou=people,dc=kara,dc=test: uid=bob
+  uid=carol,ou=people,dc=kara,dc=test: uid=carol
+anon search sub ou=people,dc=kara,dc=test (cn=b*b*r) [cn] -> 1 entries, success
+  uid=bob,ou=people,dc=kara,dc=test: cn=Bob Builder
+anon search sub dc=kara,dc=test (!(objectClass=posixAccount)) [1.1] -> 6 entries, success
+  dc=kara,dc=test
+  cn=admin,dc=kara,dc=test
+  ou=groups,dc=kara,dc=test
+  cn=staff,ou=groups,dc=kara,dc=test
+  ou=people,dc=kara,dc=test
+  cn=Smith\, John,ou=people,dc=kara,dc=test
+anon search sub dc=kara,dc=test (cn=Smith\2c John) [cn,mail] -> 1 entries, success
+  cn=Smith\, John,ou=people,dc=kara,dc=test: cn=Smith, John; mail=jsmith@kara.test
+anon search base CN=smith\, john,OU=People,dc=kara,dc=test (objectClass=*) [sn] -> 1 entries, success
+  cn=Smith\, John,ou=people,dc=kara,dc=test: sn=Smith
+anon search base uid=bob,ou=people,dc=kara,dc=test (objectClass=*) -> 1 entries, success
+  uid=bob,ou=people,dc=kara,dc=test: objectClass=person|posixAccount; uid=bob; cn=Bob Builder; sn=Builder; mail=bob@kara.test|builder@kara.test; uidNumber=1002
+anon search sub dc=kara,dc=test (userPassword=*) [uid] -> 0 entries, success
+anon search sub dc=kara,dc=test (uidNumber<=1001) [uid] -> 1 entries, success
+  uid=alice,ou=people,dc=kara,dc=test: uid
+anon search one ou=people,dc=kara,dc=test (objectClass=person) [uid] limit 2 -> 2 entries, sizeLimitExceeded: more than 2 entries
+  cn=Smith\, John,ou=people,dc=kara,dc=test
+  uid=alice,ou=people,dc=kara,dc=test: uid=alice
+anon search sub ou=robots,dc=kara,dc=test (objectClass=*) -> 0 entries, noSuchObject matched=dc=kara,dc=test: no entry ou=robots,dc=kara,dc=test
+anon search sub not a dn (objectClass=*) -> 0 entries, invalidDNSyntax: invalid DN 'not a dn'
+anon compare uid=alice,ou=people,dc=kara,dc=test mail=ALICE@KARA.TEST -> compareTrue
+anon compare uid=alice,ou=people,dc=kara,dc=test uidNumber=1002 -> compareFalse
+anon compare uid=alice,ou=people,dc=kara,dc=test userPassword=not-a-real-secret/alice -> noSuchAttribute: no userPassword
+anon compare uid=zed,ou=people,dc=kara,dc=test cn=Zed -> noSuchObject matched=ou=people,dc=kara,dc=test: no entry uid=zed,ou=people,dc=kara,dc=test
+anon add uid=mallory,ou=people,dc=kara,dc=test -> insufficientAccessRights: add needs the admin bind
+anon unbind -> (closed)
+== alice
+alice bind uid=alice,ou=people,dc=kara,dc=test -> invalidCredentials
+alice bind uid=nobody,ou=people,dc=kara,dc=test -> invalidCredentials
+alice bind uid=alice,ou=people,dc=kara,dc=test -> success
+alice modify uid=alice,ou=people,dc=kara,dc=test (add mail liddell@kara.test) -> success
+alice modify uid=alice,ou=people,dc=kara,dc=test (add mail Alice@Kara.Test) -> attributeOrValueExists: mail already has Alice@Kara.Test
+alice modify uid=alice,ou=people,dc=kara,dc=test (replace cn Alice) -> insufficientAccessRights: only the admin, or a user changing their own mail
+alice modify uid=bob,ou=people,dc=kara,dc=test (delete mail bob@kara.test) -> insufficientAccessRights: only the admin, or a user changing their own mail
+alice search base uid=alice,ou=people,dc=kara,dc=test (objectClass=*) [mail] -> 1 entries, success
+  uid=alice,ou=people,dc=kara,dc=test: mail=alice@kara.test|liddell@kara.test
+alice delete uid=carol,ou=people,dc=kara,dc=test -> insufficientAccessRights: delete needs the admin bind
+alice unbind -> (closed)
+== admin
+admin bind cn=admin,dc=kara,dc=test -> success
+admin add uid=dave,ou=people,dc=kara,dc=test -> success
+admin add uid=dave,ou=people,dc=kara,dc=test -> entryAlreadyExists: uid=dave,ou=people,dc=kara,dc=test already exists
+admin add uid=eve,ou=robots,dc=kara,dc=test -> noSuchObject matched=dc=kara,dc=test: no parent for uid=eve,ou=robots,dc=kara,dc=test
+admin add uid=eve,ou=people,dc=kara,dc=test -> objectClassViolation: an entry needs an objectClass
+admin add uid=eve,ou=people,dc=kara,dc=test -> namingViolation: the entry has no uid value eve
+admin add uid eve,ou=people,dc=kara,dc=test -> invalidDNSyntax: invalid DN 'uid eve,ou=people,dc=kara,dc=test'
+admin modify uid=bob,ou=people,dc=kara,dc=test (delete mail BOB@kara.test, replace uidNumber 2002, add description builds things|fixes things) -> success
+admin modify uid=bob,ou=people,dc=kara,dc=test (delete mail nobody@kara.test, replace sn Gone) -> noSuchAttribute: mail has no value nobody@kara.test
+admin modify uid=bob,ou=people,dc=kara,dc=test (delete telephoneNumber) -> noSuchAttribute: no telephoneNumber to delete
+admin modify uid=bob,ou=people,dc=kara,dc=test (delete uid) -> namingViolation: the change removes the naming value bob
+admin modify uid=bob,ou=people,dc=kara,dc=test (replace objectClass) -> objectClassViolation: an entry needs an objectClass
+admin modify uid=bob,ou=people,dc=kara,dc=test (delete description) -> success
+admin search base uid=bob,ou=people,dc=kara,dc=test (objectClass=*) -> 1 entries, success
+  uid=bob,ou=people,dc=kara,dc=test: objectClass=person|posixAccount; uid=bob; cn=Bob Builder; sn=Builder; mail=builder@kara.test; uidNumber=2002; userPassword=not-a-real-secret/bob
+admin search sub dc=kara,dc=test (uidNumber>=1003) [uid,uidNumber,userPassword] -> 3 entries, success
+  uid=bob,ou=people,dc=kara,dc=test: uid=bob; uidNumber=2002; userPassword=not-a-real-secret/bob
+  uid=carol,ou=people,dc=kara,dc=test: uid=carol; uidNumber=1010; userPassword=not-a-real-secret/carol
+  uid=dave,ou=people,dc=kara,dc=test: uid=dave; uidNumber=1003; userPassword=not-a-real-secret/dave
+admin compare uid=dave,ou=people,dc=kara,dc=test userPassword=not-a-real-secret/dave -> compareTrue
+admin compare uid=dave,ou=people,dc=kara,dc=test userPassword=NOT-A-REAL-SECRET/DAVE -> compareFalse
+admin delete ou=people,dc=kara,dc=test -> notAllowedOnNonLeaf: ou=people,dc=kara,dc=test has children
+admin delete uid=carol,ou=people,dc=kara,dc=test -> success
+admin delete uid=carol,ou=people,dc=kara,dc=test -> noSuchObject matched=ou=people,dc=kara,dc=test: no entry uid=carol,ou=people,dc=kara,dc=test
+admin delete cn=Smith\, John,ou=people,dc=kara,dc=test -> success
+admin unbind -> (closed)
+== old client
+old bind uid=alice,ou=people,dc=kara,dc=test -> protocolError: version 2 is not supported
+== broken client
+broken indefinite length -> protocolError: malformed message: bad length [1.3.6.1.4.1.1466.20036]
+broken then -> (closed)
+== final tree
+anon search sub dc=kara,dc=test (objectClass=*) [1.1] -> 8 entries, success
+  dc=kara,dc=test
+  cn=admin,dc=kara,dc=test
+  ou=groups,dc=kara,dc=test
+  cn=staff,ou=groups,dc=kara,dc=test
+  ou=people,dc=kara,dc=test
+  uid=alice,ou=people,dc=kara,dc=test
+  uid=bob,ou=people,dc=kara,dc=test
+  uid=dave,ou=people,dc=kara,dc=test
+anon unbind -> (closed)
+== server: 8 entries
+ops add=7 bind=6 compare=6 delete=5 malformed=1 modify=10 search=17 unbind=4
+results 0=23 2=1 4=1 5=2 6=2 16=3 20=1 32=4 34=2 49=2 50=4 64=2 65=2 66=1 68=1

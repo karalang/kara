@@ -1201,7 +1201,8 @@ fn find_short(h: &[u8], n: &[u8]) -> bool {
 }
 
 /// A new `String` at `out` from `s`: 0 `trim`, 1 `to_uppercase`, 2
-/// `to_lowercase`, 3 `trim_start`, 4 `trim_end`, 5 its chars sorted.
+/// `to_lowercase`, 3 `trim_start`, 4 `trim_end`, 5 its chars sorted, 6
+/// `to_ascii_uppercase`, 7 `to_ascii_lowercase`.
 ///
 /// # Safety
 /// `out` is writable for a `String`; `s` readable for `n` bytes of UTF-8.
@@ -1232,6 +1233,8 @@ pub unsafe extern "C" fn karac_mir_str_map(out: *mut RawVec, op: i32, s: *const 
     let t = match op {
         1 => s.to_uppercase(),
         2 => s.to_lowercase(),
+        6 => s.to_ascii_uppercase(),
+        7 => s.to_ascii_lowercase(),
         _ => {
             let mut cs: Vec<char> = s.chars().collect();
             cs.sort_unstable();
