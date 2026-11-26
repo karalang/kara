@@ -3413,8 +3413,10 @@ pub struct TypeChecker<'a> {
     /// closure when that is one expression (B-2026-11-14-12).
     pub(super) collect_widen_sites: FxHashMap<SpanKey, (Span, Option<(Span, String)>)>,
     /// Each `collect()` call's receiver, rendered, for the fix that joins
-    /// text pieces a `String` does not gather (B-2026-11-21-63).
-    pub(super) collect_receiver_texts: FxHashMap<SpanKey, String>,
+    /// text pieces a `String` does not gather (B-2026-11-21-63), with the
+    /// span the call is written over, from a parenthesized receiver's `(`
+    /// (B-2026-11-26-13).
+    pub(super) collect_receiver_texts: FxHashMap<SpanKey, (Span, String)>,
     /// The literal's type that makes a `collect`'s items the narrower
     /// integer its target holds, with why, by the call's span (kata 2055).
     pub(super) collect_literal_fixes: FxHashMap<SpanKey, (FixIt, String)>,

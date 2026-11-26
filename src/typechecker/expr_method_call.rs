@@ -2517,7 +2517,7 @@ impl<'a> super::TypeChecker<'a> {
     /// Where `e` starts in the source: its node's start, or the `(` of
     /// parentheses around it or around its leftmost operand
     /// (`(1 + 2) * 3`), which leave no node ([`crate::ast::Program::paren_starts`]).
-    fn written_start(&self, e: &Expr) -> usize {
+    pub(super) fn written_start(&self, e: &Expr) -> usize {
         let own = self
             .program
             .paren_starts

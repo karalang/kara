@@ -1751,9 +1751,18 @@ impl<'a> super::TypeChecker<'a> {
         };
         self.collect_widen_sites
             .insert(SpanKey::from_span(&expr.span), (after, body));
+        // The call as written: from the `(` of a parenthesized receiver,
+        // `(0..250).map(..).collect()`, whose node starts inside it
+        // (B-2026-11-26-13).
+        let start = self.written_start(expr);
+        let written = Span {
+            offset: start,
+            length: expr.span.offset + expr.span.length - start,
+            ..expr.span
+        };
         self.collect_receiver_texts.insert(
             SpanKey::from_span(&expr.span),
-            crate::formatter::render_expr(object),
+            (written, crate::formatter::render_expr(object)),
         );
     }
 
@@ -9942,13 +9951,13 @@ impl<'a> super::TypeChecker<'a> {
                                         .cloned()
                                 })
                                 .flatten();
-                            if let Some(receiver) = receiver {
+                            if let Some((written, receiver)) = receiver {
                                 self.type_error_with_fix_it(
                                     message,
                                     d.span,
                                     TypeErrorKind::TypeMismatch,
                                     FixIt {
-                                        span: d.span,
+                                        span: written,
                                         replacement: format!(
                                             "Vec[String].from_iter({receiver}).join(\"\")"
                                         ),
