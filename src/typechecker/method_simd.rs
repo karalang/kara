@@ -36,7 +36,16 @@ impl<'a> super::TypeChecker<'a> {
     ) -> Option<Type> {
         // `Vector[T, N]` instance-method dispatch (design.md § Portable SIMD).
         // Not a `Type::Named`, so handle before the named-type extraction.
-        if let Type::Vector { element, lanes } = &obj_ty.clone() {
+        // Through a `ref` too (`let g = ref v[0]; g.reduce_sum()`), as a
+        // borrowed parameter's is: the method reads the lanes. It fell
+        // through to a silent `Type::Error` (B-2026-11-26-77).
+        let peeled = match obj_ty {
+            Type::Ref(inner) | Type::MutRef(inner) if matches!(**inner, Type::Vector { .. }) => {
+                (**inner).clone()
+            }
+            other => other.clone(),
+        };
+        if let Type::Vector { element, lanes } = &peeled {
             // Record the receiver vector type for the SIMD scalarization
             // analysis before delegating — the method-call node is about to
             // overwrite this span in `expr_types` with the method's *result*

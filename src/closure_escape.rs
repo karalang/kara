@@ -351,7 +351,7 @@ impl EscapeAnalysis {
                 return_values.push(tail);
             }
         }
-        self.collect_outer_return_values(&func.body, &mut return_values);
+        collect_outer_return_values(&func.body, &mut return_values);
         if let Some(offender) = return_values.iter().find(|e| {
             self.tail_escapes_capturing_closure(e, &outer, &capturing_vars, &capturing_fields)
         }) {
@@ -2250,83 +2250,81 @@ impl EscapeAnalysis {
             _ => false,
         }
     }
+}
 
-    /// Collect every `return <value>` reachable from `block` WITHOUT entering a
-    /// nested closure body (a `return` inside a closure returns from the
-    /// closure, not the enclosing function). Best-effort over the common
-    /// control-flow containers; a container this doesn't recurse into only
-    /// UNDER-collects (a narrower residual) — it can never make the guard
-    /// falsely reject a sound program.
-    fn collect_outer_return_values<'a>(&self, block: &'a Block, out: &mut Vec<&'a Expr>) {
-        for stmt in &block.stmts {
-            match &stmt.kind {
-                StmtKind::Expr(e) | StmtKind::Let { value: e, .. } => {
-                    self.collect_returns_in_expr(e, out)
-                }
-                StmtKind::LetElse {
-                    value, else_block, ..
-                } => {
-                    self.collect_returns_in_expr(value, out);
-                    self.collect_outer_return_values(else_block, out);
-                }
-                StmtKind::Assign { value, .. } | StmtKind::CompoundAssign { value, .. } => {
-                    self.collect_returns_in_expr(value, out)
-                }
-                StmtKind::MultiAssign { values, .. } => {
-                    for v in values {
-                        self.collect_returns_in_expr(v, out);
-                    }
-                }
-                StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
-                    self.collect_outer_return_values(body, out)
-                }
-                StmtKind::LetUninit { .. } => {}
+/// Collect every `return <value>` reachable from `block` WITHOUT entering a
+/// nested closure body (a `return` inside a closure returns from the
+/// closure, not the enclosing function). Best-effort over the common
+/// control-flow containers; a container this doesn't recurse into only
+/// UNDER-collects (a narrower residual) — it can never make the guard
+/// falsely reject a sound program.
+pub(crate) fn collect_outer_return_values<'a>(block: &'a Block, out: &mut Vec<&'a Expr>) {
+    for stmt in &block.stmts {
+        match &stmt.kind {
+            StmtKind::Expr(e) | StmtKind::Let { value: e, .. } => collect_returns_in_expr(e, out),
+            StmtKind::LetElse {
+                value, else_block, ..
+            } => {
+                collect_returns_in_expr(value, out);
+                collect_outer_return_values(else_block, out);
             }
-        }
-        if let Some(t) = &block.final_expr {
-            self.collect_returns_in_expr(t, out);
+            StmtKind::Assign { value, .. } | StmtKind::CompoundAssign { value, .. } => {
+                collect_returns_in_expr(value, out)
+            }
+            StmtKind::MultiAssign { values, .. } => {
+                for v in values {
+                    collect_returns_in_expr(v, out);
+                }
+            }
+            StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                collect_outer_return_values(body, out)
+            }
+            StmtKind::LetUninit { .. } => {}
         }
     }
+    if let Some(t) = &block.final_expr {
+        collect_returns_in_expr(t, out);
+    }
+}
 
-    /// Recursive companion to [`collect_outer_return_values`] over an `Expr`.
-    /// Stops at `Closure` bodies. Non-exhaustive on purpose (see that method).
-    fn collect_returns_in_expr<'a>(&self, expr: &'a Expr, out: &mut Vec<&'a Expr>) {
-        match &expr.kind {
-            ExprKind::Return(Some(e)) => {
-                out.push(e);
-                self.collect_returns_in_expr(e, out);
-            }
-            ExprKind::Block(b)
-            | ExprKind::Seq(b)
-            | ExprKind::Comptime(b)
-            | ExprKind::LabeledBlock { body: b, .. } => self.collect_outer_return_values(b, out),
-            ExprKind::If {
-                then_block,
-                else_branch,
-                ..
-            }
-            | ExprKind::IfLet {
-                then_block,
-                else_branch,
-                ..
-            } => {
-                self.collect_outer_return_values(then_block, out);
-                if let Some(e) = else_branch {
-                    self.collect_returns_in_expr(e, out);
-                }
-            }
-            ExprKind::Match { arms, .. } => {
-                for a in arms {
-                    self.collect_returns_in_expr(&a.body, out);
-                }
-            }
-            ExprKind::While { body, .. }
-            | ExprKind::WhileLet { body, .. }
-            | ExprKind::For { body, .. }
-            | ExprKind::Loop { body, .. } => self.collect_outer_return_values(body, out),
-            // Do NOT recurse into `Closure` — its `return` is the closure's.
-            _ => {}
+/// Recursive companion to [`collect_outer_return_values`] over an `Expr`.
+/// Stops at `Closure` bodies. Non-exhaustive on purpose (see that method).
+pub(crate) fn collect_returns_in_expr<'a>(expr: &'a Expr, out: &mut Vec<&'a Expr>) {
+    match &expr.kind {
+        ExprKind::Return(Some(e)) => {
+            out.push(e);
+            collect_returns_in_expr(e, out);
         }
+        ExprKind::Block(b)
+        | ExprKind::Seq(b)
+        | ExprKind::Comptime(b)
+        | ExprKind::LabeledBlock { body: b, .. } => collect_outer_return_values(b, out),
+        ExprKind::If {
+            then_block,
+            else_branch,
+            ..
+        }
+        | ExprKind::IfLet {
+            then_block,
+            else_branch,
+            ..
+        } => {
+            collect_outer_return_values(then_block, out);
+            if let Some(e) = else_branch {
+                collect_returns_in_expr(e, out);
+            }
+        }
+        ExprKind::Match { arms, .. } => {
+            for a in arms {
+                collect_returns_in_expr(&a.body, out);
+            }
+        }
+        ExprKind::While { body, .. }
+        | ExprKind::WhileLet { body, .. }
+        | ExprKind::For { body, .. }
+        | ExprKind::Loop { body, .. } => collect_outer_return_values(body, out),
+        // Do NOT recurse into `Closure` — its `return` is the closure's.
+        _ => {}
     }
 }
 

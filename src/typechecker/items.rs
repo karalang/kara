@@ -9312,7 +9312,31 @@ impl<'a> super::TypeChecker<'a> {
         vars: &[(super::types::TypeVarId, String)],
         subs: &HashMap<String, SubstValue>,
     ) {
-        let mut tail = body;
+        // The body's value and each `return` in it (not a nested closure's)
+        // are the closure's result alike: `|x| { return v.iter().collect(); }`
+        // leaves `C` open just as a tail `collect()` does (B-2026-11-26-77).
+        let mut results: Vec<&Expr> = vec![body];
+        match &body.kind {
+            ExprKind::Block(b) => {
+                crate::closure_escape::collect_outer_return_values(b, &mut results)
+            }
+            _ => crate::closure_escape::collect_returns_in_expr(body, &mut results),
+        }
+        for result in results {
+            self.open_closure_result_call(result, vars, subs);
+        }
+    }
+
+    /// One result expression of a closure body, walked through blocks to its
+    /// value: a call there whose type names one of `vars`' parameters takes
+    /// the variable (see [`Self::open_closure_tail_params`]).
+    fn open_closure_result_call(
+        &mut self,
+        result: &Expr,
+        vars: &[(super::types::TypeVarId, String)],
+        subs: &HashMap<String, SubstValue>,
+    ) {
+        let mut tail = result;
         while let ExprKind::Block(b) = &tail.kind {
             match b.final_expr.as_deref() {
                 Some(e) => tail = e,

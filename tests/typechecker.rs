@@ -46667,16 +46667,24 @@ fn a_healthy_binding_records_nothing_and_still_compiles() {
 
 #[test]
 fn unbounded_impl_with_empty_literal_is_unchanged() {
-    // The un-inferred element type is only visible when a bound has to be
-    // discharged. With no bound there is nothing to report, and this
-    // compiles today — the fix must not start rejecting it.
-    typecheck_ok(
+    // With no bound to discharge, the bound's message has nothing to say,
+    // but nothing fixes `T` either: this checked clean and the build then
+    // stopped at "a type that failed to check is not lowered yet". It is
+    // now the empty literal's own element-type error (B-2026-11-26-75).
+    let errors = typecheck_errors(
         "struct W[T] { xs: Vec[T] }
          impl[T] W[T] {
-             fn from(v: Vec[T]) -> W[T] { W { xs: v } }
+             fn from(v: own Vec[T]) -> W[T] { W { xs: v } }
              fn size(ref self) -> i64 { self.xs.len() }
          }
          fn main() { let g = W.from([]); println(g.size()); }",
+    );
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        errors[0]
+            .message
+            .contains("cannot infer the element type of the empty list literal `[]`"),
+        "{errors:?}"
     );
 }
 

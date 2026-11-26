@@ -5372,6 +5372,21 @@ fn mir_check_message(e: &crate::mir::BorrowError) -> String {
     let place = e.place.as_deref().map(|p| format!("`{p}`"));
     let at = |p: Option<(usize, usize)>| p.map(|(l, c)| format!(" at {l}:{c}")).unwrap_or_default();
     match (e.code, place) {
+        // Lowering met a type the check poisoned without reporting why:
+        // the check accepted the program, so the fault is karac's, and the
+        // user is told so rather than shown the builder's own wording as
+        // if it were a rule of the language (B-2026-11-26-77).
+        ("", _)
+            if e.text
+                .contains("a type that failed to check is not lowered yet") =>
+        {
+            format!(
+                "karac could not work out a type here and reported no reason: the check \
+             accepted this program, so this is a gap in the compiler, not an error in \
+             the program. Please report it with the program (internal: {})",
+                mir_check_text(&e.text)
+            )
+        }
         ("E0516", Some(place)) => {
             let verb = match e.access {
                 "write" => "write to",
@@ -5521,6 +5536,31 @@ mod mir_message_tests {
         assert_eq!(
             mir_check_text("write of a[_8] while it is borrowed"),
             "write of a[..] while it is borrowed"
+        );
+    }
+
+    #[test]
+    fn mir_check_message_owns_a_silent_check_failure_as_the_compilers() {
+        let e = crate::mir::BorrowError {
+            text: "4:9 in `main`: a type that failed to check is not lowered yet".to_string(),
+            code: "",
+            at: Some((4, 9)),
+            access: "move",
+            place: None,
+            loan_at: None,
+            holder: None,
+            holder_read_only: None,
+            temporary: None,
+            view_field: None,
+        };
+        let m = mir_check_message(&e);
+        assert!(
+            m.starts_with("karac could not work out a type here and reported no reason"),
+            "{m}"
+        );
+        assert!(
+            m.ends_with("(internal: a type that failed to check is not lowered yet)"),
+            "{m}"
         );
     }
 

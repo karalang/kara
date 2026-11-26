@@ -394,6 +394,21 @@ impl SymbolTable {
         self.current_scope
     }
 
+    /// Whether the innermost function-like scope around the current one is
+    /// a closure's rather than a function's.
+    pub fn in_closure_body(&self) -> bool {
+        let mut at = Some(self.current_scope);
+        while let Some(id) = at {
+            let scope = &self.scopes[id.0];
+            match scope.kind {
+                ScopeKind::Closure => return true,
+                ScopeKind::Function | ScopeKind::Global => return false,
+                _ => at = scope.parent,
+            }
+        }
+        false
+    }
+
     /// Reserved identifiers that cannot be used as user-defined names.
     pub(crate) const RESERVED_IDENTIFIERS: &'static [(&'static str, &'static str)] = &[
         ("Fn", "reserved for closure/function type constructor"),

@@ -1,19 +1,18 @@
 source = "tests/codegen/vecs.rs::test_ir_over_aligned_vec_element_buffer_uses_the_aligned_allocator"
 dedup_of = []
-expect = "error"
-exit = 1
+expect = "stdout"
+exit = 0
 tags = ["literal-unmatched", "src:legacy-tests", "post-m1:simd"]
-class = "e"
+class = "a"
 expected_from = "spec"
 legacy_backend = "legacy-build"
 legacy_exit = 0
 rules = []
 backends = []
 env = {}
-note = "first literal of the holding test: 'literal' | B-2026-11-25-70 triage (probe wk49g): was expect = stdout; not in 0.8: deferred.md § Portable SIMD — Vector[T, N]"
-bucket = "a:refused"
+note = "first literal of the holding test: 'literal' | a `ref` binding of a `Vector` element is a receiver since B-2026-11-26-77 (Vector is experimental in 0.8, deferred.md § Portable SIMD)"
+bucket = "a"
 classified_with = "9913c6855"
-deferred = "deferred.md § Portable SIMD — Vector[T, N]"
 extracted_src = "7fc26f07"
 model_rev = "3acf4472"
 model_src = "7fc26f07"

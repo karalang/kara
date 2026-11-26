@@ -3596,6 +3596,11 @@ pub struct TypeChecker<'a> {
     pub(super) errors: Vec<TypeError>,
     pub(super) warnings: Vec<TypeError>,
     pub(super) expr_types: FxHashMap<SpanKey, Type>,
+    /// Each empty list literal `[]` synthesis typed `Vec[Error]`, with
+    /// nothing reported: a binding or an expected type usually fixes it
+    /// later. One still `Vec[Error]` at the end is refused there
+    /// (B-2026-11-26-75).
+    pub(super) silent_empty_lists: Vec<Span>,
     /// Spans whose recorded type is a `TypeParam` carrying a callable
     /// `Clone` (B-2026-09-03-26). Populated at record time because
     /// `clone_receiver_self_type`'s `TypeParam` arm discharges against
@@ -5191,6 +5196,7 @@ impl<'a> TypeChecker<'a> {
             errors: Vec::new(),
             warnings: Vec::new(),
             expr_types: FxHashMap::default(),
+            silent_empty_lists: Vec::new(),
             typeparam_clone_bound_spans: FxHashSet::default(),
             nested_enum_value_names: FxHashSet::default(),
             nested_enum_param_payloads: FxHashMap::default(),
@@ -5706,6 +5712,7 @@ impl<'a> TypeChecker<'a> {
         self.finalize_typevar_pattern_bindings();
         self.finalize_pattern_binding_inner_types();
         self.finalize_closure_expr_types();
+        self.report_silent_empty_lists();
         // Fallible-allocation: under `panic_on_alloc_failure = false`, reject
         // every panicking heap-allocating site (phase-8-stdlib-floor item 4).
         // Runs after `check_items` so `expr_types` (the receiver-type source)
@@ -8009,6 +8016,46 @@ impl<'a> TypeChecker<'a> {
             },
         );
         self.reported_uninferrable_empty_literal = true;
+    }
+
+    /// An empty list literal whose element type nothing fixed, anywhere
+    /// but the `let` [`Self::report_empty_list_literal`] covers: a method's
+    /// receiver (`[].len()`, `[].iter().map(..).collect()`). It typed as
+    /// `Vec[Error]` with nothing reported, and the user saw only MIR's
+    /// "a type that failed to check is not lowered yet" (B-2026-11-26-75).
+    /// Asked only when the check found no other error in the program's own
+    /// code: with one, the program stops before lowering, and the
+    /// literal's type may be that error's echo.
+    fn report_silent_empty_lists(&mut self) {
+        // The library's own bodies are checked beside the program's, and
+        // what they report there is not the program's.
+        let library_start = self.program.library_start.unwrap_or(usize::MAX);
+        if self.errors.iter().any(|e| e.span.offset < library_start) {
+            return;
+        }
+        let mut seen = FxHashSet::default();
+        for span in std::mem::take(&mut self.silent_empty_lists) {
+            let key = SpanKey::from_span(&span);
+            if span.offset >= library_start || !seen.insert(key) {
+                continue;
+            }
+            let unsolved = matches!(
+                self.expr_types.get(&key),
+                Some(Type::Named { name, args })
+                    if name == "Vec" && matches!(args.as_slice(), [Type::Error])
+            );
+            if unsolved {
+                self.type_error(
+                    "error[E_EMPTY_PREFIX_LITERAL_NEEDS_ANNOTATION]: cannot infer the \
+                     element type of the empty list literal `[]`: nothing here says what \
+                     it holds. Bind it with a type first, `let v: Vec[T] = [];`, or use \
+                     `Vec.new()` where a later use gives the element type"
+                        .to_string(),
+                    span,
+                    TypeErrorKind::TypeMismatch,
+                );
+            }
+        }
     }
 
     /// [`Self::report_empty_list_literal`] for each empty `[]` inside the

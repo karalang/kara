@@ -242,6 +242,38 @@ impl<'a> super::Resolver<'a> {
 
     // ── Expression resolution ───────────────────────────────────
 
+    /// An unlabeled `break` or `continue` leaves the innermost loop, so one
+    /// needs a loop around it inside the same function or closure: a closure
+    /// body starts with no loop in scope (design.md § Label scope). Neither
+    /// was reported, and the program stopped in MIR with "this `break` is
+    /// not lowered yet" (B-2026-11-26-77).
+    fn require_enclosing_loop(&mut self, expr: &Expr, keyword: &str) {
+        if self
+            .loop_labels
+            .iter()
+            .any(|(_, k)| matches!(k, LabelKind::Loop))
+        {
+            return;
+        }
+        let message = if self.table.in_closure_body() {
+            format!(
+                "`{keyword}` inside a closure cannot leave a loop outside it: the closure \
+                 is not part of that loop's control flow (design.md § Label scope); \
+                 return a value from the closure and decide at the loop"
+            )
+        } else {
+            format!("`{keyword}` outside of a loop: there is no loop here for it to leave")
+        };
+        self.errors.push(ResolveError {
+            message,
+            span: expr.span,
+            kind: ResolveErrorKind::UndefinedLabel,
+            suggestion: None,
+            replacement: None,
+            stub_hint: None,
+        });
+    }
+
     pub(crate) fn resolve_expr(&mut self, expr: &Expr) {
         match &expr.kind {
             ExprKind::Integer(_, _)
@@ -255,6 +287,7 @@ impl<'a> super::Resolver<'a> {
             | ExprKind::Return(None)
             | ExprKind::Error => {}
 
+            ExprKind::Continue { label: None, .. } => self.require_enclosing_loop(expr, "continue"),
             ExprKind::Continue { label, label_span } => {
                 if let Some(name) = label {
                     let entry = self
@@ -314,6 +347,10 @@ impl<'a> super::Resolver<'a> {
                 }
             }
 
+            ExprKind::Break {
+                label: None,
+                value: None,
+            } => self.require_enclosing_loop(expr, "break"),
             ExprKind::Break { label, value: None } => {
                 if let Some(name) = label {
                     if !self
@@ -740,6 +777,8 @@ impl<'a> super::Resolver<'a> {
                             stub_hint: None,
                         });
                     }
+                } else {
+                    self.require_enclosing_loop(expr, "break");
                 }
                 self.resolve_expr(value);
             }

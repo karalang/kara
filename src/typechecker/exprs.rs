@@ -22096,6 +22096,7 @@ impl<'a> super::TypeChecker<'a> {
                 // Bare `[...]` defaults to `Vec[T]` in synthesis mode.
                 // Use check_expr when an Array annotation is present (handled in check_expr).
                 if elements.is_empty() {
+                    self.silent_empty_lists.push(expr.span);
                     Type::Named {
                         name: "Vec".to_string(),
                         args: vec![Type::Error],

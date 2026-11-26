@@ -1210,6 +1210,15 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- A `ref` binding of a `Vector` (`let g = ref v[0];` on a
+  `Vec[Vector[i64, 4]]`, `let r = ref w;`) works as a method receiver:
+  `g.reduce_sum()` runs as `v[0].reduce_sum()` does. It checked with
+  nothing reported and stopped at lowering (B-2026-11-26-77).
+- A let-bound closure that returns a `collect()` with `return`
+  (`|x| { return v.iter().map(|y| y + x).collect(); }`) takes the target
+  from the closure's uses, as one whose body ends in the `collect()`
+  already did (B-2026-11-09-40). It stopped at lowering with
+  `UnsolvedParam("C")` (B-2026-11-26-77).
 - A `match` whose moving arm assigns the scrutinee again, beside an arm
   whose pattern is a unit variant (`None`, `E.Y`) or a constant, leaves
   the scrutinee usable after it (core-semantics §3.4, §4.6). The
@@ -2915,6 +2924,22 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   suggests cloning at the move site, and `karac fix` writes it. It said
   "add `#[derive(Clone)]`" for a program's type that already had the impl,
   and "has no `.clone()`" for a library one.
+- An empty list literal `[]` as a method's receiver (`[].len()`,
+  `[].iter().map(..).collect()`) whose element type nothing fixes is
+  refused by name, as `let mut w = [];` is: "cannot infer the element
+  type of the empty list literal `[]`". The check passed with nothing
+  reported, and the user saw only the builder's E0516 "a type that failed
+  to check is not lowered yet" (B-2026-11-26-75).
+- An unlabeled `break` or `continue` inside a closure (a `with_provider`
+  body, a plain `||`) aimed at a loop outside it is E0107, by design.md
+  § Label scope, as a labeled one already was; one outside any loop is
+  E0107 "outside of a loop". Both printed the builder's "this `break` is
+  not lowered yet" (B-2026-11-26-77).
+- Where the builder meets a type the check gave up on without saying why,
+  `karac check` says the gap is the compiler's and asks for a report,
+  with the builder's text kept as the internal detail, rather than
+  printing "a type that failed to check is not lowered yet" as if it were
+  a rule of the language (B-2026-11-26-77).
 - E0200 on an untyped `.try_into()` suggests an annotation that parses:
   `let r: Result[Target, String] = v.try_into();` for an integer, whose
   narrowing `try_from` fails with a `String`, and `Result[Target, E]` with
