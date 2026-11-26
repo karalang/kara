@@ -1,3 +1,5 @@
+import std.io.{File, FileSystemProvider, OpenOptions, StdoutProvider};
+
 struct MemFs { n: i64 }
 impl FileSystemProvider for MemFs {
     fn open(mut ref self, path: Str, opts: ref OpenOptions) -> Result[i64, IoError] { Ok(1) }

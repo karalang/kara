@@ -1,6 +1,8 @@
 // B-2026-11-02-15: `collect()` into a `Vec[Fn() -> i64 + CrossTask]` takes each item as a push
 // would, so an item whose type is not marked is out of sight (core-semantics
 // §6.3). Before the fix the two tasks raced on the `shared` handle.
+import std.sync.{TaskGroup};
+
 shared struct S {
     mut n: i64,
 }

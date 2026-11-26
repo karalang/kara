@@ -1,4 +1,6 @@
 
+import std.net.{Request, Server};
+
 struct Response { status: i64, body: String }
 
 fn handle(req: Request) -> Response {

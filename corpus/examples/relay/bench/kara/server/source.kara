@@ -58,6 +58,9 @@
 
 // Resolve the single upstream address: `RELAY_UPSTREAM` env var, or the
 // `127.0.0.1:9000` default. Consumes nothing; returns a fresh owned String.
+import std.net.{TcpListener, TcpStream};
+import std.sync.{TaskGroup};
+
 fn upstream_addr() -> String {
     match Env.var("RELAY_UPSTREAM") {
         Ok(addr) => { return addr; }

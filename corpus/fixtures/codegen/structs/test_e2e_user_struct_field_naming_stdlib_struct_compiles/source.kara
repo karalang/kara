@@ -1,4 +1,6 @@
 
+import std.process.{Command};
+
 struct Holder { c: Command, n: i64 }
 
 fn main() {

@@ -6,6 +6,7 @@
 // run.
 
 import std.sync.{Mutex, TaskGroup};
+import std.sync.{Receiver, Sender};
 
 sync struct FooBar {
     n: i64,

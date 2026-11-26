@@ -1,3 +1,5 @@
+import std.tracing.{LogEvent, StdoutExporter};
+
 fn main() {
                 let tracer = StdoutExporter {};
                 tracer.export_event(LogEvent.info("plain"));

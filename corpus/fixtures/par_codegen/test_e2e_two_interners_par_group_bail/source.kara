@@ -1,4 +1,6 @@
 
+import std.intern.{Interner};
+
 fn main() {
     let t: Interner = Interner.new();
     let u: Interner = Interner.new();

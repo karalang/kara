@@ -1,6 +1,9 @@
 import std.time.{Duration, Instant, SystemTime, sleep};
 import std.random;
 import std.uuid;
+import std.random.{RandomProvider};
+import std.time.{ClockProvider};
+import std.env.{EnvProvider};
 
 struct Lcg { s: u64 }
 impl RandomProvider for Lcg {

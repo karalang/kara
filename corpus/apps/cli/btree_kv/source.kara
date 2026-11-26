@@ -24,6 +24,8 @@
 // and the key count. The database file's CRC at each commit matches the
 // Python mirror's byte for byte.
 
+import std.io.{File, SeekFrom};
+
 const PAGE: i64 = 256;
 const DB: Str = "kv.db";
 const WAL: Str = "kv.wal";

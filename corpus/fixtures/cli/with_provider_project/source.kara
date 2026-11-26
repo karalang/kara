@@ -1,3 +1,5 @@
+import std.time.{ClockProvider};
+
 struct FakeClock { t: i64 }
 impl ClockProvider for FakeClock { fn now(ref self) -> i64 { self.t } }
 fn main() {}

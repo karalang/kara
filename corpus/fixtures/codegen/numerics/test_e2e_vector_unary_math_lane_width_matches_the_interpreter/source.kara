@@ -1,4 +1,6 @@
 
+import std.simd.{Vector};
+
 fn main() {
     let v: Vector[bf16, 4] = Vector[bf16, 4](1.0bf16, 2.0bf16, 3.0bf16, 7.0bf16);
     println(v.sqrt()[1]);

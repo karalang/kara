@@ -24,6 +24,8 @@
 //   B-2026-10-14-68  a Vec of string literals is Vec[String]: the query
 //                    lists are annotated Vec[Str]
 
+import std.sync.{Receiver, Sender, TaskGroup, TaskHandle};
+
 const INDEX: Str = "search.idx";
 
 const STOPWORDS: Str = "a an and are as at be by for from has in is it its of on or that the this to was were will with";

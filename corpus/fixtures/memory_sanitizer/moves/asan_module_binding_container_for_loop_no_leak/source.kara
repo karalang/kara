@@ -2,7 +2,7 @@
 let mut MV: Vec[String] = Vec.new();
 let mut MM: Map[String, i64] = Map.new();
 let mut MS: Set[String] = Set.new();
-let TITLE: StringSlice = "hi";
+let TITLE: Str = "hi";
 
 fn early_return_out_of_map_loop() -> i64 {
     for (k, v) in MM {

@@ -3,6 +3,8 @@
 // non-escaping parameter, and enter `par` branches and `TaskGroup` tasks
 // (B-2026-11-04-70).
 
+import std.sync.{TaskGroup};
+
 shared struct Node {
     val: i64,
     kids: Vec[i64],

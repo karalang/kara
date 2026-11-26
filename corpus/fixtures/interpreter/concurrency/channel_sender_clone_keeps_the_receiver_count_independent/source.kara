@@ -1,3 +1,5 @@
+import std.sync.{Channel, Receiver, SendError, Sender};
+
 fn orphan() -> Sender[i64] {
     let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();
     let extra = tx.clone();

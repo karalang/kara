@@ -1,3 +1,5 @@
+import std.sync.{OnceLock};
+
 struct Point { x: i64, y: i64 }
 fn main() {
 let c: OnceLock[Point] = OnceLock.new();

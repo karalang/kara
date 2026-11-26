@@ -8,6 +8,8 @@
 // increase with Prometheus's extrapolation, the *_over_time functions,
 // aggregations by label, and instant and range queries.
 
+import std.sync.{TaskGroup};
+
 const FIRST_SCRAPE: i64 = 1700000000000;
 const CHUNK: i64 = 120;
 const LOOKBACK: i64 = 300000;

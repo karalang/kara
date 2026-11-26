@@ -1,4 +1,7 @@
 
+import std.sync.{Channel};
+import std.net.{Client};
+
 fn main() with sends(Network) receives(Network) sends(Channel) writes(Stdout) {
     let c = Client.new();
     match c.request("GET", "not-a-url").timeout(100).send() {

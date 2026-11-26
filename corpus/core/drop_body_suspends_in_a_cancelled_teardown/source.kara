@@ -1,4 +1,5 @@
 import std.time.{Duration, sleep, timeout};
+import std.sync.{Receiver, TaskGroup};
 struct N { s: String }
 impl Drop for N { fn drop(mut ref self) { println(f"drop {self.s}"); } }
 fn nn(s: Str) -> N { N { s: s.to_string() } }

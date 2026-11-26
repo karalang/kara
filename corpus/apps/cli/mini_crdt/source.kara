@@ -11,6 +11,9 @@
 // ------------------------------------------------------------ operations
 
 // An element of a text: a Lamport counter and the replica that made it.
+import std.io.{File};
+import std.sync.{TaskGroup};
+
 type Id = (i64, String);
 
 fn fmt_id(id: ref Id) -> String {

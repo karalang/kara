@@ -5,6 +5,8 @@
 
 // ---- find_in_mountain_array.kara ----
 
+import std.sync.{Atomic};
+
 fn a0_find_in_mountain_array(target: i32, mountain: MountainArray) -> i32 {
     let n = mountain.length();
     let mut lo: i32 = 0;

@@ -1,4 +1,6 @@
 
+import std.sync.{Receiver, Sender};
+
 struct Loud { n: i64 }
 impl Drop for Loud { fn drop(mut ref self) { println(f"drop {self.n}"); } }
 fn loud(n: i64) -> Result[Loud, String] { Ok(Loud { n: n }) }

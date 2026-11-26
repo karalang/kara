@@ -1,4 +1,6 @@
 
+import std.net.{WebSocket};
+
 fn main() {
     let ws = WebSocket.from_fd(3);
     let msg: String = "hi";

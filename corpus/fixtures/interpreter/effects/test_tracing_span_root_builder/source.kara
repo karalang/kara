@@ -1,3 +1,5 @@
+import std.tracing.{Span};
+
 fn main() {
          let s = Span.root("request", 7).with_field("method", "GET");
          println(s.name);

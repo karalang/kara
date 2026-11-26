@@ -1,4 +1,6 @@
 
+import std.simd.{Vector};
+
 fn pair_sum(v: Vec[f64], p: i64) -> f64 {
     let pair = Vector[f64, 2](v[p], v[p + 1]);
     return pair.reduce_sum();

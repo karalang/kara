@@ -1,4 +1,6 @@
 
+import std.arena.{Arena};
+
 fn main() {
     let a: Arena[i64] = Arena.new();
     let b: Arena[i64] = Arena.new();

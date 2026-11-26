@@ -8,6 +8,8 @@
 // README.md is the spec; oracle.py is the reference.
 
 import std.encoding.{hex_encode, hex_decode};
+import std.sync.{TaskGroup};
+import std.io.{File};
 
 const ROOT: Str = "data/out/logs";
 const OFFSETS: Str = "__consumer_offsets";

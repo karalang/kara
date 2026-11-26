@@ -5,6 +5,7 @@
 // raises the stage and wakes every waiter whose turn it now is.
 
 import std.sync.{Mutex, TaskGroup};
+import std.sync.{Sender};
 
 struct Turns {
     stage: i64,

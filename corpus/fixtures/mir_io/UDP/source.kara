@@ -1,4 +1,6 @@
 
+import std.net.{TcpError, TcpListener, TcpStream};
+
 fn show(e: NetError) -> String {
     match e {
         NetError.Interrupted => "interrupted".to_string(),

@@ -28,6 +28,8 @@
 // below). Effects unchanged; only the value dependency moved; the
 // answer moved with it.
 
+import std.tracing.{Log};
+
 pub trait Store { fn touch(mut ref self, n: i64) -> i64; }
 
 pub effect resource Db: Store;

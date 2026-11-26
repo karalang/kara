@@ -10,6 +10,8 @@
 // actives, retention and funnels as intersections, then ranges, rank and
 // select, and .roar files written, dumped and read back.
 
+import std.sync.{TaskGroup};
+
 const ARRAY_MAX: i64 = 4096;
 const WORDS: i64 = 1024;
 const COOKIE_NO_RUN: i64 = 12346;

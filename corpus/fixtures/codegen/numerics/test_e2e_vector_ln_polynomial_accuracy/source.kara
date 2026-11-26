@@ -1,4 +1,6 @@
 
+import std.simd.{Vector};
+
 fn main() {
     let x = Vector[f32, 4].from_array([1.0f32, 2.0f32, 10.0f32, 0.5f32]);
     let l = x.ln();

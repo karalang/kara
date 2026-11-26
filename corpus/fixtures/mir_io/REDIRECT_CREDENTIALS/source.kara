@@ -1,4 +1,6 @@
 
+import std.net.{Client};
+
 fn fetch(url: own String) {
     let c = Client.new();
     let req = c.request("GET", url).header("Authorization", "Bearer t").header("Cookie", "c=1");

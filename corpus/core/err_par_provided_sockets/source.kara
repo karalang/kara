@@ -1,6 +1,8 @@
 // Two `par` branches reading sockets a `Network` provider opened would
 // both reach the provider, which each read borrows `mut ref`, so the
 // branches conflict (core semantics §14.12, §14.3, §11.2).
+import std.net.{TcpStream};
+
 struct Loop { reads: i64 }
 
 impl NetworkProvider for Loop {

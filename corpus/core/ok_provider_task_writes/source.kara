@@ -1,6 +1,8 @@
 // One task may write the provider while nothing else uses it (core
 // semantics §14.9): the spawner bumps the clock before the spawn and reads
 // it once the group, in its own block, has dropped (§9.5).
+import std.sync.{TaskGroup};
+
 effect resource Clk: ClkP;
 
 trait ClkP {

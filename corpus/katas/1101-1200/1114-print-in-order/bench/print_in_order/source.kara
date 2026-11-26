@@ -2,6 +2,7 @@
 // starting its three tasks in one of the six orders in turn.
 
 import std.sync.{Mutex, TaskGroup};
+import std.sync.{Receiver, Sender};
 
 sync struct Foo {
     first_done: (Sender[()], Receiver[()]),

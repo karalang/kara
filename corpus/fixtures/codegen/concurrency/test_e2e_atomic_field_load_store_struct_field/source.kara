@@ -1,3 +1,5 @@
+import std.sync.{Atomic, MemoryOrdering};
+
 struct Counter { count: Atomic[i64] }
 fn main() {
 let c = Counter { count: Atomic.new(0) };

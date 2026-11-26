@@ -1,4 +1,6 @@
 
+import std.net.{Request};
+
 fn main() {
     let req = Request.new("".to_string(), "".to_string());
     match req.header("content-type") {

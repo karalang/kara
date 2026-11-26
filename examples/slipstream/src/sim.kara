@@ -18,6 +18,9 @@
 // Lattice geometry. Small grid, big display: the canvas is shown scaled up in
 // CSS (see index.html), so 256×96 cells of fluid fill a 1024×384 canvas. Even
 // width keeps a future two-cells-per-SIMD-lane inner loop clean.
+import std.simd.{Vector};
+import std.sync.{TaskGroup, TaskHandle};
+
 pub fn grid_w() -> i64 { 256 }
 pub fn grid_h() -> i64 { 96 }
 

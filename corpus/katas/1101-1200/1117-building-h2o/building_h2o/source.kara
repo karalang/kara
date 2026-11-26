@@ -6,6 +6,7 @@
 // at a time, so its three atoms come out together.
 
 import std.sync.{Mutex, TaskGroup};
+import std.sync.{Receiver, Sender};
 
 sync struct H2o {
     bonding: Mutex[()],

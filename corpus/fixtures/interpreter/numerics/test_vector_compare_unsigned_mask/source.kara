@@ -1,4 +1,6 @@
 
+import std.simd.{Vector};
+
 fn main() {
     let a = Vector[u32, 2](3000000000, 5);
     let b = Vector[u32, 2](10, 10);

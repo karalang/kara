@@ -1,4 +1,6 @@
 
+import std.process.{Command};
+
 fn main() {
     let sleeper = Command.new("sleep").arg("30");
     match sleeper.spawn() {

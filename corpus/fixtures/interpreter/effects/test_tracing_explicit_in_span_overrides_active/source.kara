@@ -1,3 +1,5 @@
+import std.tracing.{LogEvent, Span, StdoutExporter};
+
 fn main() {
          let s = Span.root("s", 7);
          with_span(s, || {

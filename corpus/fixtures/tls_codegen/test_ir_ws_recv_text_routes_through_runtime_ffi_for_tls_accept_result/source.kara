@@ -1,4 +1,6 @@
 
+import std.net.{TlsListener, WebSocket};
+
 fn main() {
     let listener: TlsListener = TlsListener.bind_tls("127.0.0.1:0", "c", "k").unwrap();
     let ws: WebSocket = WebSocket.accept_tls(listener).unwrap();

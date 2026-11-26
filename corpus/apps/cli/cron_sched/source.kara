@@ -15,6 +15,8 @@
 //
 // Workarounds: B-2026-10-12-6 (parse returns Option), B-2026-10-12-7 (split is an eager Vec).
 
+import std.process.{Command, Stdio};
+
 const CRONTAB: Str = "# m h dom mon dow  name  command
 */15 * * * *        tick     echo tick
 0 9 * * mon-fri     standup  echo standup

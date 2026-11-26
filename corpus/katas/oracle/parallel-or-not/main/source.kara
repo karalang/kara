@@ -25,6 +25,8 @@
 // reveals that conflict. The compiler knows because it resolved the
 // whole effect graph; a reader has to reconstruct it and hope.
 
+import std.tracing.{Log};
+
 pub trait Store { fn touch(mut ref self, n: i64); }
 
 // Three distinct effect resources. Disjointness across them is what

@@ -8,6 +8,7 @@
 // README.md is the spec; oracle.py is the reference.
 
 import std.encoding.hex_decode;
+import std.sync.{TaskGroup};
 
 const QUEUE_LIMIT: i64 = 3;
 const DEPTH_LIMIT: i64 = 5;

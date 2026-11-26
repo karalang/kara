@@ -1,3 +1,5 @@
+import std.sync.{Channel};
+
 fn main() {
 let (sender, receiver) = Channel.new();
 let s2 = sender.clone();

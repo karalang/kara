@@ -1,4 +1,6 @@
 
+import std.sync.{Channel, SendError, Sender};
+
 struct Big { a: String, b: String }
 fn orphan(seed: own Big) -> Sender[Big] {
     let (tx, rx) = Channel.new();

@@ -1,3 +1,5 @@
+import std.sync.{Atomic, MemoryOrdering};
+
 sync struct C { n: Atomic[i64] }
          impl C {
              fn add(ref self, v: i64) { let _ = self.n.fetch_add(v, MemoryOrdering.SeqCst); }

@@ -1,4 +1,5 @@
 import std.pool.{PoolError};
+import std.process.{Stdio};
 fn main() {
 let a = Stdio.Inherit;
 let b = Stdio.Null;

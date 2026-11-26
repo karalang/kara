@@ -10,6 +10,7 @@
 
 import std.sync.{TaskGroup, Mutex};
 import std.io.{BufReader, BufWriter};
+import std.net.{TcpListener, TcpStream};
 
 const ADDR: Str = "127.0.0.1:23760";
 const SERVER: Str = "kara.irc";

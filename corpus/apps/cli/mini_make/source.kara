@@ -18,6 +18,8 @@
 //                    operators are compared by index, and `stem.clone()`
 //                    is passed to `replacen`
 
+import std.process.{Command, Stdio};
+
 const MAKEFILE: Str = "# \"compile\" upper-cases a source file, \"link\" concatenates objects.
 CC = tr a-z A-Z
 SRCS := $(wildcard src/*.c)

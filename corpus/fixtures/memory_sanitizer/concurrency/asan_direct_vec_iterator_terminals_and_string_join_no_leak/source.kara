@@ -1,4 +1,6 @@
 
+import std.cmp.{F64};
+
 fn main() {
     let v: Vec[i64] = [10, 20, 30, 40];
     println(v.iter().sum());

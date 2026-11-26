@@ -1,4 +1,6 @@
 
+import std.sync.{OnceLock};
+
 struct Rec { id: i64, name: String }
 fn main() {
     let mut i: i64 = 0i64;

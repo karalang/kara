@@ -9,6 +9,7 @@
 // the collector prints what it kept, sorted.
 
 import std.sync.{TaskGroup, Mutex};
+import std.net.{TcpListener, TcpStream};
 
 const UDP_ADDR: Str = "127.0.0.1:23767";
 const TCP_ADDR: Str = "127.0.0.1:23768";

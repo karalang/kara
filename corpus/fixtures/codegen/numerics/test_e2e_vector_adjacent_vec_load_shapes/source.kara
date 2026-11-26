@@ -1,3 +1,5 @@
+import std.simd.{Vector};
+
 fn vsum(v: Vec[f64]) -> f64 {
 let mut acc = Vector[f64, 2](0.0, 0.0);
 let mut p: i64 = 0;

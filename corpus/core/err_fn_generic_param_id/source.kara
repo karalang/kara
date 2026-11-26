@@ -1,6 +1,8 @@
 // B-2026-11-02-15: `id[T]`'s `T` is not solved as the marked type from where its result
 // goes, so an unmarked argument does not come out marked (core-semantics
 // §6.3). Before the fix the two tasks raced on the `shared` handle.
+import std.sync.{TaskGroup};
+
 shared struct S {
     mut n: i64,
 }

@@ -1,3 +1,5 @@
+import std.sync.{Mutex};
+
 fn main() {
     let m: Mutex[Vec[ref i64]] = Mutex.new(Vec.new());
     {

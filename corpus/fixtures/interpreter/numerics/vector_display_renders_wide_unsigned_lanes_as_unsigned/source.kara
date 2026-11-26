@@ -1,4 +1,6 @@
 
+import std.simd.{Vector};
+
 fn main() {
     let u: Vector[u64, 2] = Vector[u64, 2](18446744073709551615u64, 1u64);
     println(f"lane {u[0]}");

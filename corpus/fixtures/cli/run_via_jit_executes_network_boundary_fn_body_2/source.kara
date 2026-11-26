@@ -1,3 +1,6 @@
+import std.net.{WebSocket};
+import std.sync.{TaskGroup};
+
 struct R { id: i64 }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 fn handle(r: R, ws: WebSocket, go: bool) {

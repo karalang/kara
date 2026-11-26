@@ -9,6 +9,8 @@
 
 // ------------------------------------------------------------ lexer
 
+import std.sync.{TaskGroup};
+
 #[derive(Copy, Clone)]
 struct Loc {
     sl: i64,

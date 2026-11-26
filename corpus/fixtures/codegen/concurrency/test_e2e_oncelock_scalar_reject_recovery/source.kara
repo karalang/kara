@@ -1,4 +1,6 @@
 
+import std.sync.{AlreadySetError, OnceLock};
+
 fn main() {
     let cell: OnceLock[i64] = OnceLock.new();
     match cell.set(10) { Ok(_) => {} Err(_) => {} }

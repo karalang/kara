@@ -1,4 +1,6 @@
 
+import std.simd.{Vector};
+
 fn main() {
     let v = Vector[f32, 4].from_array([4.0f32, 9.0f32, 16.0f32, 25.0f32]);
     let s = v.sqrt();

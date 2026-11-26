@@ -1,6 +1,8 @@
 // design.md §10, Results and propagation: the `From` conversion a `?`
 // inserts is a real call for effects, so a public function whose `?`
 // converts through an impl that writes a resource must declare it.
+import std.tracing.{Log};
+
 effect resource Log;
 
 pub struct Low {}

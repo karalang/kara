@@ -1,4 +1,6 @@
 
+import std.tracing.{Log};
+
 effect resource Log;
 fn helper(n: i64) -> i64 writes(Log) { n + 1 }
 struct Pair { a: i64, b: i64 }

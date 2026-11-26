@@ -1,4 +1,6 @@
 
+import std.net.{Client};
+
 fn make_client() -> Client { Client.new() }
 fn main() {
     let c = make_client();

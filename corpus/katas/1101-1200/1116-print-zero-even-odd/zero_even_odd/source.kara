@@ -7,6 +7,7 @@
 // others run.
 
 import std.sync.{Mutex, TaskGroup};
+import std.sync.{Receiver, Sender};
 
 sync struct ZeroEvenOdd {
     n: i64,

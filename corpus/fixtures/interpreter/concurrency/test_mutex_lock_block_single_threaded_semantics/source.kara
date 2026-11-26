@@ -1,3 +1,5 @@
+import std.sync.{Mutex};
+
 struct Cell { v: Mutex[i64] }
 impl Cell {
 fn get(ref self) -> i64 { lock self.v x { x } }

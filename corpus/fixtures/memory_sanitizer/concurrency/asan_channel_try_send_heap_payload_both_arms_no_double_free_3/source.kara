@@ -1,4 +1,6 @@
 
+import std.sync.{Channel, SendError};
+
 struct Big { a: String, b: String }
 fn main() {
     let mut i: i64 = 0;

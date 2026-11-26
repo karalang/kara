@@ -1,4 +1,6 @@
 
+import std.simd.{Vector};
+
 fn main() {
     let f = Vector[f64, 2](1.0, 2.0);
     let _ = Vector[i64, 4].cast_from(f);

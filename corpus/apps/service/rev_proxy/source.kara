@@ -14,6 +14,8 @@
 // origin accepts and answers, and the replies flow back. The kernel buffers
 // each step. One origin is closed halfway through; two are never started.
 
+import std.net.{TcpListener, TcpStream};
+
 struct Header { name: String, value: String }
 
 struct Message {

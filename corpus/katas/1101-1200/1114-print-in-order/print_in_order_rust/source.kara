@@ -4,6 +4,7 @@
 
 import std.sync.Mutex;
 import std.sync.{TaskGroup};
+import std.sync.{Receiver, Sender};
 
 struct Foo {
     first_tx: Mutex[Sender[()]],

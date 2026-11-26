@@ -1,4 +1,6 @@
 
+import std.simd.{Vector};
+
 fn construct(x: f32) -> f32 {
     let a: Vector[f32, 4] = Vector[f32, 4](x, x, x, x);
     let b: Vector[f32, 4] = Vector[f32, 4](0.5, 0.25, 0.5, 0.25);

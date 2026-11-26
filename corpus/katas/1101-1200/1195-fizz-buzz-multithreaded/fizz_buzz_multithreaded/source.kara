@@ -6,6 +6,7 @@
 // turn at a time, and they print in order.
 
 import std.sync.{TaskGroup};
+import std.sync.{Mutex, Semaphore};
 
 sync struct FizzBuzz {
     n: i64,

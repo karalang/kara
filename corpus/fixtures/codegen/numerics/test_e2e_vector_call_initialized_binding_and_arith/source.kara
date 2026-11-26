@@ -1,3 +1,5 @@
+import std.simd.{Vector};
+
 fn zero8() -> Vector[f32, 8] {
 Vector[f32, 8](0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32)
 }

@@ -1,3 +1,5 @@
+import std.sync.{Channel};
+
 fn main() {
     let (tx, rx) = Channel.new();
     let a = "alpha";

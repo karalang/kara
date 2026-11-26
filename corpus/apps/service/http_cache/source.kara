@@ -10,6 +10,7 @@
 
 import std.sync.{TaskGroup, Mutex};
 import std.time.{Duration, Instant, sleep};
+import std.net.{Client, HttpError, Request, Server, TcpStream};
 
 const ORIGIN_ADDR: Str = "127.0.0.1:23753";
 const CACHE_ADDR: Str = "127.0.0.1:23754";

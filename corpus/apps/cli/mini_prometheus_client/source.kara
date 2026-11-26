@@ -9,6 +9,7 @@
 
 import std.encoding.hex_decode;
 import std.sync.{Mutex, Atomic};
+import std.sync.{TaskGroup};
 
 const WORKERS: i64 = 4;
 

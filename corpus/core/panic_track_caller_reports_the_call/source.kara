@@ -2,6 +2,8 @@
 // the call into it, transitively through tracked callers; an untracked
 // caller reports its own call (B-2026-11-04-20).
 
+import std.sync.{TaskFailed, TaskGroup};
+
 #[track_caller]
 fn must(o: Option[i64]) -> i64 {
     o.unwrap()

@@ -1,4 +1,6 @@
 
+import std.net.{TcpStream};
+
             fn main() {
                 match TcpStream.connect("127.0.0.1:1") {
                     Result.Ok(_) => { println(98); }

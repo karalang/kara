@@ -3,6 +3,8 @@
 // a task reads may not be stepped while it lives; `let c = k;` before the
 // spawn is the spelling that compiles (B-2026-11-01-32).
 
+import std.sync.{TaskGroup, TaskHandle};
+
 fn work(n: i64) -> i64 {
     n * 10
 }

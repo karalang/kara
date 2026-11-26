@@ -1,4 +1,6 @@
 
+import std.sync.{Channel, SendError};
+
 struct Quad { a: i64, b: i64, c: i64, d: i64 }
 fn main() {
     let mut i: i64 = 0;

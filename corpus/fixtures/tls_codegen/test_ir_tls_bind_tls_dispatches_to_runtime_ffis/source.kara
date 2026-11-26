@@ -1,4 +1,6 @@
 
+import std.net.{TlsListener};
+
 fn main() {
     let addr: String = "127.0.0.1:0";
     let cert: String = "fake-cert";

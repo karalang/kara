@@ -1,4 +1,6 @@
 
+import std.sync.{Atomic, Mutex};
+
 struct Plain { a: i64, b: f64 }
 struct HasAtomic { c: Atomic[i64] }
 struct HasMutex { m: Mutex[i64] }

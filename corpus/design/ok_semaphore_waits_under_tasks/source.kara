@@ -7,6 +7,7 @@
 
 import std.sync.{Mutex, TaskGroup};
 import std.time.{Duration, sleep};
+import std.sync.{Semaphore, SemaphoreError};
 
 sync struct FooBar {
     n: i64,

@@ -1,4 +1,6 @@
 
+import std.net.{TcpStream};
+
 fn main() {
     let s = TcpStream.connect("127.0.0.1:8080").unwrap();
     println(s.fd);

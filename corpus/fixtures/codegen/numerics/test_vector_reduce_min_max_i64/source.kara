@@ -1,4 +1,6 @@
 
+import std.simd.{Vector};
+
 fn main() {
     let v = Vector[i64, 4](3, 1, 4, 2);
     println(v.reduce_min());

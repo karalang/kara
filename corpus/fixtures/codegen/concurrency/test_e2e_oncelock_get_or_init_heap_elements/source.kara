@@ -1,3 +1,5 @@
+import std.sync.{OnceCell, OnceLock};
+
 struct Config { name: String, port: i64 }
 fn main() {
 let c: OnceLock[String] = OnceLock.new();

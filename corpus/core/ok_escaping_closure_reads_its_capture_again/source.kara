@@ -1,3 +1,5 @@
+import std.sync.{TaskGroup};
+
 struct Prog {
     ops: Vec[i64],
 }

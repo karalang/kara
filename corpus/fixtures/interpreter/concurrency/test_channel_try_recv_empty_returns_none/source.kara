@@ -1,3 +1,5 @@
+import std.sync.{Channel};
+
 fn main() {
 let (_sender, receiver) = Channel.new();
 match receiver.try_recv() {

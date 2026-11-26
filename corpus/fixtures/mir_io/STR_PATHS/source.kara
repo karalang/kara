@@ -1,3 +1,6 @@
+import std.io.{File};
+import std.net.{TcpStream};
+
 fn main() {
     let p: Str = "DIR/data.txt";
     match fs.write(p, "hi\n") { Ok(_) => {}, Err(_) => println("w") }

@@ -1,3 +1,5 @@
+import std.tracing.{LogEvent, Span};
+
 struct Collector { }
             impl Exporter for Collector {
                 fn export_event(ref self, event: LogEvent) {

@@ -1,3 +1,5 @@
+import std.sync.{Channel};
+
 fn main() {
 let (sender, receiver) = Channel.new();
 sender.send(42_i64);

@@ -1,3 +1,5 @@
+import std.simd.{Vector};
+
 fn main() {
 let a = Vector[f64, 4](1.0, 2.0, 3.0, 4.0);
 let b = Vector[f64, 4](2.0, 2.0, 2.0, 2.0);

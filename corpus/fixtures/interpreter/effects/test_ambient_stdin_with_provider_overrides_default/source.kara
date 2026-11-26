@@ -1,3 +1,5 @@
+import std.io.{StdinProvider};
+
 struct CannedStdin {}
 impl StdinProvider for CannedStdin {
 fn read_line(mut ref self) -> Result[String, IoError] {

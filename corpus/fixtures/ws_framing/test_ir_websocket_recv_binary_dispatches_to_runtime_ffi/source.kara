@@ -1,4 +1,6 @@
 
+import std.net.{WebSocket};
+
 fn main() {
     let ws = WebSocket.from_fd(3);
     let mut buf: Array[u8, 64] = [0u8; 64];

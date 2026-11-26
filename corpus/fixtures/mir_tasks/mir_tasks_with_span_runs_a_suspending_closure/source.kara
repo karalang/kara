@@ -1,4 +1,6 @@
 
+import std.tracing.{Log, Span};
+
 struct Noisy { id: i64 }
 impl Drop for Noisy { fn drop(mut ref self) { println(f"drop {self.id}"); } }
 fn take(n: own Noisy) -> i64 { n.id + 1 }

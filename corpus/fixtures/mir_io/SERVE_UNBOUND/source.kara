@@ -1,4 +1,6 @@
 
+import std.net.{Request, Response, Server};
+
 fn handle(req: Request) -> Response {
     Response { status: 200, body: req.path() }
 }

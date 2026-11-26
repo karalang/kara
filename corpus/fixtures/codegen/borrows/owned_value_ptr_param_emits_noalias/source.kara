@@ -1,4 +1,6 @@
 
+import std.sync.{Sender};
+
 fn take_tensor(t: Tensor[f64, [2, 2]]) -> i64 { return t.rank(); }
 fn take_map(m: Map[String, i64]) -> i64 { return m.len(); }
 fn take_sender(s: Sender[i64]) -> i64 { return 0; }

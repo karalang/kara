@@ -1,3 +1,5 @@
+import std.sync.{RateLimiter, Semaphore};
+
 fn main() {
          let sem = Semaphore.new(2i64);
          match sem.acquire(0i64) { Ok(u) => { println("a1"); }, Err(e) => { println("t1"); }, }

@@ -1,2 +1,4 @@
+import std.sync.{Mutex};
+
 let SLOT: Mutex[i64] = Mutex.new(0);
 fn main() { println(1); }

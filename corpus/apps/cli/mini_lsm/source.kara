@@ -9,6 +9,9 @@
 // off a torn or corrupt tail. Snapshots pin old versions by sequence
 // number.
 
+import std.io.{File, SeekFrom};
+import std.sync.{TaskGroup};
+
 const MEM_LIMIT: i64 = 2048;
 const BLOCK_SIZE: i64 = 256;
 const RESTART: i64 = 4;

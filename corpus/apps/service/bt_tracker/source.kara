@@ -8,6 +8,8 @@ import std.sync.{Mutex};
 import std.time.Duration;
 import std.time.sleep;
 import std.crypto.legacy.{Sha1};
+import std.net.{Client, Request, Server};
+import std.sync.{TaskGroup};
 
 const ADDR: Str = "127.0.0.1:23784";
 const INTERVAL: i64 = 1800;

@@ -1,3 +1,5 @@
+import std.sync.{OnceCell};
+
 struct Cfg { port: i64, name: String }
          fn main() {
              let cell: OnceCell[Cfg] = OnceCell.new();

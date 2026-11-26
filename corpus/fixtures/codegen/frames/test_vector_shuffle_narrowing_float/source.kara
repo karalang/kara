@@ -1,4 +1,6 @@
 
+import std.simd.{Vector};
+
 fn main() {
     let a = Vector[f64, 4](1.5, 2.5, 3.5, 4.5);
     let r = a.shuffle([3, 0]);

@@ -1,3 +1,5 @@
+import std.sync.{Mutex};
+
 sync struct Counter { total: Mutex[i64] }
 impl Counter {
 fn inc(ref self) { lock self.total t { t += 1; } }

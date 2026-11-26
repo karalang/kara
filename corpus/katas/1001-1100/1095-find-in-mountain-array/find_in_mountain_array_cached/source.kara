@@ -4,6 +4,8 @@
 // the searches compare the peak with its neighbours and stop early when
 // the peak is the target. O(log n) calls, each index at most once.
 
+import std.sync.{Atomic};
+
 fn read(m: MountainArray, seen: mut ref Map[i32, i32], i: i32) -> i32 {
     if let Some(v) = seen.get(i) {
         return v;

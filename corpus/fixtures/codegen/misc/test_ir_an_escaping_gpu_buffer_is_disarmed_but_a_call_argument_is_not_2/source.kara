@@ -1,4 +1,6 @@
 
+import std.gpu.{GpuBuffer};
+
 struct Body { mass: f32, speed: f32 }
 
 fn total(b: GpuBuffer[Body]) -> f32 { gpu.sum(b.mass) }

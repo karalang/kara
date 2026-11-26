@@ -4,6 +4,7 @@
 // a suspension point, so a waiting task lets the others run.
 
 import std.sync.{Mutex, TaskGroup};
+import std.sync.{Receiver, Sender};
 
 sync struct Foo {
     first_done: (Sender[()], Receiver[()]),

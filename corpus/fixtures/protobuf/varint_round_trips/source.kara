@@ -1,4 +1,6 @@
 
+import std.protobuf.{ProtoBuf, ProtoReader};
+
 fn main() {
     let vals: Array[u64, 7] = [0u64, 1u64, 127u64, 128u64, 300u64, 16384u64, 4294967295u64];
     let mut i = 0;

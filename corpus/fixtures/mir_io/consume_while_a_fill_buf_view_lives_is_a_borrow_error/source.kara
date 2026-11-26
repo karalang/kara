@@ -1,4 +1,6 @@
 
+import std.io.{BufReader, File};
+
 fn main() {
     let mut r = BufReader.new(File.open("x.txt").unwrap());
     let b = r.fill_buf().unwrap();

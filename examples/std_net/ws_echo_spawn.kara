@@ -9,6 +9,9 @@
 // the par-runtime pool / IOCP reactors, so it actually exercises *connection-
 // level* concurrency on the Windows event loop — the thing the serial example
 // does not. Mirrors the spawn shape of examples/ws_idle_holder/src/main.kara.
+import std.net.{TcpListener, WebSocket};
+import std.sync.{TaskGroup};
+
 fn echo(ws: own WebSocket) {
     let mut ws = ws;
     loop {

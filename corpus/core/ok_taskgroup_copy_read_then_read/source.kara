@@ -3,6 +3,8 @@
 // task lives, and a copy taken before the spawn may be stepped freely
 // (B-2026-11-01-32).
 
+import std.sync.{TaskGroup, TaskHandle};
+
 fn work(n: i64) -> i64 {
     n * 10
 }

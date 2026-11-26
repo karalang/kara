@@ -1,3 +1,5 @@
+import std.cmp.{F32, F64};
+
 enum Num { I(i64), F(F32) }
 enum Dbl { I(i64), D(F64) }
 fn show(n: Num) -> f64 { match n { I(x) => x as f64, F(f) => f.value } }

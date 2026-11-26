@@ -38,6 +38,8 @@
 // load-bearing.
 
 import std.json.{Json};
+import std.sync.{Mutex};
+import std.net.{Request, Server};
 
 struct Response {
     status: i64,

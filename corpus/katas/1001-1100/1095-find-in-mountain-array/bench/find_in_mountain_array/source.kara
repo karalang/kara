@@ -6,6 +6,8 @@
 // `get` into a checksum. Mirrors find_in_mountain_array.rs, .c, .py and
 // go-seq/.
 
+import std.sync.{Atomic};
+
 fn find_in_mountain_array(target: i32, mountain: MountainArray) -> i32 {
     let n = mountain.length();
     let mut lo: i32 = 0;

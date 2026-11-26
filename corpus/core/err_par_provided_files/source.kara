@@ -1,6 +1,8 @@
 // Two `par` branches reading files a `FileSystem` provider opened would
 // both reach the provider through its table, so each read writes
 // `FileSystem` and the branches conflict (core semantics §14.11, §11.2).
+import std.io.{File, FileSystemProvider, OpenOptions};
+
 struct Counter { reads: i64 }
 
 impl FileSystemProvider for Counter {

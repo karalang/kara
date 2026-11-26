@@ -1,4 +1,6 @@
 
+import std.io.{File};
+
 fn try_open(path: String) -> Result[i64, IoError] with reads(FileSystem) {
     let _f = File.open(path)?;
     Ok(0_i64)

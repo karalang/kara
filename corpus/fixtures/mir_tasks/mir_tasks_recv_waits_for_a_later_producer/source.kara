@@ -1,4 +1,6 @@
 
+import std.sync.{Channel, Sender, TaskGroup};
+
 fn produce(tx: Sender[i64], n: i64) { let mut i = 0; while i < n { tx.send(i).unwrap(); println(f"sent {i}"); i += 1; } }
 fn main() {
     let (tx, rx) = Channel.new();

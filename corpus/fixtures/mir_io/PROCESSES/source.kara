@@ -1,4 +1,6 @@
 
+import std.process.{Command, Stdio};
+
 fn show(e: IoError) -> String {
     match e {
         IoError.NotFound => "not found".to_string(),

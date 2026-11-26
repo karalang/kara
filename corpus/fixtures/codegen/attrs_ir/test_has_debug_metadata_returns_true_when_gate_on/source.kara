@@ -1,4 +1,6 @@
 
+import std.runtime.{Runtime};
+
 fn main() {
     let dbg = Runtime.has_debug_metadata();
     if dbg {

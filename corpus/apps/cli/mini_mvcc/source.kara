@@ -11,6 +11,9 @@
 
 // ------------------------------------------------------------ text
 
+import std.io.{File};
+import std.sync.{TaskGroup};
+
 fn is_digits(s: Str) -> bool {
     s.len() > 0 and s.bytes().iter().all(|c| c >= b'0' and c <= b'9')
 }

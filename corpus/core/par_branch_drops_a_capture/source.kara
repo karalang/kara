@@ -1,6 +1,8 @@
 // A `par` branch may move a capture it alone uses (core semantics §11.2), and
 // `drop(x)` is an ordinary `own` call: dropping the last Sender from a branch
 // closes the channel the other branch drains (B-2026-11-16-254).
+import std.sync.{Receiver, Sender};
+
 struct R { id: i64 }
 impl Drop for R { fn drop(mut ref self) { println(f"drop {self.id}"); } }
 fn main() {

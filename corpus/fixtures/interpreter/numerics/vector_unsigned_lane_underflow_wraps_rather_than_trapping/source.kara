@@ -1,3 +1,5 @@
+import std.simd.{Vector};
+
 fn main() {
 let c: Vector[u8, 4] = Vector[u8, 4].splat(5);
 let d: Vector[u8, 4] = Vector[u8, 4].splat(10);

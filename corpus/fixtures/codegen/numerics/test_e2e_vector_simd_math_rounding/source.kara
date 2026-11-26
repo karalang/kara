@@ -1,4 +1,6 @@
 
+import std.simd.{Vector};
+
 fn main() {
     let v = Vector[f32, 4].from_array([2.5f32, -2.5f32, 2.7f32, -2.3f32]);
     let fl = v.floor();

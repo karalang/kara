@@ -1,3 +1,5 @@
+import std.simd.{Vector};
+
 enum E { V(Vector[i64, 4]), N }
 fn plainE(x: E) {
     match x { E.V(v) => { println(f"s:{v}") } E.N => { println("n") } }

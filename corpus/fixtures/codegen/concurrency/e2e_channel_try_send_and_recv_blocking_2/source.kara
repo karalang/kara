@@ -1,3 +1,5 @@
+import std.sync.{Channel, SendError};
+
 fn main() {
     let (tx, rx) = Channel.bounded(1);
     let a = "alpha";

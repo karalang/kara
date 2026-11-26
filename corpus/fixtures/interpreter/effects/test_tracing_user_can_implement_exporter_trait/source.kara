@@ -1,3 +1,5 @@
+import std.tracing.{LogEvent, Span};
+
 shared struct CaptureExporter {
              mut span_count: i64,
              mut event_count: i64,

@@ -1,4 +1,6 @@
 
+import std.sync.{RateLimiter, Semaphore};
+
 fn main() {
     let mut i: i64 = 0i64;
     let mut total: i64 = 0i64;

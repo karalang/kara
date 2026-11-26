@@ -1,4 +1,6 @@
 
+import std.sync.{OnceLock};
+
 fn main() {
     let cell: OnceLock[i64] = OnceLock.new();
     println(cell.is_set());

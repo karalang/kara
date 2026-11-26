@@ -1,4 +1,6 @@
 
+import std.sync.{Receiver, Sender, TaskGroup, TaskHandle};
+
 fn producer(tx: own Sender[i64]) -> i64 {
     let _ = tx.send(10);
     let _ = tx.send(20);

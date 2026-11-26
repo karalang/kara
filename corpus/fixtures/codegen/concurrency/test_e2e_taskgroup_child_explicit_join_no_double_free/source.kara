@@ -1,4 +1,6 @@
 
+import std.sync.{TaskGroup, TaskHandle};
+
 fn z() -> i64 { 42 }
 fn main() {
     let mut g: TaskGroup = TaskGroup.new();

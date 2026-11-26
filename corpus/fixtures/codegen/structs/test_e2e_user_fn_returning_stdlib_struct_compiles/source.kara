@@ -1,4 +1,6 @@
 
+import std.process.{Command};
+
 fn mk() -> Command { return Command.new("echo"); }
 
 fn main() {

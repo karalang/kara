@@ -1,3 +1,5 @@
+import std.process.{Child};
+
 fn main() {
          let fake = Child { pid: 999999999 };
          match fake.wait() {

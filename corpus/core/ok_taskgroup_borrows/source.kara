@@ -1,3 +1,5 @@
+import std.sync.{TaskGroup, TaskHandle};
+
 fn band_sum(data: ref Vec[i64], lo: i64, hi: i64) -> i64 {
     let mut acc = 0;
     let mut i = lo;

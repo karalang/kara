@@ -1,4 +1,6 @@
 
+import std.io.{File};
+
 fn mk() -> String { "no-such-file-b20260825-9.txt" }
 fn main() {
     let p = "no-such-file-b20260825-9.txt";

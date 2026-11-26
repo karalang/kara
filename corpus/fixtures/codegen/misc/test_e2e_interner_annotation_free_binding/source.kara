@@ -1,4 +1,6 @@
 
+import std.intern.{Interner};
+
 fn main() {
     let mut tab = Interner.new();
     let a = tab.intern("x");

@@ -7,6 +7,8 @@
 // `WebSocket.accept_tls` (see examples/ws_idle_holder).
 //
 // Build & run:  karac run examples/std_net/ws_echo.kara
+import std.net.{TcpListener, WebSocket};
+
 fn echo(ws: own WebSocket) {
     let mut ws = ws;
     loop {

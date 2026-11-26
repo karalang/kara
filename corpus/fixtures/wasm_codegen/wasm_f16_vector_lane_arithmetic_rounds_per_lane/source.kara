@@ -1,4 +1,6 @@
 
+import std.simd.{Vector};
+
 fn main() {
     let n = env.args().len() as i64;
     let one: f32 = n as f32;

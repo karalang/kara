@@ -1,4 +1,7 @@
 
+import std.tracing.{Log, Span};
+import std.sync.{TaskGroup};
+
 fn a() -> i64 {
     let s = Span.root("a", 7);
     with_span(s, || { sleep_ms(50); Log.info("a-after"); 1 })

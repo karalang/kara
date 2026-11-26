@@ -1,4 +1,6 @@
 
+import std.simd.{Vector};
+
 fn main() {
     let a: Array[i64, 4] = [10, 20, 30, 40];
     let v = Vector[i64, 4].from_slice(a.as_slice());

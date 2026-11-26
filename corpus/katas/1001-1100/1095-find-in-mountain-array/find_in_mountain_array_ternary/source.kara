@@ -4,6 +4,8 @@
 // `partition_point` over an index range turned into a `Vec`. O(log n)
 // calls for the peak; the sides read each index the search looks at.
 
+import std.sync.{Atomic};
+
 fn find_in_mountain_array(target: i32, mountain: MountainArray) -> i32 {
     let n = mountain.length();
     let mut (lo, hi) = (0i32, n - 1);

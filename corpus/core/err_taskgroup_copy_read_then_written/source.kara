@@ -2,6 +2,8 @@
 // a `ref` capture, so writing the place while the group lives is an error,
 // never a silent read of a stale copy (B-2026-11-01-32).
 
+import std.sync.{TaskGroup};
+
 fn main() {
     let mut x = 1;
     let tg = TaskGroup.new();

@@ -1,5 +1,7 @@
 // B-2026-11-02-15: `mem.replace(mut f, g)` writes `g` into a `+ CrossTask` place, so `g`
 // is coerced into it (core-semantics §6.3).
+import std.sync.{TaskGroup};
+
 shared struct S {
     mut n: i64,
 }

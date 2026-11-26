@@ -1,3 +1,5 @@
+import std.sync.{Atomic, MemoryOrdering};
+
 fn main() {
 let flag = Atomic.new(false);
 println(flag.load(MemoryOrdering.SeqCst));

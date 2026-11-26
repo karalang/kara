@@ -6,6 +6,7 @@
 
 import std.sync.{Atomic, TaskGroup};
 import std.time.{Duration, sleep};
+import std.sync.{Mutex};
 
 sync struct FizzBuzz {
     n: i64,

@@ -9,6 +9,7 @@
 // README.md is the spec; oracle.py is the reference.
 
 import std.encoding.hex_decode;
+import std.sync.{TaskGroup};
 
 const STATE: Str = "data/out/state.txt";
 

@@ -1,4 +1,6 @@
 
+import std.simd.{Vector};
+
 fn fill(xs: mut Slice[i64]) {
     let v = Vector[i64, 4](10, 20, 30, 40);
     let bad = Vector[i64, 4](1, 0, 1, 0);

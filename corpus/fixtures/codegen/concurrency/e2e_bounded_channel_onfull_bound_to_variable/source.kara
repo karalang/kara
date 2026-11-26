@@ -1,4 +1,6 @@
 
+import std.sync.{BoundedChannel, OnFull};
+
 fn main() {
     let policy: OnFull = OnFull.Block;
     let bc: BoundedChannel[i64] = BoundedChannel.new(2, policy);

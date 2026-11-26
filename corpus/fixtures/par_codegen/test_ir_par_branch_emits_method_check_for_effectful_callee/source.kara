@@ -1,4 +1,6 @@
 
+import std.tracing.{Log};
+
 effect resource Log;
 struct Counter { n: i64 }
 impl Counter {

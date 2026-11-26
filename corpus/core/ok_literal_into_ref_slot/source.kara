@@ -2,6 +2,8 @@
 // data (core semantics §5.3): bound to a `ref` local, pushed into a
 // `Vec[ref String]` or `VecDeque[ref i64]`, or sent on a `Sender[ref T]`.
 // It borrows nothing and is never dropped.
+import std.sync.{Receiver, Sender};
+
 fn main() {
     let r: ref String = "bound";
     println(r);

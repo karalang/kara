@@ -1,3 +1,5 @@
+import std.tracing.{Log};
+
 fn main() {
          Log.trace("t");
          Log.debug("d");

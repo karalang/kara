@@ -1,4 +1,6 @@
 
+import std.sync.{LazyLock};
+
 struct Pair { a: i64, b: String }
 fn words() -> Vec[String] { println("words"); return vec!["x".to_string(), "yz".to_string()]; }
 fn pair() -> Pair { println("pair"); return Pair { a: 7, b: "seven".to_string() }; }

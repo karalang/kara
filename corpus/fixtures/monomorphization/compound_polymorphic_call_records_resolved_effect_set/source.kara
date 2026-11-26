@@ -1,4 +1,6 @@
 
+import std.tracing.{Log};
+
 effect resource Log;
 pub fn write_log() with writes(Log) {}
 pub fn run[T, with E](x: own T, cb: Fn(T) -> () with E) with E { cb(x) }

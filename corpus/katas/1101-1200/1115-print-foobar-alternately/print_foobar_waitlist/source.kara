@@ -6,6 +6,7 @@
 // waiter.
 
 import std.sync.{Mutex, TaskGroup};
+import std.sync.{Sender};
 
 struct Turn {
     foo_next: bool,

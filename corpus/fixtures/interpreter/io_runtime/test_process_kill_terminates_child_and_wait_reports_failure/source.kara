@@ -1,3 +1,5 @@
+import std.process.{Command};
+
 fn main() {
          let cmd = Command.new("/bin/sleep").arg("60");
          match cmd.spawn() {

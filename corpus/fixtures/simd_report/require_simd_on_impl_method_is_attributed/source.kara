@@ -1,4 +1,6 @@
 
+import std.simd.{Vector};
+
         struct V3 { x: i32 }
         impl V3 {
             #[require_simd]

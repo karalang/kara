@@ -1,4 +1,6 @@
 
+import std.simd.{Vector};
+
         #[require_simd]
         fn total(a: Vector[i32, 3]) -> i32 {
             a.reduce_sum()

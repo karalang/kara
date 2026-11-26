@@ -1,3 +1,5 @@
+import std.simd.{Vector};
+
 fn show[T: Display](x: own Option[T]) { match x { Some(t) => { println(f"{t}") } None => { println("n") } } }
 struct H { }
 impl H {

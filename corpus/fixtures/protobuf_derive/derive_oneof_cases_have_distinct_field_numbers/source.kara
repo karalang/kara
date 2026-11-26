@@ -1,4 +1,6 @@
 
+import std.protobuf.{ProtoReader};
+
 enum P { NotSet, Num(i64), Text(String) }
 
 #[derive(Message)]

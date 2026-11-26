@@ -1,4 +1,6 @@
 
+import std.sync.{Receiver, SendError, Sender, TaskGroup, TaskHandle};
+
 fn start(group: ref TaskGroup, n: i64) -> TaskHandle[i64] {
     group.spawn(|| n * 2)
 }

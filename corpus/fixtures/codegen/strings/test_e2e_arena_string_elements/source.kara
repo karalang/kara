@@ -1,4 +1,6 @@
 
+import std.arena.{Arena};
+
 fn main() {
     let a: Arena[String] = Arena.new();
     let r0 = a.push("hello");

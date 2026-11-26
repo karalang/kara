@@ -1,4 +1,6 @@
 
+import std.sync.{MemoryOrdering};
+
 fn barrier() {
     compiler_fence(MemoryOrdering.SeqCst);
 }

@@ -4,6 +4,8 @@
 // preempted when nothing fits, and a day of cluster events plays out.
 // README.md is the spec; oracle.py is the reference.
 
+import std.sync.{TaskGroup};
+
 const MILLI_DEFAULT: i64 = 100;
 const MEM_DEFAULT: i64 = 200 * 1024 * 1024;
 const KI: i64 = 1024;

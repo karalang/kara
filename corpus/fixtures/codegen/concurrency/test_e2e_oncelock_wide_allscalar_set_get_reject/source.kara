@@ -1,3 +1,5 @@
+import std.sync.{OnceLock};
+
 struct Wide { a: i64, b: i64, c: i64, d: i64 }
 fn main() {
 let c: OnceLock[Wide] = OnceLock.new();

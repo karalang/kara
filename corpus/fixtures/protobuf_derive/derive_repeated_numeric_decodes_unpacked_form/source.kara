@@ -1,4 +1,6 @@
 
+import std.protobuf.{ProtoBuf};
+
 #[derive(Message)]
 struct M { nums: Vec[i64] }
 

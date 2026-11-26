@@ -1,9 +1,9 @@
-struct Cfg { name: StringSlice, retries: i64 }
-struct Inner { label: StringSlice }
+struct Cfg { name: Str, retries: i64 }
+struct Inner { label: Str }
 struct Outer { inner: Inner, n: i64 }
 let CONFIG: Cfg = Cfg { name: "karac", retries: 3 };
-let TUP: (StringSlice, i64) = ("tup", 7);
-let ARR: Array[StringSlice, 2] = ["a", "b"];
+let TUP: (Str, i64) = ("tup", 7);
+let ARR: Array[Str, 2] = ["a", "b"];
 let DEEP: Outer = Outer { inner: Inner { label: "deep" }, n: 1 };
 fn main() {
 println(CONFIG.name);

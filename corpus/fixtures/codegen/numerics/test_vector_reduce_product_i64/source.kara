@@ -1,1 +1,3 @@
+import std.simd.{Vector};
+
 fn main() { let v = Vector[i64, 4](1, 2, 3, 4); println(v.reduce_product()); }

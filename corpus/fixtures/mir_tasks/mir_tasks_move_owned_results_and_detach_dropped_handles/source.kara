@@ -1,4 +1,6 @@
 
+import std.sync.{TaskGroup};
+
 struct Noisy { id: i64 }
 impl Drop for Noisy {
     fn drop(mut ref self) { println(f"drop {self.id}"); }

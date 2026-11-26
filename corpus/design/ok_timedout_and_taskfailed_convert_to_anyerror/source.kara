@@ -2,6 +2,7 @@
 // implement `Display` and `Error`, so `?` converts each into `AnyError`;
 // `TimedOut` is a unit struct, built and matched as `TimedOut {}`.
 import std.time.{timeout, sleep, TimedOut, Duration};
+import std.sync.{TaskGroup};
 
 fn slow() -> Result[i64, AnyError] {
     let v = timeout(Duration.ms(5), || {

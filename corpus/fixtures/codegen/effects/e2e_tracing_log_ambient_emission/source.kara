@@ -1,3 +1,5 @@
+import std.tracing.{Log};
+
 fn main() {
                 Log.info("server started");
                 Log.warn("disk 85%");

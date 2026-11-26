@@ -1,3 +1,5 @@
+import std.sync.{LazyLock};
+
 fn main() {
     let runtime = 7i64;
     let c: LazyLock[i64] = LazyLock.new(|| runtime + 1i64);

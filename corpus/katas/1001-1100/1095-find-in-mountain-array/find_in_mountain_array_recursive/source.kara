@@ -2,6 +2,8 @@
 // the range toward the rising slope, and each side by a recursive binary
 // search told which way that side runs. O(log n) calls and depth.
 
+import std.sync.{Atomic};
+
 fn peak_in(m: MountainArray, lo: i32, hi: i32) -> i32 {
     if lo == hi {
         return lo;

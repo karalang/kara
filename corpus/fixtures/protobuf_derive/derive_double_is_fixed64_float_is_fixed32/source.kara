@@ -1,4 +1,6 @@
 
+import std.protobuf.{ProtoReader};
+
 #[derive(Message)]
 struct M { d: f64, f: f32 }
 

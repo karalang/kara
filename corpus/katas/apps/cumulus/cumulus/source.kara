@@ -30,6 +30,8 @@
 // Sigma-clip parameters. Fixed here rather than exposed, because the oracle
 // (oracle.py) hard-codes the same values — the differential is only meaningful
 // if both sides agree on the algorithm, not merely on the answer.
+import std.io.{File, SeekFrom};
+
 const SIGMA: f64 = 3.0;
 const MAXITERS: i64 = 5;
 

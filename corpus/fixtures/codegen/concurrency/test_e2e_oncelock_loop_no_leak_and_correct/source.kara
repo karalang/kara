@@ -1,4 +1,6 @@
 
+import std.sync.{OnceLock};
+
 fn main() {
     let mut i = 0;
     let mut total = 0;

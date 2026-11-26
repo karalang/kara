@@ -1,6 +1,8 @@
 // Core semantics §6.3: a function value is CrossTask only when everything
 // its environment reaches is. `bump` captures the `shared` handle `s`, so
 // the spawned closure that holds `bump` cannot cross a task boundary.
+import std.sync.{TaskGroup};
+
 shared struct Store {
     mut n: i64,
 }

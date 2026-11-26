@@ -1,3 +1,5 @@
+import std.simd.{Vector};
+
 fn main() {
     let n: i64 = 1;
     let a: f16 = ((n + 3) as f32) as f16;

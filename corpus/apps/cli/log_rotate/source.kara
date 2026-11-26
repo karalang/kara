@@ -2,6 +2,8 @@
 // rotated segment line by line, tails the live file by seeking from its end,
 // and writes a CSV summary it reads back.
 
+import std.io.{BufReader, File, SeekFrom};
+
 struct Rotator {
     base: String,
     max_bytes: i64,

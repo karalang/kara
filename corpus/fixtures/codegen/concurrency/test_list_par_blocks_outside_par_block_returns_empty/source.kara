@@ -1,4 +1,6 @@
 
+import std.runtime.{Runtime};
+
 fn main() {
     let pbs = Runtime.list_par_blocks();
     println(pbs.len());

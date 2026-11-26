@@ -6,6 +6,7 @@
 // the queue is full and a dequeue while it is empty.
 
 import std.sync.{Mutex, TaskGroup};
+import std.sync.{Semaphore};
 
 sync struct BoundedBlockingQueue {
     slots: Semaphore,

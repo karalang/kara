@@ -9,6 +9,7 @@
 //                    before map / next
 
 import std.json.{Json};
+import std.process.{Command, Stdio};
 
 #[derive(Serialize, Deserialize)]
 struct TaskResult {

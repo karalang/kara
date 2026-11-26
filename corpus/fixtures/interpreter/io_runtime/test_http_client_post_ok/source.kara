@@ -1,4 +1,6 @@
 
+import std.net.{Client};
+
 fn main() {
     let c = Client.new();
     match c.post("http://httpbin.org/post", "hello") {

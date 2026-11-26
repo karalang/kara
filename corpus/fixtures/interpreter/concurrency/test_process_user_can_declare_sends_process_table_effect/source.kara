@@ -1,3 +1,5 @@
+import std.process.{Child, Command};
+
 fn run_cmd(prog: own String) -> Result[Child, IoError] with sends(ProcessTable) {
              Command.new(prog).spawn()
          }

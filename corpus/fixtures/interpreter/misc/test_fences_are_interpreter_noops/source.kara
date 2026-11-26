@@ -1,1 +1,3 @@
+import std.sync.{MemoryOrdering};
+
 fn main() { unsafe { fence(MemoryOrdering.SeqCst) } compiler_fence(MemoryOrdering.Acquire); println(7); }

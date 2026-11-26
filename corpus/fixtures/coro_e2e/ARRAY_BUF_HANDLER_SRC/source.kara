@@ -1,4 +1,6 @@
 
+import std.net.{TcpListener};
+
         fn serve(listener: own TcpListener) {
             let mut buf: Array[u8, 4096] = [0u8; 4096];
             buf[0] = 7u8;

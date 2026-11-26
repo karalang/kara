@@ -1,4 +1,6 @@
 
+import std.cmp.{F32, F64};
+
 fn main() {
     let z = 0.0;
     let a = F64.from(-z);

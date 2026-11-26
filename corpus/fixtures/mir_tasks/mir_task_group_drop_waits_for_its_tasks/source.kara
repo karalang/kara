@@ -1,4 +1,6 @@
 
+import std.sync.{TaskGroup};
+
 fn main() {
     {
         let group = TaskGroup.new();

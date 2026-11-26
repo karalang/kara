@@ -1,4 +1,6 @@
 
+import std.net.{TcpListener};
+
         struct Conn { id: i64 }
         impl Drop for Conn {
             fn drop(mut ref self) { println(self.id); }

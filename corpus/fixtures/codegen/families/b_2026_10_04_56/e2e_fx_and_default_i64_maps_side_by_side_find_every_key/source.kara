@@ -1,4 +1,6 @@
 
+import std.hash.{FxBuildHasher};
+
 fn main() {
     let mut fx: Map[i64, i64, FxBuildHasher] = Map.new();
     let mut d: Map[i64, i64] = Map.new();

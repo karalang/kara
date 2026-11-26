@@ -1,4 +1,6 @@
 
+import std.simd.{Vector};
+
 fn main() {
     let a: Array[f64, 3] = [1.5, 2.5, 3.5];
     let idx = Vector[i64, 4](2, 2, 0, 1);

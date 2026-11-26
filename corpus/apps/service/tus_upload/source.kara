@@ -7,6 +7,8 @@ import std.time.{Duration, sleep};
 import std.encoding.{base64_encode, base64_decode, hex_encode};
 import std.crypto.sha2.{sha256};
 import std.crypto.legacy.{sha1};
+import std.io.{File};
+import std.net.{Client, Request, Server};
 
 const ADDR: Str = "127.0.0.1:23748";
 const BASE: Str = "http://127.0.0.1:23748";

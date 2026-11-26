@@ -8,6 +8,7 @@
 // a lock with the atoms waiting on it.
 
 import std.sync.{Mutex, TaskGroup};
+import std.sync.{Semaphore, Sender};
 
 struct Waiting {
     count: i64,

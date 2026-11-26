@@ -1,4 +1,6 @@
 
+import std.sync.{OnceLock};
+
 struct Config { timeout: i64, retries: i64 }
 fn main() {
     let c: OnceLock[Config] = OnceLock.new();

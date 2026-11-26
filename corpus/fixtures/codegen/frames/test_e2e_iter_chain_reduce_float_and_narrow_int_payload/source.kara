@@ -1,3 +1,5 @@
+import std.cmp.{F64};
+
 fn main() {
 let f: Vec[f64] = [1.5, 2.5, 0.5];
 match f.iter().reduce(|a, x| if x > a { x } else { a }) { Some(s) => println(s), None => println(-1.0) }

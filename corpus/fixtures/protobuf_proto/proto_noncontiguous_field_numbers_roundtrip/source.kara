@@ -1,4 +1,6 @@
 
+import std.protobuf.{ProtoReader};
+
 #[proto_schema]
 const SCHEMA: String = "message M { string name = 3; int64 id = 17; bool on = 1; }";
 

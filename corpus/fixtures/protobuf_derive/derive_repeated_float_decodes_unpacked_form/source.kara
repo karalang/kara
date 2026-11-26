@@ -1,4 +1,6 @@
 
+import std.protobuf.{ProtoBuf};
+
 #[derive(Message)]
 struct Bag { ds: Vec[f64] }
 

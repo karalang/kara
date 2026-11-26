@@ -16,6 +16,8 @@
 //   B-2026-10-14-53  `karac check` treats a String passed to an fs function
 //                    as moved, so `fs.create_dir_all(path.clone())`
 
+import std.io.{File, SeekFrom};
+
 const MTIME: i64 = 1760000000;
 
 fn zeros(n: i64) -> Vec[i64] {

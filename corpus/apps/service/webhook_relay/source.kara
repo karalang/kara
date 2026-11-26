@@ -9,6 +9,8 @@ import std.json.{Json};
 import std.crypto.hmac.{hmac_sha256};
 import std.crypto.{constant_time_eq};
 import std.encoding.{hex_encode};
+import std.io.{File};
+import std.net.{Client, Request, Server};
 
 const IN_ADDR: Str = "127.0.0.1:23749";
 const DOWN_ADDR: Str = "127.0.0.1:23750";

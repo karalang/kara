@@ -1,4 +1,6 @@
 
+import std.sync.{Mutex};
+
 fn bump(m: mut ref Mutex[i64], n: i64) { lock m x { x = x + n; } }
 fn main() {
     let mut m = Mutex.new(10);

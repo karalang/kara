@@ -1,4 +1,6 @@
 
+import std.sync.{TaskGroup};
+
 fn work(n: i64) -> i64 {
     n + 1
 }

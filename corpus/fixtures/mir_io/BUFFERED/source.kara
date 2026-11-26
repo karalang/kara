@@ -1,3 +1,5 @@
+import std.io.{BufReader, BufWriter, File};
+
 fn count(path: Str) -> Result[i64, IoError] {
     let mut n = 0;
     for line in BufReader.new(File.open(path)?).lines() {

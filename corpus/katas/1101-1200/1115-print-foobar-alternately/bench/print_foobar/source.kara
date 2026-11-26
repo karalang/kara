@@ -2,6 +2,7 @@
 // runs of 200 rounds each, `bar`'s task started first in every other.
 
 import std.sync.{Mutex, TaskGroup};
+import std.sync.{Receiver, Sender};
 
 sync struct FooBar {
     n: i64,

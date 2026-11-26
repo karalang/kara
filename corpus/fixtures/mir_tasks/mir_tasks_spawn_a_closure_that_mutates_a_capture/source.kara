@@ -1,4 +1,6 @@
 
+import std.sync.{Receiver, Sender, TaskGroup};
+
 fn main() {
     let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1);
     let mut log: Vec[i64] = Vec.new();

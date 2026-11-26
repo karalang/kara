@@ -1,4 +1,6 @@
 
+import std.tracing.{Log};
+
 effect resource Log;
 fn pure_helper(n: i64) -> i64 { n + 1 }
 fn effectful_helper(n: i64) -> i64 writes(Log) { n + 1 }

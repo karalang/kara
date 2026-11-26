@@ -1,4 +1,6 @@
 
+import std.process.{Command};
+
 fn main() {
     print("x");
     stdout.flush();

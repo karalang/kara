@@ -2,6 +2,8 @@
 // parameter of type `Fn(own String) -> i64` is not CrossTask, and a task
 // that captures it is refused. `+ CrossTask` on the parameter would let it
 // cross, with each argument's environment checked at the call.
+import std.sync.{TaskGroup};
+
 fn size(s: own String) -> i64 {
     s.len()
 }

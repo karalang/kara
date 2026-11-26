@@ -1,4 +1,6 @@
 
+import std.cmp.{F64};
+
 #[derive(PartialEq)]
 shared struct Sf { x: f64 }
 fn nan64(z: f64) -> f64 { return z / z; }

@@ -4,6 +4,8 @@
 // default is a constant expression, so its text is a `Str`.
 // `Tick`'s has none, so its `mut ref self` method may be called anywhere;
 // it too is one static, never dropped, however many calls reach it.
+import std.sync.{TaskGroup};
+
 trait Log {
     fn count(self) -> i64;
     fn name(self) -> String;

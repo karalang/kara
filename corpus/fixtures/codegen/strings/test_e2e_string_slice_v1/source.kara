@@ -1,5 +1,5 @@
 
-fn first_word(s: ref String) -> StringSlice {
+fn first_word(s: ref String) -> Str {
     let sp = s.find(" ");
     let end = sp.unwrap_or(s.len());
     s[0..end]

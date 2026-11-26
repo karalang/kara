@@ -1,4 +1,6 @@
 
+import std.sync.{OnceLock};
+
 struct Bag { tag: i64, items: Vec[i64] }
 fn main() {
     let mut i: i64 = 0i64;

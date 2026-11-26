@@ -1,4 +1,6 @@
 
+import std.sync.{Receiver, Sender, TaskGroup, TaskHandle};
+
 fn worker(tx: own Sender[i64]) -> i64 {
     let mut acc = 0;
     let mut i = 0;

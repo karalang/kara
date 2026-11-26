@@ -1,4 +1,6 @@
 
+import std.io.{File};
+
 fn show(e: IoError) -> String {
     match e {
         IoError.NotFound => "NotFound".to_string(),

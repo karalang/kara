@@ -4,6 +4,8 @@
 // counter its closure captured (B-2026-11-02-14), so it is refused.
 // `mk`'s return type written `Vec[Fn() -> i64 + CrossTask]` would check
 // the closure where it is pushed.
+import std.sync.{TaskGroup};
+
 shared struct S { mut n: i64 }
 
 struct Bus { hs: Vec[Fn() -> i64 + CrossTask] }

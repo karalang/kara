@@ -2,6 +2,9 @@
 // §14.10), so two tasks that print while their group lives would both write
 // it at once (§14.9). The same function's tasks may print at the default,
 // where they share the process's standard output.
+import std.io.{StdoutProvider};
+import std.sync.{TaskGroup};
+
 struct Cap { n: i64 }
 
 impl StdoutProvider for Cap {

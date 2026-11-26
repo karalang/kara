@@ -2,6 +2,8 @@
 // in when the value's type owns that parameter (core-semantics §9.1),
 // whether the capture is a `let`, a match-arm binding, or goes to a task
 // (§9.5). One that only lends it leaves the capture usable (B-2026-10-25-36).
+import std.sync.{TaskGroup, TaskHandle};
+
 fn size(s: own String) -> i64 {
     s.len()
 }

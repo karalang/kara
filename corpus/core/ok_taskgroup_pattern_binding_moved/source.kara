@@ -4,6 +4,8 @@
 // group declared ahead of them, and the task takes it by move, as it takes a
 // `let` in the loop body.
 
+import std.sync.{TaskGroup, TaskHandle};
+
 fn show(s: String) -> i64 {
     s.len()
 }

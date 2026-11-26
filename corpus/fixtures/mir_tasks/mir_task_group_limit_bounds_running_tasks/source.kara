@@ -1,4 +1,6 @@
 
+import std.sync.{TaskGroup};
+
 fn work(name: Str) -> i64 { println(f"{name} start"); sleep_ms(150); println(f"{name} end"); 1 }
 fn main() {
     let group = TaskGroup.new(limit: 1);

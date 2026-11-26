@@ -3,6 +3,8 @@
 // `defer` writes it back where it settles. When a user `cmp` panics inside
 // an isolating group, the task's teardown (core-semantics §11.12) runs that
 // defer first, so the queue it then drops holds every element exactly once.
+import std.sync.{TaskFailed, TaskGroup};
+
 struct Tok {
     k: i64,
 }

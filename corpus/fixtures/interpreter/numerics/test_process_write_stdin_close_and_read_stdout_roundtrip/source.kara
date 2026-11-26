@@ -1,3 +1,5 @@
+import std.process.{Command, Stdio};
+
 fn main() {
          let cmd = Command.new("/bin/cat").stdin(Stdio.piped()).stdout(Stdio.piped());
          match cmd.spawn() {

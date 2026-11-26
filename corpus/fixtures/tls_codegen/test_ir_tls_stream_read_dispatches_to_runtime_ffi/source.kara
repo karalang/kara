@@ -1,4 +1,6 @@
 
+import std.net.{TlsStream};
+
 fn handle(s: own TlsStream) {
     let mut buf: Array[u8, 16] = [0u8; 16];
     let _ = s.read(mut buf);

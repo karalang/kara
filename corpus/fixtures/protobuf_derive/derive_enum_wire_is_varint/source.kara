@@ -1,4 +1,6 @@
 
+import std.protobuf.{ProtoReader};
+
 enum Status { Pending, Active, Closed }
 
 #[derive(Message)]

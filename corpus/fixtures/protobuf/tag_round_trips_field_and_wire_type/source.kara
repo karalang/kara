@@ -1,4 +1,6 @@
 
+import std.protobuf.{ProtoBuf, ProtoReader};
+
 fn main() {
     let t = ProtoBuf.encode_tag(5, ProtoBuf.wire_len_delim());
     let mut r = ProtoReader.new(t);

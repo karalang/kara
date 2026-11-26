@@ -14,6 +14,7 @@ import std.sync.{TaskGroup, Mutex};
 import std.time.{Duration, sleep};
 import std.crypto.sha2.{sha256};
 import std.encoding.{hex_encode, percent_decode};
+import std.net.{Client, HttpError, Request, Server, TcpStream};
 
 const ADDR: Str = "127.0.0.1:23755";
 const MIN_PART: i64 = 5;

@@ -1,4 +1,5 @@
 import std.time.{sleep, Duration};
+import std.sync.{Mutex, TaskGroup};
 fn bump(m: Mutex[i64]) {
     lock m x {
         let v = x;

@@ -1,4 +1,6 @@
 
+import std.protobuf.{ProtoBuf, ProtoReader};
+
 fn main() {
     let data: Array[u8, 4] = [1u8, 2u8, 3u8, 250u8];
     let mut payload = Vec.new();

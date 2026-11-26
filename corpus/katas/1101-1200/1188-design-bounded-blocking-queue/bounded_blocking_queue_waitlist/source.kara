@@ -8,6 +8,7 @@
 // no condition variable.
 
 import std.sync.{Mutex, TaskGroup};
+import std.sync.{Sender};
 
 struct State {
     values: VecDeque[i64],

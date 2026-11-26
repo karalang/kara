@@ -1,3 +1,5 @@
+import std.simd.{Vector};
+
 #[derive(Display)]
 struct WithVec { v: Vector[i32, 4], n: i64 }
 #[derive(Display)]

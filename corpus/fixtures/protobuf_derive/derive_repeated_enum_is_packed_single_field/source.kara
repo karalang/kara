@@ -1,4 +1,6 @@
 
+import std.protobuf.{ProtoReader};
+
 enum Color { Red, Green, Blue }
 
 #[derive(Message)]

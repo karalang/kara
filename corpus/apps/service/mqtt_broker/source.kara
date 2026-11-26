@@ -14,6 +14,7 @@
 // in a PUBLISH closes the connection.
 
 import std.sync.{TaskGroup, Mutex};
+import std.net.{TcpListener, TcpStream};
 
 const ADDR: Str = "127.0.0.1:23764";
 const CONNECTIONS: i64 = 6;

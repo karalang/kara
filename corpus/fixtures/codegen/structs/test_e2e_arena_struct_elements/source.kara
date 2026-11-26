@@ -1,4 +1,6 @@
 
+import std.arena.{Arena};
+
 struct Node { val: i64, next: i64 }
 fn main() {
     let a: Arena[Node] = Arena.new();

@@ -1,4 +1,6 @@
 
+import std.sync.{TaskGroup};
+
             shared struct Cache { n: i64 }
             fn use_it(c: Cache) -> i64 { 0 }
             fn main() {

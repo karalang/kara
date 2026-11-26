@@ -6,6 +6,8 @@
 // are each parsed in a task of its own.
 // README.md is the spec; oracle.py is the reference.
 
+import std.sync.{TaskGroup};
+
 const LOG: Str = "data/out/queue.log";
 
 // ------------------------------------------------------------ tokens

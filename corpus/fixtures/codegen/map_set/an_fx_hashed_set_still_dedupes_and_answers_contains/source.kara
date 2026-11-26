@@ -1,3 +1,5 @@
+import std.hash.{FxBuildHasher};
+
 fn main() {
 let mut s: Set[String, FxBuildHasher] = Set.new();
 s.insert("alpha");

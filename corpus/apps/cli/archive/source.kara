@@ -10,6 +10,8 @@
 //   B-2026-10-14-51  `karac check` refuses `let s = self.bytes[a..b]` in
 //                    Cursor.take, so the view is returned without a binding
 
+import std.io.{File, SeekFrom};
+
 struct Member { name: String, data: Vec[u8], crc: u32 }
 
 fn crc_table() -> Vec[u32] {

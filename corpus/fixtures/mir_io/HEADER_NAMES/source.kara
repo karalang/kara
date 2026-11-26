@@ -1,4 +1,6 @@
 
+import std.net.{Request, Response, Server};
+
 fn handle(req: Request) -> Response {
     let mut s = "".to_string();
     for (k, v) in req.headers() {

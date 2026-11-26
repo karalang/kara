@@ -1,4 +1,6 @@
 
+import std.net.{Client};
+
 struct Response { status: i64, body: String }
 fn main() with sends(Network) receives(Network) {
     let c = Client.new();

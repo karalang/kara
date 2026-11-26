@@ -1,3 +1,5 @@
+import std.sync.{TaskFailed, TaskGroup};
+
 struct Noisy { name: String }
 
 impl Drop for Noisy {

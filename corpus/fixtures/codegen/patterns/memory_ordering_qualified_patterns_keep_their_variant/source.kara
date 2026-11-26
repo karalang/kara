@@ -1,3 +1,5 @@
+import std.sync.{MemoryOrdering};
+
 fn main() {
 let m = MemoryOrdering.SeqCst;
 match m {

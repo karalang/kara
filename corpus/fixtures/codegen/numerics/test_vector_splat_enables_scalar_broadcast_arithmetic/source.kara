@@ -1,4 +1,6 @@
 
+import std.simd.{Vector};
+
 fn main() {
     let v: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);
     let r = v + Vector[i64, 4].splat(10);

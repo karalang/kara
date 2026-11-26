@@ -1,4 +1,6 @@
 
+import std.protobuf.{ProtoBuf, ProtoReader};
+
 fn main() {
     let enc = ProtoBuf.encode_string("");
     println(enc.len());

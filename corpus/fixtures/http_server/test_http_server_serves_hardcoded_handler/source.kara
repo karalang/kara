@@ -1,4 +1,6 @@
 
+import std.net.{Server};
+
             fn main() {
                 let addr = "127.0.0.1:0";
                 let body = "{\"profile\":{\"name\":\"Alice\"},\"latest_orders\":[],\"top_notification\":{},\"top_recommendation\":{}}";

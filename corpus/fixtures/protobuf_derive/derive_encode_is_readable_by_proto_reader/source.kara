@@ -1,4 +1,6 @@
 
+import std.protobuf.{ProtoReader};
+
 #[derive(Message)]
 struct Pair { x: i64, y: i64 }
 

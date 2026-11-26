@@ -1,3 +1,5 @@
+import std.sync.{BoundedChannel, OnFull};
+
 fn main() {
          let ch = BoundedChannel.new(1, OnFull.Block);
          match ch.send(1) { Ok(_) => println("ok"), Err(_) => println("full") }

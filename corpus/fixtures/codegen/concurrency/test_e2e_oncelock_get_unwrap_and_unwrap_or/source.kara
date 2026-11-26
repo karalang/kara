@@ -1,4 +1,6 @@
 
+import std.sync.{OnceLock};
+
 fn main() {
     let c: OnceLock[i64] = OnceLock.new();
     let _s = c.set(7);

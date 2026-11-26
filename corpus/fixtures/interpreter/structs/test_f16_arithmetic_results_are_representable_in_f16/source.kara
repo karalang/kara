@@ -1,3 +1,5 @@
+import std.simd.{Vector};
+
 fn main() {
     let n: i64 = 1;
     let one: f32 = n as f32;

@@ -1,4 +1,6 @@
 
+import std.protobuf.{ProtoBuf};
+
 fn main() {
     let e = ProtoBuf.encode_varint(300u64);
     println(e.len());

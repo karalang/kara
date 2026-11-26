@@ -1,4 +1,6 @@
 
+import std.tracing.{Log};
+
 effect resource Log;
 effect resource Db;
 pub fn write_log() with writes(Log) {}

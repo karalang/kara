@@ -9,6 +9,8 @@
 
 // ------------------------------------------------------------ arithmetic
 
+import std.sync.{TaskGroup};
+
 const STEP_LIMIT: i64 = 100000;
 const DEPTH_LIMIT: i64 = 200;
 

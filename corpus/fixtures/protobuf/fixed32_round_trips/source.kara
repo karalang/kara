@@ -1,4 +1,6 @@
 
+import std.protobuf.{ProtoBuf, ProtoReader};
+
 fn main() {
     let enc = ProtoBuf.encode_fixed32(3735928559u32);
     println(enc.len());

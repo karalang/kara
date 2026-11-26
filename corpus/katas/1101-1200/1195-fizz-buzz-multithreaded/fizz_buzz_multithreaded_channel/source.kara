@@ -5,6 +5,7 @@
 // channel by sending 0, the sign to return.
 
 import std.sync.{TaskGroup};
+import std.sync.{Mutex, Receiver, Sender};
 
 sync struct FizzBuzz {
     n: i64,

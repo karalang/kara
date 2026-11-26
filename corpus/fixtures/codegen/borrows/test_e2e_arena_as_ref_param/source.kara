@@ -1,4 +1,6 @@
 
+import std.arena.{Arena, ArenaRef};
+
 struct Node { val: i64, kids: i64 }
 fn build(a: ref Arena[Node], v: i64) -> ArenaRef[Node] {
     a.push(Node { val: v, kids: 0 })

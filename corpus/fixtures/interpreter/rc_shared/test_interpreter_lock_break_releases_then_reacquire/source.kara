@@ -1,3 +1,5 @@
+import std.sync.{Mutex};
+
 fn main() {
 let m = Mutex.new(0);
 let mut i = 0;

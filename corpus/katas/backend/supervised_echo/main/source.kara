@@ -40,6 +40,8 @@
 // the `return`, closing the fd) or when a non-AddrInUse cause stops the
 // search. `bind` carries no network-yield effect, so this composes as an
 // ordinary helper.
+import std.net.{TcpError, TcpListener, TcpStream};
+
 fn pick_port(start: i64, limit: i64) {
     let mut p = start;
     while p < limit {

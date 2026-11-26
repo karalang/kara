@@ -1,3 +1,5 @@
+import std.simd.{Vector};
+
 fn main() -> Result[(), Option[Vector[i64, 4]]] {
     return Err(Some(Vector[i64, 4](1, 2, 3, 4)));
 }

@@ -1,2 +1,4 @@
+import std.sync.{OnceCell};
+
 let CACHE: OnceCell[i64] = OnceCell.new();
 fn main() { }

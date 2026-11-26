@@ -1,5 +1,7 @@
 // concurrency.md Closing: when the Receiver drops, send and try_send return
 // Err(Closed(value)), handing the value back.
+import std.sync.{Receiver, SendError, Sender};
+
 struct Tok { n: i64 }
 impl Drop for Tok { fn drop(mut ref self) { println(f"drop tok {self.n}") } }
 

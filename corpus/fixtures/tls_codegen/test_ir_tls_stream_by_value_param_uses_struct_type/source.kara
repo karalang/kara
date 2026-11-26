@@ -1,3 +1,5 @@
 
+import std.net.{TlsStream};
+
 fn handle(s: own TlsStream) {}
 fn main() {}

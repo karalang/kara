@@ -1,4 +1,6 @@
 
+import std.sync.{Channel, Receiver, Sender};
+
 fn mk() -> Receiver[i64] {
     let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();
     let keep = rx;

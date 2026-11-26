@@ -1,3 +1,5 @@
+import std.io.{File};
+
 fn main() {
                    match File.open("/nonexistent_karac_test_F1.txt") {
                        Ok(_) => println("unexpected ok"),

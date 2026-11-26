@@ -1,3 +1,5 @@
+import std.tracing.{Span, StdoutExporter};
+
 fn main() {
                 let tracer = StdoutExporter {};
                 tracer.export_span(Span.root("request", 7));

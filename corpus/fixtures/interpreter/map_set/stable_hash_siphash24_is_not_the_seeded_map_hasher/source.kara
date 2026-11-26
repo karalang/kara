@@ -1,3 +1,5 @@
+import std.hash.{StableHash};
+
 fn main() {
 let s: String = "kara";
 let mut m: Map[String, i64] = Map.new();

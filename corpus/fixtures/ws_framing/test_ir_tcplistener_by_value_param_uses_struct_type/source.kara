@@ -1,4 +1,6 @@
 
+import std.net.{TcpListener};
+
 fn handle(l: own TcpListener) {}
 fn main() {
     let listener = TcpListener.bind("127.0.0.1:0").unwrap();

@@ -1,4 +1,6 @@
 
+import std.net.{WebSocket};
+
 fn handle(ws: own WebSocket) {}
 fn main() {
     let ws = WebSocket.from_fd(3);

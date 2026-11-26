@@ -1,4 +1,6 @@
 
+import std.simd.{Vector};
+
 #[require_simd]
 fn f32_scale(x: f32, y: f32) -> f32 {
     let a: Vector[f32, 4] = Vector[f32, 4](x, x, x, x);

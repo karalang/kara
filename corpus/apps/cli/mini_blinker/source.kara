@@ -12,6 +12,7 @@
 import std.encoding.hex_decode;
 import std.io.File;
 import std.io.BufWriter;
+import std.sync.{TaskGroup};
 
 // ------------------------------------------------------------ tokens
 

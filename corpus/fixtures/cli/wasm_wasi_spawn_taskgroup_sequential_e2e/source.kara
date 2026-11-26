@@ -1,4 +1,6 @@
 
+import std.sync.{TaskGroup, TaskHandle};
+
 fn worker(id: i64) {
     println(id);
 }

@@ -22,6 +22,8 @@
 //                    `fs.remove_file`, `fs.rename` as moved, so the paths
 //                    are cloned
 
+import std.process.{Child, ChildStderr, ChildStdout, Command, Stdio};
+
 const CONFIG: Str = "; supervisor.ini: the programs to keep running
 [supervisor]
 poll_ms = 10

@@ -1,4 +1,6 @@
 
+import std.protobuf.{ProtoBuf, ProtoReader};
+
 fn main() {
     let v = 1234567890123u64;
     let enc = ProtoBuf.encode_fixed64(v);

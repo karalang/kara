@@ -1,3 +1,5 @@
+import std.tracing.{Log, Span};
+
 fn main() {
          let outer = Span.root("o", 1);
          let inner = Span.root("i", 2);

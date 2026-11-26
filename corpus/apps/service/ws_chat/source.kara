@@ -17,6 +17,7 @@
 
 import std.crypto.legacy.{sha1};
 import std.encoding.{base64_encode};
+import std.net.{TcpListener, TcpStream};
 
 const GUID: Str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const MAX_MESSAGE: i64 = 200;

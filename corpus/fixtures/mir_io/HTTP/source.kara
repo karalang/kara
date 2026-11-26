@@ -1,4 +1,6 @@
 
+import std.net.{Client};
+
 fn main() {
     let c = Client.new();
     let base = "http://127.0.0.1:PORT";

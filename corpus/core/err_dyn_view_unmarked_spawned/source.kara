@@ -3,6 +3,8 @@
 // one even to view it (B-2026-11-02-12). Here `D` holds a `shared` counter
 // and two tasks would bump it at once. `dyn Bump + CrossTask` on `mkd`'s
 // return type would check the value coerced into it.
+import std.sync.{TaskGroup};
+
 shared struct S { mut n: i64 }
 
 trait Bump {

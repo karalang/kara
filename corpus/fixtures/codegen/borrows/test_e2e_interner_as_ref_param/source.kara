@@ -1,4 +1,6 @@
 
+import std.intern.{Interner, Symbol};
+
 fn add(t: ref Interner, s: ref String) -> Symbol {
     t.intern(s)
 }

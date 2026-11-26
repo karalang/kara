@@ -1,4 +1,6 @@
 
+import std.simd.{Vector};
+
 fn main() {
     let v = Vector[u8, 4](200, 10, 50, 255);
     println(v[0]);

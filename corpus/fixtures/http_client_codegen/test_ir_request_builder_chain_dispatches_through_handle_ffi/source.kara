@@ -1,4 +1,7 @@
 
+import std.sync.{Channel};
+import std.net.{Client};
+
 fn main() with sends(Network) receives(Network) sends(Channel) {
     let c = Client.new();
     let url = "http://127.0.0.1:65535/api";

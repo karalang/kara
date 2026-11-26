@@ -1,3 +1,5 @@
+import std.sync.{MemoryOrdering};
+
 fn main() {
 let a = MemoryOrdering.Relaxed;
 let b = MemoryOrdering.Acquire;

@@ -4,6 +4,7 @@
 // `recv` returns `None` as soon as that channel closes.
 
 import std.sync.{Mutex, TaskGroup};
+import std.sync.{Receiver, Sender};
 
 sync struct Foo {
     first_open: Mutex[Option[Sender[()]]],

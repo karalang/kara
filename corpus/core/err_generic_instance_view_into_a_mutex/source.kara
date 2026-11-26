@@ -1,3 +1,5 @@
+import std.sync.{Mutex};
+
 struct Holder[T] { values: Mutex[VecDeque[T]] }
 impl[T] Holder[T] {
     fn put(self, e: own T) { self.values.lock().value.push_back(e); }

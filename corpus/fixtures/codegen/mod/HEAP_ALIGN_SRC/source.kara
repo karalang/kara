@@ -1,3 +1,5 @@
+import std.simd.{Vector};
+
 #[derive(Display)]
 struct Holder { v: Vector[i64, 4], n: i64 }
 #[derive(Display)]

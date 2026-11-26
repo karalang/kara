@@ -5,6 +5,7 @@
 // list under a lock, and each run's lines are folded into a checksum.
 
 import std.sync.{Mutex, TaskGroup};
+import std.sync.{Semaphore};
 
 sync struct FizzBuzz {
     n: i64,

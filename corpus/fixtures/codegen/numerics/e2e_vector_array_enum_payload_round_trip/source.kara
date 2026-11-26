@@ -1,3 +1,5 @@
+import std.simd.{Vector};
+
 #[derive(Display)]
 enum E {
     V4(Vector[i64, 4]),

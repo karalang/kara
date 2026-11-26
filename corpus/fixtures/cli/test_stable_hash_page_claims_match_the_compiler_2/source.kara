@@ -1,1 +1,3 @@
+import std.hash.{StableHash};
+
 fn main() { println(StableHash.xxh3([1u8, 2u8])); }

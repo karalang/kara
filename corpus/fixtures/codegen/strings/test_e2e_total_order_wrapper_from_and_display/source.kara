@@ -1,3 +1,5 @@
+import std.cmp.{F32, F64};
+
 fn main() {
 let a = F64.from(3.25);
 let b = F32.from(2.5);

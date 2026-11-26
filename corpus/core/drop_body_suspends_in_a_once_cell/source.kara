@@ -1,4 +1,5 @@
 import std.time.{Duration, sleep};
+import std.sync.{OnceCell, OnceLock};
 struct Slow { n: i64 }
 impl Drop for Slow { fn drop(mut ref self) { sleep(Duration.ms(2)); println(f"slow drop {self.n}"); } }
 fn main() {

@@ -1,4 +1,6 @@
 
+import std.env.{EnvProvider};
+
 struct FakeEnv {}
 impl EnvProvider for FakeEnv {
     fn args(ref self) -> Vec[String] {

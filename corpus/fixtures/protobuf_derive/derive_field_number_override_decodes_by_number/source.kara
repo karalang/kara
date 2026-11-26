@@ -1,4 +1,6 @@
 
+import std.protobuf.{ProtoBuf};
+
 #[derive(Message)]
 struct Sparse {
     #[karac::field(5)] name: String,

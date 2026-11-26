@@ -1,6 +1,8 @@
 // library/concurrency.md § Atomics: Atomic[T] exists for bool, i32, i64, u32
 // and u64. A generic body that puts its parameter in an Atomic is judged at
 // each call that instantiates it, through generic callers and methods too.
+import std.sync.{Atomic};
+
 fn wrap[T](x: own T) -> Atomic[T] { Atomic.new(x) }
 fn twice[U](x: own U) -> Atomic[U] { wrap(x) }
 struct Cell[T] { v: T }

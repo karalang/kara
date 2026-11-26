@@ -1,3 +1,5 @@
+import std.sync.{Atomic, MemoryOrdering};
+
 fn bump(c: ref Atomic[i64]) { let _ = c.fetch_add(1, MemoryOrdering.SeqCst); }
 fn setit(c: mut ref Atomic[i64]) { c.store(9, MemoryOrdering.SeqCst); }
 fn readit(c: ref Atomic[i64]) -> i64 { c.load(MemoryOrdering.SeqCst) }

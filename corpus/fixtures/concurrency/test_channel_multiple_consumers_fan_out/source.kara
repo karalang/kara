@@ -1,4 +1,6 @@
 
+import std.sync.{Receiver};
+
         fn take_a(rx: Receiver[i64]) -> i64 with receives(rx) { return 1; }
         fn take_b(rx: Receiver[i64]) -> i64 with receives(rx) { return 2; }
         fn main() {

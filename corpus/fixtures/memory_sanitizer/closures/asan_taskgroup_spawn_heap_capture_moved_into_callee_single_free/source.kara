@@ -1,4 +1,6 @@
 
+import std.sync.{TaskGroup};
+
 fn sink(addr: own String) {
     let mut held: Vec[String] = Vec.new();
     held.push(addr);

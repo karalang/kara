@@ -3,6 +3,7 @@
 import std.json.{Json};
 import std.pool.{Pool};
 import std.time.{Duration};
+import std.sync.{Receiver, Sender};
 
 struct Conn { id: i64 }
 

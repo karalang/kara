@@ -1,4 +1,6 @@
 
+import std.simd.{Vector};
+
 fn f(a: f32, b: f32, c: f32, d: f32) -> f32 {
     let v: Vector[f32, 4] = Vector[f32, 4](a, b, c, d);
     let r = v.floor();

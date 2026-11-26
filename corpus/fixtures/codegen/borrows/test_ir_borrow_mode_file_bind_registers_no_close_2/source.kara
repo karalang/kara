@@ -1,4 +1,6 @@
 
+import std.io.{File};
+
 fn main() with reads(FileSystem) writes(Stdout) {
     match File.open("/tmp/karac_b070703_owned") {
         Ok(f) => println("ok"),

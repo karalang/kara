@@ -3,6 +3,8 @@
 // function needs no clause for it, and two calls that each bind their own
 // provider do not conflict in `par` (B-2026-11-17-14).
 import std.random;
+import std.random.{RandomProvider};
+import std.time.{ClockProvider};
 
 trait DbT {
     fn get(self, k: i64) -> i64;

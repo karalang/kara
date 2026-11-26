@@ -1,6 +1,8 @@
 // design.md § User-declared resources, with §12's conflict rules: two
 // reads of one declared resource do not conflict, and neither do writes
 // of two different ones, so these branches run together.
+import std.tracing.{Log};
+
 effect resource Db;
 effect resource Log;
 

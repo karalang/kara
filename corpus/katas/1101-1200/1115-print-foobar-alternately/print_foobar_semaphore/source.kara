@@ -4,6 +4,7 @@
 // and each method releases the other's after it prints.
 
 import std.sync.{Mutex, TaskGroup};
+import std.sync.{Semaphore};
 
 sync struct FooBar {
     n: i64,

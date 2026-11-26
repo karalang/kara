@@ -1,4 +1,6 @@
 
+import std.simd.{Vector};
+
 fn main() {
     let v = Vector[f32, 4].from_array([1.0f32, 2.0f32, 0.0f32, -1.0f32]);
     let b = v.to_bits();

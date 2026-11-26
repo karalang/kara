@@ -1,3 +1,5 @@
+import std.intern.{Interner, Symbol};
+
 fn main() {
              let mut tab: Interner = Interner.new();
              let a = tab.intern("k");

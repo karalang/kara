@@ -1,3 +1,5 @@
+import std.tracing.{LogEvent, NoOpExporter, Span};
+
 fn main() {
                 let drop_all = NoOpExporter {};
                 drop_all.export_event(LogEvent.warn("ignored"));

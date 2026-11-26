@@ -9,6 +9,8 @@
 // unbounded accept loop) also affects the free-spawn form, which the stdlib
 // docs say "uses the enclosing function's implicit scope ID" — i.e. fn main's
 // scope, which in a server loop likewise never exits.
+import std.net.{TcpListener, WebSocket};
+
 fn echo(ws: own WebSocket) {
     let mut buf: Array[u8, 1024] = [0u8; 1024];
     loop {

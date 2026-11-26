@@ -1,4 +1,6 @@
 
+import std.net.{Client};
+
 fn main() {
     let c = Client.new();
     let mut k = 0;

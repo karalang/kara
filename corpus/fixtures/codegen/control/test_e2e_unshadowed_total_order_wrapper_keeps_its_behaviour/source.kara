@@ -1,4 +1,6 @@
 
+import std.cmp.{F64};
+
 fn nan64(z: f64) -> f64 { return z / z; }
 fn main() {
     let q = nan64(0.0);

@@ -16,6 +16,8 @@
 // for byte, and check_hashlib.py checks the mirror's MD5 against hashlib
 // and its rolling checksum against a direct sum at every window.
 
+import std.io.{File, SeekFrom};
+
 const BLOCK: i64 = 256;
 const MOD: i64 = 65536;
 

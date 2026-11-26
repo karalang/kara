@@ -1,4 +1,6 @@
 
+import std.cmp.{F64};
+
 fn main() {
     let mut v: Vec[(i64, String)] = Vec.new();
     v.push((2, f"bb padded beyond thirty-six bytes junk {1}"));

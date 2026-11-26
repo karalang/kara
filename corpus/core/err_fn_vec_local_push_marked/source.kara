@@ -4,6 +4,8 @@
 // fix the closure below, which writes a `shared` handle, reached two tasks
 // and raced (core-semantics §6.3). The fix is the marker on the local's
 // declaration, which checks each push.
+import std.sync.{TaskGroup};
+
 shared struct S {
     mut n: i64,
 }

@@ -1,4 +1,6 @@
 
+import std.net.{Request, Response, Server, WebSocket};
+
             fn route(req: Request) -> Response {
                 match req.path() {
                     "/ws" => Response { status: 101, body: "" },

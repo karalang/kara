@@ -49,6 +49,8 @@
 
 import std.web.time.{animation_frames};
 import std.web.events.{pointer_moves, PointerEvent, wheel, WheelEvent, keydown, KeyEvent, dblclick, contextmenu, ClickEvent, focus, blur, resize, ResizeEvent, touchstart, touchmove, touchend, TouchEvent};
+import std.simd.{Vector};
+import std.sync.{TaskGroup, TaskHandle};
 
 // The canvas this program paints. A user-defined host capability — like
 // `Dom` in examples/ssr_counter — reached through the `put_pixels` host fn.

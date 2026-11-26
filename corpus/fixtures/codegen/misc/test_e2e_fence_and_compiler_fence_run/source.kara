@@ -1,4 +1,6 @@
 
+import std.sync.{MemoryOrdering};
+
 fn main() {
     // Safety: no paired cross-thread accesses in this single-threaded demo.
     unsafe { fence(MemoryOrdering.SeqCst); }

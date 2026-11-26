@@ -1,4 +1,6 @@
 
+import std.intern.{Interner};
+
 fn main() {
     let mut i: i64 = 0i64;
     let mut hits: i64 = 0i64;

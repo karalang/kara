@@ -7,6 +7,8 @@
 
 // ------------------------------------------------------------ tokens
 
+import std.sync.{TaskGroup};
+
 #[derive(Copy, Clone, PartialEq, Eq)]
 enum Tk {
     Name,

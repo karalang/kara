@@ -1,6 +1,8 @@
 // Two tasks of one group may write distinct fields of one local: §9.1
 // infers captures per place, and distinct fields do not overlap (§5.6), so
 // neither task's `mut ref` capture overlaps the other's (§9.5).
+import std.sync.{TaskGroup};
+
 struct Pt { x: i64, y: i64 }
 fn main() {
     let mut p = Pt { x: 0, y: 0 };

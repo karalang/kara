@@ -1,4 +1,6 @@
 
+import std.simd.{Vector};
+
 fn f(a: u32) -> u32 {
     let v: Vector[u32, 4] = Vector[u32, 4](a, a, a, a);
     let amt: Vector[u32, 4] = Vector[u32, 4](1u32, 1u32, 1u32, 1u32);

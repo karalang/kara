@@ -1,4 +1,6 @@
 
+import std.sync.{OnceCell};
+
 fn main() {
     let c: OnceCell[i64] = OnceCell.new();
     println(c.is_set());

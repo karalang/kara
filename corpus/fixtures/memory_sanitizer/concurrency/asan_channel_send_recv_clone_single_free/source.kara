@@ -1,4 +1,6 @@
 
+import std.sync.{Channel, Receiver, Sender};
+
 fn main() {
     let (tx, rx): (Sender[String], Receiver[String]) = Channel.new();
     tx.send("first");

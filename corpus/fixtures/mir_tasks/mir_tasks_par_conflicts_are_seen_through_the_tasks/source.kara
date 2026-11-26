@@ -1,4 +1,6 @@
 
+import std.sync.{Receiver, SendError, Sender};
+
 fn produce(tx: Sender[i64], from: i64, to: i64) -> Result[(), SendError[i64]] {
     for i in from..to { tx.send(i)?; }
     Ok(())

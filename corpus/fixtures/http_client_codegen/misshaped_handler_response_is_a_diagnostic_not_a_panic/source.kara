@@ -1,4 +1,6 @@
 
+import std.net.{Request, Server};
+
 struct Response { status: i64 }
 fn handle(req: Request) -> Response { Response { status: 200 } }
 fn main() with sends(Network) receives(Network) {

@@ -1,3 +1,5 @@
+import std.sync.{Channel};
+
 fn main() {
     let (tx, rx) = Channel.bounded(2);
     tx.send(1); tx.send(2);

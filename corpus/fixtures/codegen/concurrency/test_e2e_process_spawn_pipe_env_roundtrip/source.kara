@@ -1,4 +1,6 @@
 
+import std.process.{Command, Stdio};
+
 fn main() {
     let cmd = Command.new("echo").arg("kara-spawn").stdout(Stdio.piped());
     match cmd.spawn() {

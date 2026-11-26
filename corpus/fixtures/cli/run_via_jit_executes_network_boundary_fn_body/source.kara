@@ -1,3 +1,5 @@
+import std.net.{WebSocket};
+
 struct Conn { id: i64 }
 impl Drop for Conn { fn drop(mut ref self) { println(7); } }
 fn serve_one(ws: WebSocket, c: Conn, go: bool) {

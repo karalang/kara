@@ -1,6 +1,8 @@
 // `with_span(span, body)` runs `body` and keeps nothing: its parameter is
 // `own OnceFn() -> T`, not `escaping`, so the closure borrows `s` (core
 // semantics §9.3) and `s` is still usable after the call (B-2026-11-16-231).
+import std.tracing.{Span};
+
 fn main() {
     let s = "abc".to_string();
     let sp = Span.root("req", 7);

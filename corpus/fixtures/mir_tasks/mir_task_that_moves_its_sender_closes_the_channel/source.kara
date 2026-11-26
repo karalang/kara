@@ -1,4 +1,6 @@
 
+import std.sync.{TaskGroup};
+
 fn main() {
     let (tx, rx) = channel(1);
     let group = TaskGroup.new();

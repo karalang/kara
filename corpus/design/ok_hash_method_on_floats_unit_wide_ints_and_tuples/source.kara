@@ -5,6 +5,7 @@
 // `impl Hash` can delegate to a float field, and it feeds the same bytes the
 // derive does.
 import std.hash.{Hasher};
+import std.cmp.{F32, F64};
 
 struct Rec { mut b: Vec[u8] }
 

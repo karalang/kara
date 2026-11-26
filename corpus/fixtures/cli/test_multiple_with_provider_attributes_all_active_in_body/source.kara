@@ -1,3 +1,5 @@
+import std.time.{ClockProvider};
+
 trait Audit { fn count(ref self) -> i64; }
 effect resource AuditLog: Audit;
 struct FakeClock { t: i64 }

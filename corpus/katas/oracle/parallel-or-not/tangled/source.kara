@@ -28,6 +28,8 @@
 //   $ karac query concurrency tangled.kara.handle
 //   {... "parallel_groups":[{"statements":[0,1],...},{"statements":[4,5],...}]}
 
+import std.tracing.{Log};
+
 pub trait Store { fn touch(mut ref self, n: i64) -> i64; }
 
 pub effect resource Db: Store;

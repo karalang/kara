@@ -1,4 +1,6 @@
 
+import std.sync.{Channel, Receiver, Sender};
+
 fn pick(cond: bool) -> i64 {
     let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();
     tx.send(100);

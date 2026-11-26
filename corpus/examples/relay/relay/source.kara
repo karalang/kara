@@ -39,6 +39,9 @@
 // `sync struct` is the cross-task-safe shared form (a plain `shared struct`
 // can't cross a `tg.spawn` boundary — E_NOT_CROSS_TASK); its `Atomic[i64]`
 // fields make concurrent `fetch_add` from many handlers race-free.
+import std.sync.{Atomic, MemoryOrdering, TaskGroup};
+import std.net.{TcpListener, TcpStream};
+
 sync struct Metrics {
     total: Atomic[i64],
     api: Atomic[i64],

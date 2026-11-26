@@ -49,6 +49,9 @@
 //     of line 170.
 //   - No graceful shutdown / max-connection cap.
 
+import std.net.{TlsListener, WebSocket};
+import std.sync.{TaskGroup};
+
 fn handle_connection(ws: own WebSocket) {
     let mut ws = ws;
     loop {

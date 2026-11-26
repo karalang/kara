@@ -1,4 +1,6 @@
 
+import std.sync.{TaskHandle};
+
 effect resource Reporter;
 
 host fn report(x: i64) -> i64 with writes(Reporter);

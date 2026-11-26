@@ -1,4 +1,6 @@
 
+import std.protobuf.{ProtoReader};
+
 #[derive(Message)]
 struct M { #[karac::field(9)] #[karac::proto(sint64)] v: i64 }
 

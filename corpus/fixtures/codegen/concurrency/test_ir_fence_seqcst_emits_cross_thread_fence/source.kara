@@ -1,4 +1,6 @@
 
+import std.sync.{MemoryOrdering};
+
 fn barrier() with reads(Hardware) {
     // Safety: a full barrier ordering the surrounding accesses.
     unsafe { fence(MemoryOrdering.SeqCst); }

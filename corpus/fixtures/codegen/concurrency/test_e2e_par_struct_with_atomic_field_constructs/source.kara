@@ -1,4 +1,6 @@
 
+import std.sync.{Atomic};
+
 sync struct Counter { count: Atomic[i64], label: i64 }
 fn label_of(c: Counter) -> i64 { c.label }
 fn main() {

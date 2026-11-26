@@ -6,6 +6,7 @@
 // the ring is full and a dequeue while it is empty.
 
 import std.sync.{Mutex, TaskGroup};
+import std.sync.{Semaphore};
 
 struct Ring {
     places: Vec[i64],

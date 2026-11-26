@@ -1,6 +1,8 @@
 // design.md §10, Results and propagation: once the public function
 // declares the effects of the `From` impl its `?` converts through, it
 // is accepted, and the conversion runs.
+import std.tracing.{Log};
+
 effect resource Log;
 
 pub struct Low {}

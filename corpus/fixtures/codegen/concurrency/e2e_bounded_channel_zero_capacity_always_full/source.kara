@@ -1,4 +1,6 @@
 
+import std.sync.{BoundedChannel, OnFull};
+
 fn main() {
     let bc: BoundedChannel[i64] = BoundedChannel.new(0, OnFull.FailFast);
     match bc.send(1) { Ok(_) => println(1), Err(_) => println(-1), }

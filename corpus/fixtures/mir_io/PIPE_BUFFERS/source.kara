@@ -1,4 +1,7 @@
 
+import std.process.{Child, Command, Stdio};
+import std.io.{BufReader, BufWriter};
+
 fn feed(child: ref Child) {
     let w = BufWriter.new(child.stdin().unwrap());
     let _ = w.write_all("zeta\nalpha\n".bytes());

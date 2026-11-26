@@ -1,3 +1,5 @@
+import std.gpu.{GpuBuffer};
+
 struct Body { mass: f32, speed: f32 }
 struct Sim  { grid: GpuBuffer[Body], step: i32 }
 fn once() -> f32 {

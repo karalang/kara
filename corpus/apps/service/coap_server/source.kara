@@ -2,6 +2,7 @@
 // and the clients that use it. Written the way a Rust programmer would.
 import std.net.UdpSocket;
 import std.time.Duration;
+import std.sync.{TaskGroup};
 
 const ADDR: Str = "127.0.0.1:23783";
 const QUIET_MS: u64 = 300;

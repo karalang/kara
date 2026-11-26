@@ -1,6 +1,8 @@
 // design.md § Type inference: a struct literal checks each field against its
 // declared type, and a type parameter the fields leave open is solved by the
 // rest of the body: here inside `Mutex.new(..)` and `Some(..)` (B-2026-11-17-133).
+import std.sync.{Mutex};
+
 struct Holder[T] {
     values: Mutex[VecDeque[T]],
 }

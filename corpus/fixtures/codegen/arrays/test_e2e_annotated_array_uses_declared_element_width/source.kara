@@ -1,4 +1,6 @@
 
+import std.simd.{Vector};
+
 struct P { a: Array[i64, 2] }
 fn take(a: Array[i64, 2]) -> i64 { return a[0i64]; }
 fn give() -> Array[i64, 2] { let v = 200u8; return [v, v]; }

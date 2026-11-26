@@ -6,6 +6,7 @@
 // closes. Bodies are JSON, through the derived Serialize/Deserialize.
 
 import std.json.{Json};
+import std.net.{TcpListener, TcpStream};
 
 #[derive(Serialize, Deserialize)]
 struct PutBody { value: String, tags: Vec[String] }

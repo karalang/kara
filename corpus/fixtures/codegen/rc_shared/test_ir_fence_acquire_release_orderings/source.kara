@@ -1,4 +1,6 @@
 
+import std.sync.{MemoryOrdering};
+
 fn barriers() {
     // Safety: paired with matching accesses on other threads.
     unsafe {

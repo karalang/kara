@@ -1,6 +1,8 @@
 // Tasks borrow the provider like a captured place until their group drops
 // (core semantics §14.9, §9.5): a task that bumps the clock holds it
 // `mut ref`, so a second task of the group that uses the clock is refused.
+import std.sync.{TaskGroup};
+
 effect resource Clk: ClkP;
 
 trait ClkP {

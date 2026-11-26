@@ -20,7 +20,7 @@ struct Registry {
     seq: i64,
 }
 
-const CODE_ALPHABET: StringSlice = "abcdefghijklmnopqrstuvwxyz0123456789";
+const CODE_ALPHABET: Str = "abcdefghijklmnopqrstuvwxyz0123456789";
 
 // Base-36 encode `n` over CODE_ALPHABET. Always at least one character.
 fn encode_code(n: i64) -> String {

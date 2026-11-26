@@ -1,4 +1,6 @@
 
+import std.sync.{Channel, Receiver, Sender};
+
 fn main() {
     let mut i: i64 = 0;
     let mut total: i64 = 0;

@@ -1,3 +1,5 @@
+import std.simd.{Vector};
+
 fn main() {
 let a: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);
 let v: Vec[Vector[i64, 4]] = [a, a];

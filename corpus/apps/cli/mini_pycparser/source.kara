@@ -15,6 +15,8 @@
 
 // One variant per token kind CLexer emits; `tk_name` gives pycparser's
 // name for it.
+import std.sync.{TaskGroup};
+
 #[derive(Copy, Clone, PartialEq, Eq)]
 enum Tk {
     Eof,

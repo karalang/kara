@@ -1,4 +1,6 @@
 
+import std.protobuf.{ProtoBuf};
+
 fn main() {
     println(ProtoBuf.zigzag_encode(0));
     println(ProtoBuf.zigzag_encode(-1));

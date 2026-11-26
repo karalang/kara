@@ -1,4 +1,6 @@
 
+import std.io.{Metadata};
+
 fn show(r: Result[(), IoError]) -> String {
     match r { Ok(_) => "ok".to_string(), Err(e) => match e { IoError.NotFound => "notfound".to_string(), IoError.AlreadyExists => "exists".to_string(), IoError.InvalidInput => "invalid".to_string(), _ => "other".to_string() } }
 }

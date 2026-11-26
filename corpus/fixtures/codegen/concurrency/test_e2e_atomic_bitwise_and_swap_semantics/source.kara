@@ -1,4 +1,6 @@
 
+import std.sync.{Atomic};
+
 sync struct Flags { bits: Atomic[i64] }
 impl Flags {
     fn set_or(ref self, m: i64) -> i64 { self.bits.fetch_or(m) }

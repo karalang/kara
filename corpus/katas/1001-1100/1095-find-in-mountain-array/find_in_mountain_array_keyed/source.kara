@@ -4,6 +4,8 @@
 // both sides read as rising. A closure picks the key. The peak is found by
 // the same search over "is this index past the peak". O(log n) calls.
 
+import std.sync.{Atomic};
+
 fn first_at_least(lo: i32, hi: i32, at_least: Fn(i32) -> bool) -> i32 {
     let mut (lo, hi) = (lo, hi);
     while lo < hi {

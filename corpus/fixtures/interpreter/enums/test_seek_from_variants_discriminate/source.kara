@@ -1,3 +1,5 @@
+import std.io.{SeekFrom};
+
 fn name(w: SeekFrom) -> String {
                    match w {
                        SeekFrom.Start => { return "start"; }

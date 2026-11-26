@@ -1,4 +1,6 @@
 
+import std.sync.{TaskGroup};
+
 struct R { id: i64 }
 impl Drop for R { fn drop(mut ref self) { println(f"drop {self.id}"); } }
 fn count(n: i64, label: Str) -> i64 {

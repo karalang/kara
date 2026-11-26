@@ -1,3 +1,5 @@
+import std.sync.{Channel, SendError};
+
 fn main() {
     let mut total: i64 = 0;
     let (tx, rx) = Channel.bounded(1);

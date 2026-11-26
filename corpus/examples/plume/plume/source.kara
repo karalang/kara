@@ -35,6 +35,7 @@
 
 import std.web.time.{animation_frames};
 import std.web.events.{pointer_moves, PointerEvent, clicks, ClickEvent};
+import std.sync.{TaskGroup, TaskHandle};
 
 // The canvas this program paints — a host capability reached via `put_pixels`.
 effect resource Display;

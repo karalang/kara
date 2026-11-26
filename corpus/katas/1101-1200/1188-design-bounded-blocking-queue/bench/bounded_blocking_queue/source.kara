@@ -5,6 +5,7 @@
 // the oldest value under the lock and gives a slot.
 
 import std.sync.{Mutex, TaskGroup};
+import std.sync.{Semaphore};
 
 sync struct BoundedBlockingQueue {
     slots: Semaphore,

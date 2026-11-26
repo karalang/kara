@@ -1,3 +1,5 @@
+import std.sync.{Atomic, MemoryOrdering};
+
 struct Flag { ready: Atomic[bool] }
 fn main() {
 let f = Flag { ready: Atomic.new(false) };

@@ -1,6 +1,8 @@
 // library/concurrency.md § Atomics: `Atomic[T]` exists for `T` = `bool`,
 // `i32`, `i64`, `u32` and `u64`. Any other `T` is refused at check, whether
 // an annotation or the argument fixes it.
+import std.sync.{Atomic};
+
 fn main() {
     let a: Atomic[i8] = Atomic.new(127);
     let b = Atomic.new(0u16);

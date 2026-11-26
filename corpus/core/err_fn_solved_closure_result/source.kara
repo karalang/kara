@@ -2,6 +2,8 @@
 // solved as `Fn() -> i64 + CrossTask`, so its result is coerced into that
 // type, as a function's return is (core-semantics §6.3). Before the fix the
 // two tasks raced on the `shared` handle.
+import std.sync.{TaskGroup};
+
 shared struct S {
     mut n: i64,
 }

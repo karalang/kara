@@ -2,6 +2,7 @@
 // LeetCode's largest water, 20 molecules, the atoms in a shuffled order.
 
 import std.sync.{Mutex, TaskGroup};
+import std.sync.{Receiver, Sender};
 
 sync struct H2o {
     bonding: Mutex[()],

@@ -1,4 +1,6 @@
 
+import std.io.{BufReader, File};
+
 fn main() {
     fs.write("DIR/fb.txt", "HELLOWORLD").unwrap();
     let mut r = BufReader.with_capacity(File.open("DIR/fb.txt").unwrap(), 4);

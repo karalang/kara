@@ -19,6 +19,8 @@
 // real.py; oracle.py is the same program in Python.
 // ------------------------------------------------------------ bytes and text
 
+import std.net.{TcpListener, TcpStream};
+
 fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
     let mut v: Vec[u8] = Vec.new();
     for i in from..to {

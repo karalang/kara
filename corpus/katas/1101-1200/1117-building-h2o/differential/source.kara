@@ -4,6 +4,7 @@
 
 import std.sync.{Atomic, Mutex, TaskGroup};
 import std.time.{Duration, sleep};
+import std.sync.{Receiver, Semaphore, Sender};
 
 // ---- building_h2o.kara ----
 

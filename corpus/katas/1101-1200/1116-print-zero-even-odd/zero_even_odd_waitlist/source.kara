@@ -6,6 +6,7 @@
 // each of which looks again.
 
 import std.sync.{Mutex, TaskGroup};
+import std.sync.{Sender};
 
 struct Count {
     printed: i64,

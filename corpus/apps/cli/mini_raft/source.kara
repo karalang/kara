@@ -8,6 +8,8 @@
 // and committed-prefix properties. Each scenario is its own cluster and
 // runs as its own task.
 
+import std.sync.{TaskGroup};
+
 const MASK32: i64 = 4294967295;
 const ELECTION_MIN: i64 = 150;
 const ELECTION_SPREAD: i64 = 150;

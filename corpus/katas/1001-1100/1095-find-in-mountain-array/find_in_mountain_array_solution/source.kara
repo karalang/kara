@@ -1,6 +1,8 @@
 // LeetCode #1095: Find in Mountain Array -- LeetCode's Rust template,
 // written as Rust writes it and carried to Kāra by `karac fix`.
 
+import std.sync.{Atomic};
+
 struct Solution {}
 
 impl Solution {

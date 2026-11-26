@@ -1,4 +1,6 @@
 
+import std.protobuf.{ProtoBuf, ProtoReader};
+
 fn main() {
     let mut buf = Vec.new();
     buf.extend_from_slice(ProtoBuf.encode_tag(1, ProtoBuf.wire_varint()));

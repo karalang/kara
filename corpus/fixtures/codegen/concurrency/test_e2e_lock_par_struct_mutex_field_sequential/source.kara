@@ -1,4 +1,6 @@
 
+import std.sync.{Mutex};
+
 sync struct Counter { total: Mutex[i64] }
 impl Counter {
     fn add(ref self, n: i64) { lock self.total t { t = t + n; } }

@@ -1,3 +1,5 @@
+import std.sync.{OnceLock};
+
 struct Rec { id: i64, name: String }
 fn main() {
 let c: OnceLock[Rec] = OnceLock.new();
