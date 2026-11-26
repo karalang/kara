@@ -705,6 +705,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   to itself is 144), where it stopped on an internal unchecked-overflow
   error (B-2026-11-26-73).
 
+- An integer literal left open past an `as` cast is accepted as a tensor
+  index, and `lossless_cast` on an operator's operand cast of one
+  (`val * (base as i128)` over `let base = 10`) fires again: both
+  regressed with B-2026-11-26-1 (B-2026-11-27-1).
+
 - `karac explain <file>.<fn>` on a function in a recursive group, or one
   that calls itself, adds a `Fixpoint:` section: the group, then the
   chain `φ0 = ∅`, `φ1`, … up to `φ*`, each step with the atoms it added

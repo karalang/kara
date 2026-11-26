@@ -153,3 +153,17 @@ fn a_cast_of_a_literal_nothing_else_fixes_is_still_redundant() {
         "{out}"
     );
 }
+
+#[test]
+fn an_operand_cast_of_a_literal_widening_anyway_is_still_lossless() {
+    let file = program(
+        "lossless",
+        "fn main() {\n    let base = 10;\n    let mut v: i128 = 1;\n    v = v * (base as i128);\n    println(v);\n}\n",
+    );
+    let (ok, out) = karac(&["check", file.to_str().unwrap()]);
+    assert!(ok, "{out}");
+    assert!(
+        out.contains("unnecessary cast: 'i64' widens to 'i128' implicitly here"),
+        "{out}"
+    );
+}

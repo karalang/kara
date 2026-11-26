@@ -6854,25 +6854,54 @@ impl<'a> super::TypeChecker<'a> {
             if &to != other_ty {
                 continue;
             }
-            if compare
-                && matches!(
-                    (&from, &to),
-                    (Type::Int(_), Type::UInt(_)) | (Type::UInt(_), Type::Int(_))
-                )
-            {
+            // An open literal operand (`base as i128` over `let base = 10`)
+            // is judged once the body's literals have their types
+            // (B-2026-11-26-1).
+            if self.unbound_literal_var(&from).is_some() {
+                self.open_number_casts.push((
+                    side.clone(),
+                    from,
+                    to,
+                    Some(other_ty.clone()),
+                    super::OpenCastSite::Operand { compare },
+                ));
                 continue;
             }
-            let widens_here = int_cast_preserves_all_values(&from, &to)
-                || matches!(
-                    (&from, &to),
-                    (
-                        Type::Float(super::FloatSize::F32),
-                        Type::Float(super::FloatSize::F64)
-                    )
-                );
-            if widens_here {
-                self.lint_unneeded_cast(side, inner, ty, &from, &to, Some(other_ty));
-            }
+            self.lint_operand_cast_widening(side, inner, ty, &from, &to, other_ty, compare);
+        }
+    }
+
+    /// `lossless_cast` on a cast an operator's other operand widens to
+    /// anyway (`lint_operand_casts_in`).
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn lint_operand_cast_widening(
+        &mut self,
+        side: &Expr,
+        inner: &Expr,
+        ty: &TypeExpr,
+        from: &Type,
+        to: &Type,
+        other_ty: &Type,
+        compare: bool,
+    ) {
+        if compare
+            && matches!(
+                (from, to),
+                (Type::Int(_), Type::UInt(_)) | (Type::UInt(_), Type::Int(_))
+            )
+        {
+            return;
+        }
+        let widens_here = int_cast_preserves_all_values(from, to)
+            || matches!(
+                (from, to),
+                (
+                    Type::Float(super::FloatSize::F32),
+                    Type::Float(super::FloatSize::F64)
+                )
+            );
+        if widens_here {
+            self.lint_unneeded_cast(side, inner, ty, from, to, Some(other_ty));
         }
     }
 

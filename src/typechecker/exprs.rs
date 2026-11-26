@@ -14166,12 +14166,26 @@ impl<'a> super::TypeChecker<'a> {
     /// redundant, and with a later `take_i32(m)` it is not.
     pub(super) fn lint_open_number_casts(&mut self, from: usize) {
         let from = from.min(self.open_number_casts.len());
-        for (cast, from_ty, to_ty, expected) in self.open_number_casts.split_off(from) {
+        for (cast, from_ty, to_ty, expected, site) in self.open_number_casts.split_off(from) {
             let ExprKind::Cast { expr: inner, ty } = &cast.kind else {
                 continue;
             };
             let from_ty = self.resolved_now(&from_ty);
-            self.lint_unneeded_cast(&cast, inner, ty, &from_ty, &to_ty, expected.as_ref());
+            match (site, expected) {
+                (super::OpenCastSite::Direct, expected) => {
+                    self.lint_unneeded_cast(&cast, inner, ty, &from_ty, &to_ty, expected.as_ref())
+                }
+                (super::OpenCastSite::Operand { compare }, Some(other)) => self
+                    .lint_operand_cast_widening(
+                        &cast, inner, ty, &from_ty, &to_ty, &other, compare,
+                    ),
+                (super::OpenCastSite::I64Arg, Some(want))
+                    if is_integer(&from_ty) && int_coercion_is_widening(&from_ty, &to_ty) =>
+                {
+                    self.lint_unneeded_cast(&cast, inner, ty, &from_ty, &to_ty, Some(&want));
+                }
+                _ => {}
+            }
         }
     }
 
@@ -15029,6 +15043,17 @@ impl<'a> super::TypeChecker<'a> {
         // `operand_casts`, as an operator's operand is.
         if let ExprKind::Cast { expr: inner, ty } = &arg.kind {
             if let Some((from, to)) = self.operand_casts.get(&arg.id).cloned() {
+                // An open literal operand is judged once it has its type.
+                if to == want && self.unbound_literal_var(&from).is_some() {
+                    self.open_number_casts.push((
+                        arg.clone(),
+                        from,
+                        to,
+                        Some(want),
+                        super::OpenCastSite::I64Arg,
+                    ));
+                    return;
+                }
                 if to == want && is_integer(&from) && int_coercion_is_widening(&from, &to) {
                     self.lint_unneeded_cast(arg, inner, ty, &from, &to, Some(&want));
                 }
@@ -19445,12 +19470,22 @@ impl<'a> super::TypeChecker<'a> {
                             self.tensor_index_recv_types
                                 .insert(SpanKey::from_span(&object.span), obj_ty.clone());
                             let elem_ty = args[0].clone();
+                            // An integer literal no use has fixed yet is an
+                            // integer index: `t[i, j] = (i * 3 + j) as f32`
+                            // leaves `i` and `j` open past the cast
+                            // (B-2026-11-26-1).
+                            let int_like = |this: &Self, t: &Type| {
+                                is_integer(t)
+                                    || this.unbound_literal_var(t).is_some_and(|(_, k)| {
+                                        matches!(k, inference::LiteralKind::Int)
+                                    })
+                            };
                             let idx_arity = match &idx_ty {
                                 Type::Tuple(parts) => {
                                     for (part_ty, part_expr) in
                                         parts.iter().zip(tuple_index_parts(index).iter())
                                     {
-                                        if !is_integer(part_ty) && *part_ty != Type::Error {
+                                        if !int_like(self, part_ty) && *part_ty != Type::Error {
                                             self.type_error(
                                                 format!(
                                                     "tensor index components must be \
@@ -19464,7 +19499,7 @@ impl<'a> super::TypeChecker<'a> {
                                     }
                                     Some(parts.len())
                                 }
-                                t if is_integer(t) => Some(1),
+                                t if int_like(self, t) => Some(1),
                                 Type::Error => None,
                                 _ => {
                                     self.type_error(
@@ -21577,6 +21612,7 @@ impl<'a> super::TypeChecker<'a> {
                         from_ty.clone(),
                         to_ty.clone(),
                         expected,
+                        super::OpenCastSite::Direct,
                     ));
                 } else {
                     self.lint_unneeded_cast(expr, inner, ty, &from_ty, &to_ty, expected.as_ref());

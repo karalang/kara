@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 788 |
-| false-positive | 399 |
+| false-positive | 400 |
 | missing-feature | 268 |
 | perf | 206 |
 | other | 159 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 962 |
+| typecheck | 963 |
 | mir | 348 |
 | mir-llvm | 339 |
 | cli | 323 |
@@ -92,7 +92,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | lexer | 2 |
 ## Current state
 
-_Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-11-26). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-11-27). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -126,6 +126,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-92 | 2026-11-26 | cli | low | `karac query affected-by` never lists a test: its `tests` array is empty for every seed, because it counts only `test_*`-named functions in a `_test.kara` file and v1 tests are `test "name" { }` blocks | — |
 | B-2026-11-26-93 | 2026-11-26 | interp | low | `std.runtime.list_tasks()` lists no suspended task under `karac run --interp`, where `karac run` and `karac build` list the task suspended on its `recv` | — |
 | B-2026-11-26-94 | 2026-11-26 | interp+mir-llvm+runtime | low | The HTTP server answers 400 to a request whose header value holds a byte that is not UTF-8 (obs-text such as Latin-1 `caf\xe9`), which RFC 9110 §5.5 allows and io.md does not list among its refusals | — |
+| B-2026-11-27-1 | 2026-11-27 | typecheck | medium | Regression from the B-2026-11-26-1 fix (293934a062): a literal left open past an `as` cast is refused as a tensor index (`t[i, j] = (i * 3 + j) as f32` reports two E0200 "tensor index components must be integers, found 'i64'" ahead of the expected E0520), and `lossless_cast` no longer fires on an operator's operand cast of such a literal (`val * (base as i128)`) | — |
 
 ### Relocated
 

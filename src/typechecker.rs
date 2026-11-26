@@ -520,6 +520,19 @@ pub(super) fn normalize_bounds_into_where_clause(
     Some(WhereClause { constraints, span })
 }
 
+/// Where a cast of an open literal was met, so its `redundant_cast` /
+/// `lossless_cast` is judged by the same rule once the literal has its
+/// type ([`TypeChecker::open_number_casts`], B-2026-11-26-1).
+#[derive(Clone, Copy, Debug)]
+pub(super) enum OpenCastSite {
+    /// The cast itself, with the slot it was checked against.
+    Direct,
+    /// An operator's operand, beside an operand of the cast's type.
+    Operand { compare: bool },
+    /// A library argument that takes an `i64`.
+    I64Arg,
+}
+
 /// Mode for `closure_consumes_captured_non_copy`'s body walk: tracks
 /// whether the current position is a Reading or Consuming context.
 /// Mirrors `use_classifier::Mode` so the typechecker's capture-consume
@@ -4044,7 +4057,7 @@ pub struct TypeChecker<'a> {
     /// was checked, with their types and slot: `redundant_cast` and
     /// `lossless_cast` judge them once the body's literals have their
     /// types (B-2026-11-26-1).
-    pub(super) open_number_casts: Vec<(Expr, Type, Type, Option<Type>)>,
+    pub(super) open_number_casts: Vec<(Expr, Type, Type, Option<Type>, OpenCastSite)>,
     /// The `x.clone()` arguments `redundant_clone` already reported, for the
     /// same reason (B-2026-11-14-3).
     pub(super) clone_lints_reported: FxHashSet<SpanKey>,
