@@ -228,3 +228,28 @@ fn a_returned_closure_moved_or_scoped_ends_its_borrow() {
         "<a\n<!\n",
     );
 }
+
+/// A method with a `self` or `mut ref self` receiver returns a borrow of
+/// `self` only (§5.4), so a closure it hands back over another bare
+/// parameter is no view result: it escapes, and capturing that parameter
+/// by move is refused, as before B-2026-11-26-74. Accepted, the caller
+/// kept the closure past a temporary argument and read freed memory. A
+/// closure over `self` or a `Copy` parameter is fine (B-2026-11-26-88).
+#[test]
+fn a_method_returns_no_closure_over_another_parameter() {
+    refused(
+        "struct K { n: i64 }\n\
+         impl K { fn mk(self, pre: String) -> Fn(String) -> String { |s| f\"{pre}{s}\" } }\n\
+         fn main() { let k = K { n: 1 }; let f = k.mk(\"<\".to_string()); println(f(\"a\")); }\n",
+        "E0515",
+        "captures `pre` by move",
+    );
+    runs_everywhere(
+        "struct K { n: i64 }\n\
+         impl K { fn mk(self, pre: String) -> Fn(String) -> String { |s| f\"{self.n}{s}\" }\n\
+         fn add(self, k: i64) -> Fn(i64) -> i64 { |s| s + k } }\n\
+         fn main() { let k = K { n: 1 }; let f = k.mk(\"<\".to_string()); println(f(\"a\")); \
+         let g = k.add(2); println(g(1)); }\n",
+        "1a\n3\n",
+    );
+}

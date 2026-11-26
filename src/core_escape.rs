@@ -164,6 +164,7 @@ pub fn analyze(program: &Program, types: Option<&NodeTypes>) -> CoreEscape {
             gen: &gen,
             gen_hits: None,
             fn_alias: FxHashMap::default(),
+            other_params: FxHashSet::default(),
         };
         w.walk_fn(f);
     }
@@ -224,6 +225,7 @@ fn generic_slots(
                 gen: &gen,
                 gen_hits: Some(Vec::new()),
                 fn_alias: FxHashMap::default(),
+                other_params: FxHashSet::default(),
             };
             w.walk_fn_generic(f, idx);
             let hits = w.gen_hits.take().unwrap_or_default();
@@ -273,6 +275,10 @@ struct Walker<'a> {
     gen_hits: Option<Vec<(usize, &'static str)>>,
     /// The function a [`Bound::FnValue`] local holds.
     fn_alias: FxHashMap<String, String>,
+    /// In a method with a `self` or `mut ref self` receiver, whose result
+    /// borrows `self` only (§5.4): its other parameters' names. A closure
+    /// handed back that names one is no view result (B-2026-11-26-88).
+    other_params: FxHashSet<String>,
 }
 
 impl Walker<'_> {
@@ -308,9 +314,15 @@ impl Walker<'_> {
                 );
             }
         }
+        self.other_params = if matches!(f.self_param, Some(SelfParam::Ref | SelfParam::MutRef)) {
+            scope.keys().cloned().collect()
+        } else {
+            FxHashSet::default()
+        };
         self.scopes.push(scope);
         self.walk_block(&f.body, Pos::Escape("returned"));
         self.scopes.pop();
+        self.other_params.clear();
     }
 
     /// [`Self::walk_fn`] for [`generic_slots`]: the parameters at `idx` are
@@ -539,7 +551,21 @@ impl Walker<'_> {
             },
             ExprKind::Closure { params, body, .. } => {
                 if let Pos::Escape(why) = pos {
-                    self.escapes(SpanKey::from_span(&e.span), why);
+                    // Handed back from a method whose result borrows `self`
+                    // only, a closure over another parameter cannot be the
+                    // view result that parameter's argument would back: it
+                    // escapes, and captures that parameter by move (§5.4,
+                    // §9.3). A caller that kept it past the argument read
+                    // freed memory (B-2026-11-26-88).
+                    let k = SpanKey::from_span(&e.span);
+                    if (why == "returned" || why == CLOSURE_RESULT)
+                        && self.names_other_param(params, body)
+                    {
+                        self.escapes(k, why);
+                        self.out.closure_result_only.remove(&k);
+                    } else {
+                        self.escapes(k, why);
+                    }
                     // An escaping closure captures by move, so a
                     // non-escaping function parameter it names is stored
                     // with it (§9.3; B-2026-11-02-31).
@@ -743,6 +769,26 @@ impl Walker<'_> {
                 }
             }
         }
+    }
+
+    /// Whether a closure with these parameters and body names one of
+    /// [`Self::other_params`] as the function's parameter, not a local
+    /// that shadows it.
+    fn names_other_param(&self, params: &[ClosureParam], body: &Expr) -> bool {
+        if self.other_params.is_empty() {
+            return false;
+        }
+        let mut bound: FxHashSet<String> = params
+            .iter()
+            .flat_map(|p| p.pattern.binding_names())
+            .collect();
+        let mut names = Vec::new();
+        names_in(body, &mut names, &mut bound);
+        names.iter().any(|(n, _)| {
+            !bound.contains(n)
+                && self.other_params.contains(n)
+                && self.scopes.iter().rposition(|s| s.contains_key(n)) == Some(0)
+        })
     }
 
     /// The non-escaping parameters the closure `e` names from outside
