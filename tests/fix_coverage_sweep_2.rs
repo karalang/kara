@@ -155,6 +155,16 @@ fn an_escaping_capture_of_a_bare_parameter_borrows_the_argument() {
         "fn main() {\n    let s = \"abc\".to_string();\n    let f = make(s, 1);\n    println(f\"{f(2)}\");\n}\n",
     );
     assert!(bound.contains("All checks passed"), "{bound}");
+    // `karac fix` binds the temporary (B-2026-11-26-80).
+    let (after, check) = fixed(
+        "escape-fix",
+        &format!("{make}fn main() {{\n    let f = make(\"abc\".to_string(), 1);\n    println(f\"{{f(2)}}\");\n}}\n"),
+    );
+    assert!(
+        after.contains("    let p = \"abc\".to_string();\n    let f = make(p, 1);\n"),
+        "{after}"
+    );
+    assert!(check.contains("All checks passed"), "{check}");
 }
 
 /// B-2026-11-16-189: `assert_eq` on the program's own type without `Debug`

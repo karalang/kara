@@ -3199,6 +3199,7 @@ impl Pipeline {
                     .or_else(|| held_tuple_borrow_copy_fix(&src, typed, &e))
                     .or_else(|| arg_borrow_clone_fix(&src, typed, &e))
                     .or_else(|| moved_arg_clone_fix(&src, typed, &e))
+                    .or_else(|| temporary_arg_hoist_fix(&src, typed, &e))
             } else if e.code == "E0509" && self.renames.is_empty() {
                 view_field_owned_fix(&src, &e).or_else(|| for_into_iter_fix(&src, typed, &e))
             } else {
@@ -5041,6 +5042,139 @@ fn arg_borrow_clone_fix(
             column: column + key.1,
         },
         replacement: ".clone()".to_string(),
+    })
+}
+
+/// B-2026-11-26-80: the machine-applicable repair for an E0516 on a
+/// temporary argument that the call's result still borrows
+/// (`let f = make("abc".to_string(), 1);` with `make` returning a view of its
+/// parameter): the temporary is bound by a `let` just before the statement,
+/// named after the parameter it is passed for, and the call passes the
+/// binding, so the value lives as long as the borrow:
+/// `let p = "abc".to_string(); let f = make(p, 1);`. One edit replaces the
+/// text from the statement's start to the argument's end.
+fn temporary_arg_hoist_fix(
+    src: &str,
+    typed: &crate::typechecker::TypeCheckResult,
+    e: &crate::mir::BorrowError,
+) -> Option<crate::typechecker::FixIt> {
+    let at = offset_at(src, e.temporary?)?;
+    // The argument: the widest typed expression starting at the temporary
+    // that ends at its `,` or `)`.
+    let len = typed
+        .expr_types
+        .keys()
+        .filter(|k| {
+            k.0 == at
+                && k.1 > 0
+                && src
+                    .get(at + k.1..)
+                    .is_some_and(|r| r.trim_start().starts_with([',', ')']))
+        })
+        .map(|k| k.1)
+        .max()?;
+    let arg = src.get(at..at + len)?;
+    // The call's `(`, and which argument this is.
+    let bytes = src.as_bytes();
+    let (mut depth, mut index, mut open) = (0i32, 0usize, None);
+    for i in (0..at).rev() {
+        match bytes[i] {
+            b')' | b']' => depth += 1,
+            b'(' | b'[' if depth > 0 => depth -= 1,
+            b'(' => {
+                open = Some(i);
+                break;
+            }
+            b'[' | b'{' | b'}' | b';' | b'"' => return None,
+            b',' if depth == 0 => index += 1,
+            _ => {}
+        }
+    }
+    let open = open?;
+    // The callee's name, and the parameter it declares at that position
+    // (a method's `self` is not one).
+    let head = src[..open].trim_end();
+    let name_start = head
+        .rfind(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .map_or(0, |i| i + 1);
+    let callee = &head[name_start..];
+    if callee.is_empty() || callee.starts_with(|c: char| c.is_ascii_digit()) {
+        return None;
+    }
+    let decl = regex::Regex::new(&format!(
+        r"\bfn\s+{}\s*(?:\[[^\]]*\])?\s*\(",
+        regex::escape(callee)
+    ))
+    .ok()?;
+    let decls: Vec<_> = decl.find_iter(src).collect();
+    let [d] = decls.as_slice() else {
+        return None;
+    };
+    let params_end = d.end() + src[d.end()..].find(')')?;
+    let param = src[d.end()..params_end]
+        .split(',')
+        .filter_map(|p| p.split(':').next())
+        .map(str::trim)
+        .filter(|p| !p.is_empty() && !p.ends_with("self"))
+        .nth(index)?;
+    if !param.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        return None;
+    }
+    // The statement: from the last `;`, `{` or `}` before the call.
+    let stmt = src[..at].rfind([';', '{', '}']).map_or(0, |i| i + 1);
+    let stmt = stmt + (src[stmt..at].len() - src[stmt..at].trim_start().len());
+    let prefix = &src[stmt..at];
+    // A loop or branch header is evaluated more than once or not at all, and
+    // a string literal's braces are no statement boundary.
+    let first = prefix
+        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .next()?;
+    if matches!(
+        first,
+        "while" | "for" | "if" | "match" | "loop" | "else" | "return"
+    ) || !prefix.matches('"').count().is_multiple_of(2)
+    {
+        return None;
+    }
+    // The name must not be one the rest of the block already uses, which
+    // the new binding would shadow.
+    let mut depth = 0i32;
+    let mut block_end = src.len();
+    for (i, c) in src[stmt..].char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' if depth == 0 => {
+                block_end = stmt + i;
+                break;
+            }
+            '}' => depth -= 1,
+            _ => {}
+        }
+    }
+    let word = |n: &str| regex::Regex::new(&format!(r"\b{}\b", regex::escape(n))).ok();
+    let rest = &src[stmt..block_end];
+    let name = [param.to_string(), format!("{param}_arg")]
+        .into_iter()
+        .find(|n| word(n).is_some_and(|w| !w.is_match(rest)))?;
+    // On its own line, the binding goes on a line of its own above.
+    let line_start = src[..stmt].rfind('\n').map_or(0, |i| i + 1);
+    let indent = &src[line_start..stmt];
+    let sep = if indent.trim().is_empty() {
+        format!("\n{indent}")
+    } else {
+        " ".to_string()
+    };
+    let before = &src[..stmt];
+    let line = before.matches('\n').count() + 1;
+    let column = stmt - line_start + 1;
+    Some(crate::typechecker::FixIt {
+        span: crate::token::Span {
+            offset: stmt,
+            length: at + len - stmt,
+            line,
+            column,
+        },
+        replacement: format!("let {name} = {arg};{sep}{prefix}{name}"),
     })
 }
 
