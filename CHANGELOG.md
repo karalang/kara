@@ -1224,6 +1224,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   from the closure's uses, as one whose body ends in the `collect()`
   already did (B-2026-11-09-40). It stopped at lowering with
   `UnsolvedParam("C")` (B-2026-11-26-77).
+- Compiled integer `Vector[T, N]` lane division follows the spec
+  (deferred.md § Portable SIMD): `MIN / -1` on a signed lane wraps to
+  `MIN` and `MIN % -1` gives 0, where `karac run` printed `784 1` and
+  `karac build` `0 0` for `i8` lanes (LLVM leaves `sdiv` / `srem` of `MIN`
+  by -1 undefined); and a lane divided by zero, with `/` or `%`, panics
+  with `division by zero` as scalar division does (B-2026-11-26-87).
 - A `match` whose moving arm assigns the scrutinee again, beside an arm
   whose pattern is a unit variant (`None`, `E.Y`) or a constant, leaves
   the scrutinee usable after it (core-semantics §3.4, §4.6). The

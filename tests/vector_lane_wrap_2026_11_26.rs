@@ -55,9 +55,6 @@ const LANES: &str = "fn main() {
 // 3410065408.
 const LANES_EXPECTED: &str = "-128 0\n4\n3410065408\n";
 
-// PREDICTS B-2026-11-26-87: compiled, `-128 / -1` and `-128 % -1` on an
-// `i8` lane are LLVM's undefined `sdiv` / `srem` overflow and print
-// garbage, so only the interpreter is pinned here.
 #[test]
 fn vector_lane_division_and_compound_assignment_wrap_interpreted() {
     let file = program("interp", LANES);
@@ -67,6 +64,39 @@ fn vector_lane_division_and_compound_assignment_wrap_interpreted() {
     let (ok, out) = karac(&["__mir-run", f]);
     assert!(ok, "{out}");
     assert_eq!(out, LANES_EXPECTED);
+}
+
+// B-2026-11-26-87: compiled, `-128 / -1` and `-128 % -1` on an `i8` lane
+// were LLVM's undefined `sdiv` / `srem` overflow and printed garbage
+// (`784 1` run, `0 0` built); a signed lane now divides by 1 there.
+#[cfg(feature = "llvm")]
+#[test]
+fn vector_lane_division_and_compound_assignment_wrap_compiled() {
+    let file = program("llvm", LANES);
+    let (ok, out) = karac(&["__mir-llvm-run", file.to_str().unwrap()]);
+    assert!(ok, "{out}");
+    assert_eq!(out, LANES_EXPECTED);
+}
+
+// A lane divided by zero panics `div_by_zero`, as scalar division does
+// (deferred.md § Portable SIMD, B-2026-11-26-87), with `/` and with `%`,
+// and the lanes before it print nothing.
+#[cfg(feature = "llvm")]
+#[test]
+fn a_vector_lane_divided_by_zero_panics_compiled() {
+    for op in ["/", "%"] {
+        let src = format!(
+            "fn main() {{\n    let a: Vector[i32, 4] = Vector[i32, 4].splat(7);\n    let mut z: Vector[i32, 4] = Vector[i32, 4].splat(2);\n    z[2] = 0;\n    let d = a {op} z;\n    println(d[0] as i64);\n}}\n"
+        );
+        let file = program(if op == "/" { "zdiv" } else { "zrem" }, &src);
+        let (ok, out) = karac(&["__mir-llvm-run", file.to_str().unwrap()]);
+        assert!(!ok, "{op}: {out}");
+        assert!(out.contains("division by zero"), "{op}: {out}");
+        assert!(
+            !out.starts_with('3') && !out.starts_with('1'),
+            "{op}: {out}"
+        );
+    }
 }
 
 #[test]

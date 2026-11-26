@@ -911,10 +911,16 @@ impl<'ctx> Cx<'ctx, '_> {
                         self.layout(bet)?.size,
                         self.layout(dt)?.size,
                     );
+                    let divides =
+                        matches!(op, BinOp::Div | BinOp::Rem) && self.int_of(et).is_some();
                     for i in 0..n {
                         let x = self.load(self.offset(pa, i * es)?, et)?;
                         let y = self.load(self.offset(pb, i * bs)?, bet)?;
-                        let v = self.binop(*op, et, x, y)?;
+                        let v = if divides {
+                            self.lane_divide(*op, et, x.into_int_value(), y.into_int_value())?
+                        } else {
+                            self.binop(*op, et, x, y)?
+                        };
                         self.store(self.offset(dst, i * ds)?, v)?;
                     }
                     return Ok(());
@@ -1298,6 +1304,53 @@ impl<'ctx> Cx<'ctx, '_> {
             (UnOp::Neg, _) => b.build_int_neg(x.into_int_value(), "").map_err(e)?.into(),
         };
         Ok(v)
+    }
+
+    /// `x / y` or `x % y` on one integer lane, as deferred.md § Portable
+    /// SIMD has it: a zero divisor panics with `div_by_zero`, as scalar
+    /// division does, and `MIN / -1` wraps to `MIN` (`MIN % -1` is 0).
+    /// LLVM's `sdiv` / `srem` of `MIN` by -1 is undefined, so a signed lane
+    /// divides by 1 there instead, which gives both answers
+    /// (B-2026-11-26-87).
+    fn lane_divide(
+        &mut self,
+        op: BinOp,
+        et: Ty,
+        x: IntValue<'ctx>,
+        y: IntValue<'ctx>,
+    ) -> R<BasicValueEnum<'ctx>> {
+        let it = y.get_type();
+        let nz = self
+            .builder
+            .build_int_compare(IntPredicate::NE, y, it.const_zero(), "")
+            .map_err(e)?;
+        self.abort_unless(nz, Self::abort_text(&AbortReason::DivByZero))?;
+        let mut y = y;
+        if self.int_of(et).is_some_and(IntTy::signed) {
+            let w = it.get_bit_width();
+            let min = if w > 64 {
+                let mut words = vec![0u64; w.div_ceil(64) as usize];
+                if let Some(top) = words.last_mut() {
+                    *top = 1 << ((w - 1) % 64);
+                }
+                it.const_int_arbitrary_precision(&words)
+            } else {
+                it.const_int(1 << (w - 1), false)
+            };
+            let b = &self.builder;
+            let at_min = b
+                .build_int_compare(IntPredicate::EQ, x, min, "")
+                .map_err(e)?;
+            let by_neg1 = b
+                .build_int_compare(IntPredicate::EQ, y, it.const_all_ones(), "")
+                .map_err(e)?;
+            let wraps = b.build_and(at_min, by_neg1, "").map_err(e)?;
+            y = b
+                .build_select(wraps, it.const_int(1, false), y, "")
+                .map_err(e)?
+                .into_int_value();
+        }
+        self.binop(op, et, x.into(), y.into())
     }
 
     /// The lane type and count of a lane vector type.
