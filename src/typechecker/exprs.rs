@@ -4532,8 +4532,11 @@ impl<'a> super::TypeChecker<'a> {
                         || tuple_literal_has_str_slot(e, slot)
                         // `(["a"].to_vec(), 1)` into `(Vec[Str], i64)`: the
                         // slot names the views the literals are, as at a
-                        // `let` (`str_elements_to_vec`; kata 2515).
-                        || (is_literal_to_vec(e) && mentions_str_view(slot))
+                        // `let` (`str_elements_to_vec`; kata 2515). So does
+                        // a narrow number: `([1, 2].to_vec(), 3)` into
+                        // `(Vec[i32], i64)` (B-2026-11-26-78).
+                        || (is_literal_to_vec(e)
+                            && (mentions_str_view(slot) || mentions_narrow_number(slot)))
                         || (library
                             && !matches!(slot, Type::Ref(_) | Type::MutRef(_))
                             && matches!(
