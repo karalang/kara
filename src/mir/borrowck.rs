@@ -4213,6 +4213,10 @@ fn main() -> () {
             "err_par_user_resource",
             "err_par_pub_clause_contract",
             "err_par_bound_clause_ceiling",
+            // The §11.2 conflict through a nested `par`, the effects
+            // pass's E0418 (B-2026-11-26-11).
+            "err_a_nested_par_write_conflicts_with_an_outer_branch_read",
+            "err_two_nested_par_branches_conflict_on_an_outer_field",
             "err_frozen_closure_escapes",
             "err_sync_own_self",
             "err_weak_plain_target",

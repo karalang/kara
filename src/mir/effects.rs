@@ -1135,8 +1135,18 @@ fn place_name(body: &Body, p: &Place) -> String {
         Some(LocalKind::User { name, .. } | LocalKind::Arg { name, .. }) => name.clone(),
         _ => format!("_{}", p.local.0),
     };
+    // A closure body's environment field is the capture, by the name it
+    // was written with (`t.k`, not `env.0`; B-2026-11-26-11).
+    let mut env = p.local.index() == 1 && !body.capture_names.is_empty();
     for e in &p.projection {
         match e {
+            ProjElem::Field(f, _) if env => {
+                env = false;
+                match body.capture_names.get(f.0 as usize) {
+                    Some(n) => s = n.clone(),
+                    None => s.push_str(&format!(".{}", f.0)),
+                }
+            }
             ProjElem::Field(f, _) => s.push_str(&format!(".{}", f.0)),
             ProjElem::ConstIndex(n) => s.push_str(&format!("[{n}]")),
             ProjElem::Subarray { from, len } => s.push_str(&format!("[{from}..{}]", from + len)),

@@ -1,0 +1,11 @@
+source = "B-2026-11-26-11"
+dedup_of = []
+expect = "error:E0418"
+exit = 1
+tags = ["concurrency", "par", "captures"]
+class = "a"
+expected_from = "spec"
+rules = ["11.2"]
+backends = []
+env = {}
+note = "core-semantics §11.2: branches may run at once, so none may write a place another uses; the nested branches write and read `t.k` through the outer branch's capture of it, and conflict (E0418) as at the top level. It got the internal E0516 'the capture of `t` is not lowered yet' before the fix. The expected.out wording of an error pin is guidance, not a byte oracle."

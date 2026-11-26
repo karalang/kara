@@ -1,0 +1,13 @@
+// A write in a nested `par` is a write by the outer branch holding it, so
+// it conflicts with a sibling outer branch reading the same field (core
+// semantics §11.2).
+struct Top { k: i64, name: String }
+
+fn main() {
+    let mut t = Top { k: 5, name: "n".to_string() };
+    let (a, b) = par {
+        { let (x, y) = par { { t.k = 1; 0 }, 2 }; x + y },
+        t.k,
+    };
+    println(f"{a} {b} {t.name}");
+}

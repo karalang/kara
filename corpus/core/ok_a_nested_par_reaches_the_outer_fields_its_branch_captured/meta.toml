@@ -1,0 +1,10 @@
+source = "B-2026-11-26-11"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["concurrency", "par", "captures"]
+expected_from = "spec"
+rules = ["9.1", "11.1"]
+backends = []
+env = {}
+note = "core-semantics §11.1 places no restriction on nesting, and §9.1 captures a local field path by field path: a `par` inside a `par` branch reads and writes the outer paths its branch captured, two and three levels deep, tuples included. Every case stopped with the internal E0516 'the capture of `t` is not lowered yet' before the fix, since the nested closure found neither a local nor a whole capture of `t`."

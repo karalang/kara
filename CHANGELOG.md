@@ -611,6 +611,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Added
 
+- A `par` nested in a `par` branch can use the fields of an outer local
+  the branch captured (core-semantics §11.1, §9.1): each nested branch
+  reads, writes or lends the field path it names, at any depth, tuples
+  included. A write beside a sibling's read of the same field is the
+  §11.2 conflict E0418, at either level, naming the field (`t.k`, not
+  `env.0`). Each stopped with the internal E0516 "the capture of `t` is
+  not lowered yet" (B-2026-11-26-11).
 - `String.to_ascii_lowercase()` and `to_ascii_uppercase()`, with Rust's
   meaning: ASCII letters change case and every other byte is kept
   (B-2026-11-26-63).

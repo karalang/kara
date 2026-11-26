@@ -28810,6 +28810,92 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     /// The symbols a closure body reads from its surroundings, in the order
     /// they first appear (core semantics §9.4).
+    /// The captures of `sym` for a closure nested in one that captured
+    /// `sym` field path by field path (`entries`, each path's place in the
+    /// enclosing environment): each path the nested body uses is captured
+    /// again, by `mut ref` when the body changes it, moved when the nested
+    /// closure takes it by value, and lent by `ref` otherwise (core
+    /// semantics §9.1, §11.1; B-2026-11-26-11). The borrow checker then
+    /// sees each nested branch's use as a use of the outer path, so a write
+    /// beside a read conflicts through the nesting (§11.2).
+    #[allow(clippy::type_complexity)]
+    fn nested_field_captures(
+        &mut self,
+        body: &Expr,
+        sym: SymbolId,
+        entries: Vec<(String, Place)>,
+        (by_value, moved, writes_it): (bool, bool, bool),
+        (caps, fields, lent, ops): (
+            &mut Vec<(SymbolId, CapMode, Ty)>,
+            &mut Vec<Option<String>>,
+            &mut Vec<bool>,
+            &mut Vec<Operand>,
+        ),
+        writes: &mut bool,
+    ) {
+        let under =
+            |x: &str, y: &str| x == y || x.strip_prefix(y).is_some_and(|r| r.starts_with('.'));
+        let overlaps = |a: &str, b: &str| under(a, b) || under(b, a);
+        // The whole paths the body names: `t.a.y` is `a.y`, not also `a`.
+        let mut inner = FxHashSet::default();
+        crate::span_visitor::for_each_expr(body, &mut |x| {
+            if let ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } =
+                &x.kind
+            {
+                inner.insert(object.id);
+            }
+        });
+        let mut used: Vec<String> = Vec::new();
+        crate::span_visitor::for_each_expr(body, &mut |x| {
+            if !inner.contains(&x.id)
+                && matches!(
+                    x.kind,
+                    ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. }
+                )
+            {
+                let (root, names) = field_chain(x);
+                if matches!(root.kind, ExprKind::Identifier(_) | ExprKind::SelfValue)
+                    && matches!(self.lcx.res.get(&root.id), Some(Res::Local(s)) if *s == sym)
+                {
+                    used.push(names.join("."));
+                }
+            }
+        });
+        let changed = self.changed_fields(body, sym);
+        for (name, p) in entries {
+            if !used.iter().any(|u| overlaps(u, &name)) {
+                continue;
+            }
+            let ft = self.place_type(&p);
+            let mutable = writes_it && changed.iter().any(|c| overlaps(c, &name));
+            if !mutable && (by_value || (moved && !self.is_copy(ft))) {
+                let op = if self.is_copy(ft) {
+                    Operand::Copy(p)
+                } else {
+                    self.use_place(p, ft)
+                };
+                caps.push((sym, CapMode::Value, ft));
+                fields.push(Some(name));
+                lent.push(false);
+                ops.push(op);
+                continue;
+            }
+            *writes |= mutable;
+            let rt = self.tys().tcx().reference(ft, mutable);
+            let r = self.temp(rt);
+            let (kind, cm) = if mutable {
+                (BorrowKind::Mut, CapMode::Mut)
+            } else {
+                (BorrowKind::Shared, CapMode::Ref)
+            };
+            self.assign(r, Rvalue::Ref(kind, p));
+            caps.push((sym, cm, rt));
+            fields.push(Some(name));
+            lent.push(false);
+            ops.push(Operand::Move(Place::local(r)));
+        }
+    }
+
     fn closure_captures(&self, body: &Expr) -> Vec<SymbolId> {
         let mut out = Vec::new();
         // The method's `self` is not a named local: its uses are found by
@@ -28820,9 +28906,13 @@ impl<'l, 'a> Bx<'l, 'a> {
         };
         for id in crate::span_visitor::expr_node_ids(body) {
             if let Some(Res::Local(sym)) = self.lcx.res.get(&id) {
+                // A binding the enclosing closure captured field by field
+                // is outer too: a `par` nested in a `par` branch reads
+                // `t.k` through the branch's capture of it (B-2026-11-26-11).
                 let outer = self.locals.contains_key(sym)
                     || self.captured.contains_key(sym)
-                    || selves.contains(&id);
+                    || selves.contains(&id)
+                    || self.captured_fields.keys().any(|(s, _)| s == sym);
                 if outer && !out.contains(sym) {
                     out.push(*sym);
                 }
@@ -29428,6 +29518,41 @@ impl<'l, 'a> Bx<'l, 'a> {
                 .is_some_and(|r| self.reaches_ref(r))
         };
         for sym in captured {
+            if !self.locals.contains_key(&sym) && !self.captured.contains_key(&sym) {
+                let mut entries: Vec<(String, Place)> = self
+                    .captured_fields
+                    .iter()
+                    .filter(|((s, _), _)| *s == sym)
+                    .map(|((_, k), p)| (k.clone(), p.clone()))
+                    .collect();
+                if !entries.is_empty() {
+                    entries.sort_by(|a, b| a.0.cmp(&b.0));
+                    let own = matches!(capture_mode, Some(ast::CaptureMode::Own));
+                    // Written as the enclosing closure lent it: a path the
+                    // body assigns or lends `mut ref`; a method call on a
+                    // path alone is only a read.
+                    let name = self
+                        .lcx
+                        .binding_syms
+                        .iter()
+                        .find(|(_, s)| **s == sym)
+                        .map(|((_, n), _)| n.clone());
+                    let writes_it = assigned.contains(&sym)
+                        || matches!(capture_mode, Some(ast::CaptureMode::MutRef))
+                        || legacy
+                            .iter()
+                            .any(|(n, m)| Some(n) == name.as_ref() && *m == OwnershipMode::MutRef);
+                    self.nested_field_captures(
+                        body,
+                        sym,
+                        entries,
+                        (escapes || own, moved.contains(&sym), writes_it),
+                        (&mut caps, &mut fields, &mut lent, &mut ops),
+                        &mut writes,
+                    );
+                    continue;
+                }
+            }
             let place = match (self.locals.get(&sym), self.captured.get(&sym)) {
                 (Some(&l), _) => Place::local(l),
                 (None, Some(p)) => p.clone(),

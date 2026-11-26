@@ -1,0 +1,13 @@
+// Two branches of a nested `par` that write and read the same field of an
+// outer local conflict, as they would at the top level (core semantics
+// §11.2).
+struct Top { k: i64, name: String }
+
+fn main() {
+    let mut t = Top { k: 5, name: "n".to_string() };
+    let (a, b) = par {
+        { let (x, y) = par { { t.k = 1; 0 }, t.k }; x + y },
+        3,
+    };
+    println(f"{a} {b} {t.name}");
+}

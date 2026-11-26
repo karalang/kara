@@ -1,0 +1,32 @@
+// A `par` nested in a `par` branch uses the fields of an outer local that
+// the branch captured field by field (core semantics §11.1, §9.1): each
+// nested branch reads, writes or lends the path it names, at any depth,
+// tuples included, and the outer local keeps what the branches wrote.
+struct In { x: i64, y: i64 }
+struct Top { a: In, b: In, k: i64, name: String }
+
+fn main() {
+    let t0 = Top { a: In { x: 1, y: 2 }, b: In { x: 3, y: 4 }, k: 5, name: "nm".to_string() };
+    let (a, b) = par { { let (x, y) = par { t0.k, 2 }; x + y }, 3 };
+    println(f"read: {a} {b}");
+
+    let mut t = Top { a: In { x: 1, y: 2 }, b: In { x: 3, y: 4 }, k: 5, name: "nm".to_string() };
+    let (c, d) = par {
+        { let (x, y) = par { { t.a.x = 10; t.a.x }, t.a.y + t.name.len() }; x + y },
+        t.b.x + t.k,
+    };
+    println(f"write: {c} {d} {t.a.x} {t.name}");
+
+    let (e, f) = par {
+        { let (p, q) = par { { let (r, s) = par { t.b.y, t.k }; r + s }, t.name.len() }; p + q },
+        t.a.y,
+    };
+    println(f"three deep: {e} {f}");
+
+    let (g, h) = par { { let (x, y) = par { { t.a.x = 7; 0 }, t.a.y }; x + y }, t.k };
+    println(f"siblings: {g} {h} {t.a.x}");
+
+    let pair = (1, (2, 3));
+    let (i, j) = par { { let (x, y) = par { pair.1.0, pair.1.1 }; x * y }, pair.0 };
+    println(f"tuple: {i} {j}");
+}
