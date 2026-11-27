@@ -57,7 +57,7 @@ fn karac(args: &[&str]) -> (Option<i32>, String, String) {
     )
 }
 
-// PREDICTS B-2026-11-27-NESTED: `karac check` reports E0500 at the second use;
+// PREDICTS B-2026-11-27-66: `karac check` reports E0500 at the second use;
 // today the MIR move check stops the run instead.
 #[test]
 fn an_outer_task_local_used_after_an_inner_spawn_does_not_run() {

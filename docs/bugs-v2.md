@@ -58,8 +58,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 806 |
-| false-positive | 409 |
+| diagnostics | 808 |
+| false-positive | 411 |
 | missing-feature | 271 |
 | perf | 206 |
 | other | 165 |
@@ -76,8 +76,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 984 |
-| mir | 356 |
+| typecheck | 987 |
+| mir | 358 |
 | mir-llvm | 342 |
 | cli | 328 |
 | parser | 170 |
@@ -125,6 +125,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-27-51 | 2026-11-27 | typecheck | low | A function returning a view with no parameter it could borrow from is accepted (`fn mk(n: i64) -> Vec[ref String] { Vec.new() }`), where the core-semantics §5.4 signature rule makes it an error | — |
 | B-2026-11-27-52 | 2026-11-27 | typecheck | low | E0509 for a generic instance that stores a view where a view may not go is reported at the generic body's line only; core-semantics §5.8 puts it at the instantiation site with a note at the body | — |
 | B-2026-11-27-61 | 2026-11-27 | mir | medium | A closure that suspends (a `Mutex.lock`, `recv`, `send` or `join` in it) passed to a native that calls it synchronously (`sort_by`, `sort_by_key`, `retain`, `Map.entry(k).or_insert_with`) passes `karac check`; `karac run` and `karac build` then stop with a bare 'error[mir]: ... main.c0 suspends and is passed to `Vec[i64].sort_by`, which calls it where it cannot wait', with no code, no span and no fix | — |
+| B-2026-11-27-66 | 2026-11-27 | typecheck+mir | medium | A move into a closure nested in another closure's body, followed by a use of the place in the outer closure's body, passes `karac check`; run and build stop in the MIR move check (`use of _2, which may have been moved or never initialized`), with no E0500 and no span | — |
+| B-2026-11-27-67 | 2026-11-27 | mir | medium | MIR lowering moves every capture of a closure assigned to an existing function-typed local (`f = || s.len()`), even a place declared before `f` that outlives it, so `println(s)` afterwards passes `karac check` and stops every lane in the MIR move check | — |
+| B-2026-11-27-68 | 2026-11-27 | typecheck | medium | A closure handed to a generic parameter that its callee stores into the call's own result (`fn hold[F](f: own F) -> Hold[F] { Hold { f: f } }`) is treated as escaping, so its captures move: `let h = hold(|| s.len() + t); println((h.f)()); println(s);` is refused E0500, where the cs.670 ruling makes `h` borrow `s` | — |
+| B-2026-11-27-69 | 2026-11-27 | typecheck | low | Passing an `OnceFn` closure to an `own MutFn()` slot is refused with "cannot pass once-callable closure where 'Fn()' is expected": the message names the slot `Fn()` because the resolved function type carries no `MutFn` kind | — |
 
 ### Relocated
 
