@@ -1546,7 +1546,7 @@ impl DiagnosticJson {
             let carried = d
                 .extra_json
                 .as_deref()
-                .is_some_and(|e| e.contains("\"replacement\":"));
+                .is_some_and(|e| e.contains("\"replacement\":") || e.contains("\"fix_diff\":"));
             if !carried {
                 write!(
                     entry,
@@ -1822,35 +1822,59 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
             // (resolver/parse/effect/ownership) uses, so `karac fix` and the
             // Mend loop detect typecheck fixes uniformly. The nested
             // `"fix_it"`/`"fixes"` forms below stay for IDE consumers.
-            let replacement_json = err.fix_it.as_ref().map(|f| {
-                format!(
-                    "\"replacement\":{{\"offset\":{},\"length\":{},\"text\":{}}}",
-                    f.span.offset,
-                    f.span.length,
-                    json_string(&f.replacement),
-                )
-            });
-            // A multi-edit repair (`error_fix_diffs`), rendered as the other
-            // phases render theirs: `"fix_diff":[{...},{...}]`.
-            let replacement_json = replacement_json.or_else(|| {
-                t.error_fix_diffs
-                    .get(&crate::resolver::SpanKey::from_span(&err.span))
-                    .filter(|v| !v.is_empty())
-                    .map(|edits| {
-                        let items: Vec<String> = edits
-                            .iter()
-                            .map(|e| {
-                                format!(
-                                    "{{\"offset\":{},\"length\":{},\"text\":{}}}",
-                                    e.offset,
-                                    e.length,
-                                    json_string(&e.replacement),
-                                )
-                            })
-                            .collect();
-                        format!("\"fix_diff\":[{}]", items.join(","))
-                    })
-            });
+            // The fix-it, and the multi-edit repair (`error_fix_diffs`) that
+            // `karac fix` applies beside it (a second literal's annotation),
+            // as one `"fix_diff"` when there are both, so an editor's quick
+            // fix makes the change `karac fix` makes (B-2026-11-27-63).
+            let mut edits: Vec<(usize, usize, String)> = Vec::new();
+            let mut fix_dropped = false;
+            if let Some(f) = &err.fix_it {
+                // `own ` on a trait impl method's parameter the trait
+                // borrows goes on the trait's too, as one fix, or is no fix
+                // (B-2026-11-18-66), as `karac fix` applies it: alone, an
+                // editor's quick fix and E0288's undo alternate.
+                let locked = (f.span.length == 0 && f.replacement == "own ")
+                    .then(|| t.trait_locked_params.get(&f.span.offset))
+                    .flatten();
+                match locked {
+                    Some(None) => fix_dropped = true,
+                    Some(Some(at)) => {
+                        edits.push((*at, 0, "own ".to_string()));
+                        edits.push((f.span.offset, 0, "own ".to_string()));
+                    }
+                    None => edits.push((f.span.offset, f.span.length, f.replacement.clone())),
+                }
+            }
+            if let Some(diff) = t
+                .error_fix_diffs
+                .get(&crate::resolver::SpanKey::from_span(&err.span))
+            {
+                for e in diff {
+                    let edit = (e.offset, e.length, e.replacement.clone());
+                    if !edits.contains(&edit) {
+                        edits.push(edit);
+                    }
+                }
+            }
+            let replacement_json = match edits.as_slice() {
+                [] => None,
+                [(offset, length, text)] if err.fix_it.is_some() => Some(format!(
+                    "\"replacement\":{{\"offset\":{offset},\"length\":{length},\"text\":{}}}",
+                    json_string(text),
+                )),
+                _ => {
+                    let items: Vec<String> = edits
+                        .iter()
+                        .map(|(offset, length, text)| {
+                            format!(
+                                "{{\"offset\":{offset},\"length\":{length},\"text\":{}}}",
+                                json_string(text),
+                            )
+                        })
+                        .collect();
+                    Some(format!("\"fix_diff\":[{}]", items.join(",")))
+                }
+            };
             diags.add(DiagEntry {
                 id: &format!("d{id_counter}"),
                 severity: "error",
@@ -1863,7 +1887,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 suggestion: err.help.as_deref(),
                 extra_json: replacement_json,
                 lint_name: err.lint_name.as_deref(),
-                fix_it: err.fix_it.as_ref(),
+                fix_it: err.fix_it.as_ref().filter(|_| !fix_dropped),
                 class: Some(err.class.map(|c| c.as_str()).unwrap_or("OTHER")),
                 expected: err.expected.as_deref(),
                 got: err.got.as_deref(),

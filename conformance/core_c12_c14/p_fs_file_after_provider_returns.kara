@@ -2,6 +2,8 @@
 // its provider; once the with_provider call has returned every operation on
 // it is Err(ProviderUnavailable), and its drop does nothing. On a fake's
 // file, seek returns Err(Unsupported).
+import std.io.{File, FileSystemProvider, OpenOptions};
+
 struct Fake { reads: i64 }
 impl FileSystemProvider for Fake {
     fn open(mut ref self, path: Str, opts: ref OpenOptions) -> Result[i64, IoError] { Ok(7) }

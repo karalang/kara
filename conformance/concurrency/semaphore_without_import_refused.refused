@@ -1,0 +1,1 @@
+`Semaphore` is in the library module `std.sync`, which a program imports before it uses it: `import std.sync.{Semaphore};`

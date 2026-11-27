@@ -236,6 +236,95 @@ pub fn import_point(src: &str) -> (usize, bool) {
     }
 }
 
+/// The names outside `import` declarations that `src` uses, as identifier
+/// tokens.
+fn names_used(src: &str) -> HashSet<String> {
+    let mut used = HashSet::new();
+    let mut in_import = false;
+    for t in crate::tokenize(src) {
+        match t.token {
+            Token::Import => in_import = true,
+            Token::Semicolon => in_import = false,
+            Token::Identifier { name, .. } if !in_import => {
+                used.insert(name);
+            }
+            _ => {}
+        }
+    }
+    used
+}
+
+/// `after`, a fix pass's rewrite of `before`, with each library name an
+/// `import` brings in taken out of that import when `before` used it and
+/// `after` no longer does: the fix removed its last use (the deprecated
+/// `MemoryOrdering` arguments, B-2026-11-27-64), so the import would name
+/// nothing. An import left with no name goes, with its line.
+pub fn drop_imports_left_unused(before: &str, after: &str) -> String {
+    let was = names_used(before);
+    let now = names_used(after);
+    let gone = |n: &str| was.contains(n) && !now.contains(n);
+    let parsed = crate::parse_shared(after);
+    let mut edits: Vec<(usize, usize, String)> = Vec::new();
+    for item in &parsed.program.items {
+        let Item::Import(imp) = item else { continue };
+        let module = imp.path.join(".");
+        let Some((_, names)) = IMPORT_REQUIRED_MODULES.iter().find(|(m, _)| *m == module) else {
+            continue;
+        };
+        if imp.is_wildcard || imp.is_pub || imp.items.is_empty() {
+            continue;
+        }
+        let bound = |ii: &crate::ast::ImportItem| ii.alias.clone().unwrap_or(ii.name.clone());
+        let unused: Vec<&crate::ast::ImportItem> = imp
+            .items
+            .iter()
+            .filter(|ii| names.contains(&ii.name.as_str()) && gone(&bound(ii)))
+            .collect();
+        if unused.is_empty() {
+            continue;
+        }
+        let start = imp.span.offset;
+        let mut end = imp.span.offset + imp.span.length;
+        if after[end..].starts_with(';') {
+            end += 1;
+        }
+        if unused.len() == imp.items.len() {
+            // The whole declaration, with its line.
+            let line_start = after[..start].rfind('\n').map_or(0, |i| i + 1);
+            let line_end = after[end..].find('\n').map_or(after.len(), |i| end + i + 1);
+            if after[line_start..start].trim().is_empty() && after[end..line_end].trim().is_empty()
+            {
+                edits.push((line_start, line_end - line_start, String::new()));
+            } else {
+                edits.push((start, end - start, String::new()));
+            }
+            continue;
+        }
+        let keep: Vec<String> = imp
+            .items
+            .iter()
+            .filter(|ii| !unused.iter().any(|u| std::ptr::eq(*u, *ii)))
+            .map(|ii| match &ii.alias {
+                Some(a) => format!("{} as {a}", ii.name),
+                None => ii.name.clone(),
+            })
+            .collect();
+        edits.push((
+            start,
+            end - start,
+            format!("import {module}.{{{}}};", keep.join(", ")),
+        ));
+    }
+    let mut out = after.to_string();
+    edits.sort_by_key(|e| std::cmp::Reverse(e.0));
+    for (at, len, text) in edits {
+        if after.get(at..at + len).is_some() {
+            out.replace_range(at..at + len, &text);
+        }
+    }
+    out
+}
+
 /// A library item a program names only through its import, offered by
 /// completion: its name, its module, and the edit adding its import
 /// (`None` when the program imports it already). A name the program

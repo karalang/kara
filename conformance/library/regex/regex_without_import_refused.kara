@@ -1,5 +1,3 @@
-import std.regex.{Regex};
-
 fn main() {
     let re = Regex.compile("a+").unwrap();
     println(re.is_match("caat"));

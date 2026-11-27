@@ -1,6 +1,8 @@
 // cs.1010 / cs.1011: the library's provider traits give every method a
 // default body that panics, naming the resource and method, so a fake states
 // only what it uses and never reaches the real source by accident.
+import std.time.{ClockProvider};
+
 struct NoClock { }
 impl ClockProvider for NoClock { }
 fn main() {

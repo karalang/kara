@@ -1,5 +1,7 @@
 // cs.1004 / cs.1006: Clock has a default provider in scope everywhere; an
 // override is an ordinary provider for its extent.
+import std.time.{ClockProvider};
+
 struct Fixed { t: i64 }
 impl ClockProvider for Fixed { fn now(ref self) -> i64 { self.t } }
 fn hour() -> i64 { Clock.now() / 3600 }

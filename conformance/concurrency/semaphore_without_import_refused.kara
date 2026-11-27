@@ -1,4 +1,3 @@
-import std.sync.{Semaphore};
 fn main() {
     let s = Semaphore.new(1);
     println(f"{s.acquire(10).is_ok()}");

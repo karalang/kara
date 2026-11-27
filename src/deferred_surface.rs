@@ -171,6 +171,20 @@ fn section_for(message: &str) -> Option<&'static str> {
             .find(|(m, i, _)| *m == module && *i == item)
             .map(|(_, _, s)| *s);
     }
+    // A module of globals refuses an item it lacks as "`std.random` has
+    // no item `normal`" (B-2026-11-27-65).
+    if let Some(module) = quoted(message, "`", '`') {
+        let item = message
+            .split(" has no item `")
+            .nth(1)
+            .and_then(|rest| rest.split('`').next());
+        if let Some(item) = item {
+            return ITEMS
+                .iter()
+                .find(|(m, i, _)| *m == module && *i == item)
+                .map(|(_, _, s)| *s);
+        }
+    }
     if let Some(method) = quoted(message, "no method '", '\'') {
         let ty = message
             .split(" on type '")
@@ -204,7 +218,12 @@ pub(crate) fn annotate(message: &mut String) -> bool {
         Some(start) if message.starts_with("unknown item `") => message[start + 12..]
             .find('`')
             .map_or(message.len(), |end| start + 12 + end + 1),
-        _ => message.len(),
+        _ => match message.find(" has no item `") {
+            Some(start) if message.starts_with('`') => message[start + 14..]
+                .find('`')
+                .map_or(message.len(), |end| start + 14 + end + 1),
+            _ => message.len(),
+        },
     };
     message.insert_str(at, &note(section));
     true
@@ -236,6 +255,12 @@ mod tests {
             "unknown item `normal` in module `std.random`: it is deferred (docs/deferred.md § \
              `std.random` — Distribution Extensions) and not in 0.8; available: next_u64"
         );
+        assert_eq!(
+            annotated("`std.random` has no item `normal`; its items are next_u64"),
+            "`std.random` has no item `normal`: it is deferred (docs/deferred.md § \
+             `std.random` — Distribution Extensions) and not in 0.8; its items are next_u64"
+        );
+        assert!(annotated("`std.random` has no item `seed`").ends_with("`seed`"));
         assert!(annotated("no method 'read_at' on type 'File'")
             .contains("§ Positional File I/O and Advisory Locking"));
         assert!(annotated("undefined type 'u1'").contains("§ Bitfield Types"));

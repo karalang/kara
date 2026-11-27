@@ -572,6 +572,8 @@ fn fix_pass(
             }
         }
     }
+    // A fix that removed a library name's last use takes its import too.
+    let rewritten = crate::library_imports::drop_imports_left_unused(&source, &rewritten);
     if let Err(e) = std::fs::write(filename, &rewritten) {
         eprintln!("error: failed to write {filename}: {e}");
         process::exit(1);

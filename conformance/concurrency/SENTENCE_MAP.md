@@ -128,9 +128,9 @@ Each normative sentence of the page, split into units, and the cell or script th
 | con.122 | `Mutex[T]` | A `sync` type holds its mutable state in `Mutex[T]` and `Atomic[T]` fields. | mutex (the page's sync Stats, and a Mutex on its own); atomics (sync Metrics) |
 | con.123 | `Mutex[T]` | Their methods take a borrowed `self`, so those fields are never written `mut` ([design.md §11](../design.md#sync-types)). | mutex (the page's sync Stats, and a Mutex on its own); atomics (sync Metrics) |
 | con.124 | `Mutex[T]` | A `Mutex` can also be used on its own. | mutex (the page's sync Stats, and a Mutex on its own); atomics (sync Metrics) |
-| con.125 | `Semaphore` | code: impl Semaphore { fn new(permits: i64) -> Semaphore fn acquire(ref self, timeout: i64) -> Result[(), SemaphoreError] fn release(ref sel | semaphore; semaphore_import_refused |
-| con.126 | `Semaphore` | `Semaphore` and `SemaphoreError` are in the prelude, so a program names them without an import (`import std.sync.{Semaphore}` is refused). | semaphore; semaphore_import_refused |
-| con.127 | `Semaphore` | A counting semaphore: | semaphore; semaphore_import_refused |
+| con.125 | `Semaphore` | code: impl Semaphore { fn new(permits: i64) -> Semaphore fn acquire(ref self, timeout: i64) -> Result[(), SemaphoreError] fn release(ref sel | semaphore; semaphore_without_import_refused |
+| con.126 | `Semaphore` | `Semaphore` and `SemaphoreError` are items of `std.sync`, so a program imports them (`import std.sync.{Semaphore, SemaphoreError};`) before it names them. | semaphore; semaphore_without_import_refused |
+| con.127 | `Semaphore` | A counting semaphore: | semaphore; semaphore_without_import_refused |
 | con.128 | `Semaphore` | `new` starts it with `permits` free (a negative count is 0). | semaphore (a negative count is 0) |
 | con.129 | `Semaphore` | `acquire` takes a free permit. | semaphore (acquire outside a task waits its timeout and fails) |
 | con.130 | `Semaphore` | With none free, the task waits until another task's `release` frees one, or until `timeout` milliseconds have passed, when it returns `Err(S | semaphore (acquire outside a task waits its timeout and fails) |
