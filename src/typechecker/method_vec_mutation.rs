@@ -117,96 +117,7 @@ impl<'a> super::TypeChecker<'a> {
                 // it when inferred alone, so it is checked against the slot,
                 // as a `let` with an annotation checks it.
                 let arg = &args[0].value;
-                let ctor = |name: &str| matches!(name, "Ok" | "Err" | "Some" | "None");
-                let open_value = match &arg.kind {
-                    ExprKind::ArrayLiteral(es) => {
-                        es.is_empty()
-                            && (matches!(
-                                &elem,
-                                Type::Named { name, .. } if name == "Vec" || name == "VecDeque"
-                            ) || matches!(&elem, Type::Array { .. }))
-                    }
-                    ExprKind::Identifier(n) => n == "None",
-                    // A closure into a function-typed element takes its
-                    // parameter types from the element, as a closure passed
-                    // for a function parameter does (`ops.push(|x, n| x + n)`
-                    // on a `Vec[Fn(i64, i64) -> i64]`, kata 2059). Only a
-                    // closure with an unannotated parameter needs it; the
-                    // rest keep the inferred path, whose slot check still
-                    // refuses a once-callable closure in a `Fn` slot (E0235).
-                    ExprKind::Closure { params, .. } => {
-                        params.iter().any(|p| p.ty.is_none())
-                            && matches!(
-                                resolve_type_var_top(&elem, &self.env.substitutions),
-                                Type::Function { .. }
-                            )
-                    }
-                    // A literal into a `Str` slot is a `Str` (B-2026-10-14-68).
-                    ExprKind::StringLit(_) => super::exprs::is_str_view(&resolve_type_var_top(
-                        &elem,
-                        &self.env.substitutions,
-                    )),
-                    // A constructor whose literal arguments the slot types,
-                    // `Vec.filled(n, 0)` into a `Vec[Vec[u64]]`
-                    // (B-2026-10-29-24).
-                    // B-2026-11-18-50 — and a user enum's variant, whose
-                    // payload's borrowed number the slot copies in.
-                    ExprKind::Call { callee, .. } if self.callee_is_variant_constructor(callee) => {
-                        true
-                    }
-                    ExprKind::Call { callee, .. } => match &callee.kind {
-                        ExprKind::Identifier(n) => ctor(n),
-                        ExprKind::Path { segments, .. } => {
-                            segments.last().is_some_and(|n| ctor(n))
-                                || super::exprs::ctor_with_literal_args(arg)
-                        }
-                        _ => false,
-                    },
-                    // B-2026-11-18-50 — a generic struct (or struct-shaped
-                    // variant) literal takes its parameters from the slot, as
-                    // under an annotated `let`: `Reverse { value: x }` into a
-                    // `Vec[Reverse[i32]]` with `x: ref i32`.
-                    ExprKind::StructLiteral { .. } => true,
-                    // The library's `collect` (on the MIR pipeline) is
-                    // generic in its target; the legacy one makes a `Vec`.
-                    ExprKind::MethodCall { method, args, .. } => {
-                        self.library_methods_from_source && method == "collect" && args.is_empty()
-                    }
-                    // B-2026-10-14-19 — and a tuple literal holding one.
-                    ExprKind::Tuple(es) => {
-                        (self.library_methods_from_source
-                            && matches!(&elem, Type::Tuple(_))
-                            && es.iter().any(super::exprs::is_bare_collect))
-                            // design.md § `dyn Trait`: an element coerces
-                            // into its `dyn` slot (`(path, Hello {})` into a
-                            // `Vec[(String, dyn Handler)]`).
-                            || super::exprs::tuple_has_dyn_slot(&resolve_type_var_top(
-                                &elem,
-                                &self.env.substitutions,
-                            ))
-                            // And one holding `Some(x)`, `Ok(x)` or `Err(x)`,
-                            // checked against its slot as one pushed alone
-                            // is, so a borrowed `x` is copied in:
-                            // `below.push((r, Some(node)))` into a
-                            // `Vec[(Node, Option[Node])]` (kata 1660).
-                            || (matches!(
-                                resolve_type_var_top(&elem, &self.env.substitutions),
-                                Type::Tuple(ref slots) if slots.len() == es.len()
-                            ) && es.iter().any(|e| match &e.kind {
-                                ExprKind::Call { callee, .. } => matches!(
-                                    &callee.kind,
-                                    ExprKind::Identifier(n) if matches!(n.as_str(), "Some" | "Ok" | "Err")
-                                // Or a constructor whose literal arguments
-                                // the slot types, as one pushed alone is:
-                                // `(Vec.filled(n, 20000), 1, 2)` into a
-                                // `Vec[(Vec[i32], i32, i32)]` (kata 1803,
-                                // B-2026-11-26-86).
-                                ) || super::exprs::ctor_with_literal_args(e),
-                                _ => false,
-                            }))
-                    }
-                    _ => false,
-                };
+                let open_value = self.element_arg_is_open(arg, &elem);
                 // B-2026-10-18-42 — an `if` or `match` whose every value is an
                 // unsuffixed number takes the element's type, as a bare
                 // literal does: each literal is checked against it.
@@ -399,7 +310,7 @@ impl<'a> super::TypeChecker<'a> {
             if let Some(elem) = element_ty {
                 let idx_ty = self.infer_expr(&args[0].value);
                 self.check_i64_arg(&args[0].value, &idx_ty);
-                let val_ty = self.infer_element_arg(&args[1].value, &elem);
+                let val_ty = self.store_element_arg(&args[1].value, &elem);
                 // An owned local inserted into a `ref` slot is lent, as
                 // `push` lends it (v2 core §5.3; B-2026-11-02-27).
                 self.note_view_lent_into_ref(&args[1].value, &elem, true);
@@ -748,7 +659,7 @@ impl<'a> super::TypeChecker<'a> {
                 _ => None,
             };
             if let Some(elem) = element_ty {
-                let arg_ty = self.infer_element_arg(&args[0].value, &elem);
+                let arg_ty = self.store_element_arg(&args[0].value, &elem);
                 // An owned local pushed into a `ref` slot is lent, as `push`
                 // lends it (v2 core §5.3; B-2026-11-02-27).
                 self.note_view_lent_into_ref(&args[0].value, &elem, true);
@@ -786,6 +697,121 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
         None
+    }
+
+    /// The value `insert`, `push_back` or `push_front` stores: an open one
+    /// ([`Self::element_arg_is_open`]) is checked against the slot, as
+    /// `push` checks it; anything else is inferred and the caller checks it
+    /// (B-2026-11-26-9).
+    fn store_element_arg(&mut self, arg: &Expr, elem: &Type) -> Type {
+        if self.element_arg_is_open(arg, elem) && super::exprs::expectation_is_concrete(elem) {
+            let checked = self.check_expr(arg, elem);
+            // A closure checked against the slot has had its slot check
+            // there, as in `push`.
+            if matches!(arg.kind, ExprKind::Closure { .. }) {
+                elem.clone()
+            } else {
+                checked
+            }
+        } else {
+            self.infer_element_arg(arg, elem)
+        }
+    }
+
+    /// Whether a value stored into a sequence slot of type `elem` leaves a
+    /// type parameter (or a literal) that only the slot can fix, so it is
+    /// checked against the slot, as a `let` with an annotation checks it.
+    /// `push`, `insert`, `push_back` and `push_front` all ask it: the last
+    /// three once inferred such a value alone, so `v.insert(0, it.collect())`
+    /// reached lowering with its target unsolved (B-2026-11-26-9).
+    fn element_arg_is_open(&self, arg: &Expr, elem: &Type) -> bool {
+        let ctor = |name: &str| matches!(name, "Ok" | "Err" | "Some" | "None");
+        match &arg.kind {
+            ExprKind::ArrayLiteral(es) => {
+                es.is_empty()
+                    && (matches!(
+                        elem,
+                        Type::Named { name, .. } if name == "Vec" || name == "VecDeque"
+                    ) || matches!(elem, Type::Array { .. }))
+            }
+            ExprKind::Identifier(n) => n == "None",
+            // A closure into a function-typed element takes its
+            // parameter types from the element, as a closure passed
+            // for a function parameter does (`ops.push(|x, n| x + n)`
+            // on a `Vec[Fn(i64, i64) -> i64]`, kata 2059). Only a
+            // closure with an unannotated parameter needs it; the
+            // rest keep the inferred path, whose slot check still
+            // refuses a once-callable closure in a `Fn` slot (E0235).
+            ExprKind::Closure { params, .. } => {
+                params.iter().any(|p| p.ty.is_none())
+                    && matches!(
+                        resolve_type_var_top(elem, &self.env.substitutions),
+                        Type::Function { .. }
+                    )
+            }
+            // A literal into a `Str` slot is a `Str` (B-2026-10-14-68).
+            ExprKind::StringLit(_) => {
+                super::exprs::is_str_view(&resolve_type_var_top(elem, &self.env.substitutions))
+            }
+            // A constructor whose literal arguments the slot types,
+            // `Vec.filled(n, 0)` into a `Vec[Vec[u64]]`
+            // (B-2026-10-29-24).
+            // B-2026-11-18-50 — and a user enum's variant, whose
+            // payload's borrowed number the slot copies in.
+            ExprKind::Call { callee, .. } if self.callee_is_variant_constructor(callee) => true,
+            ExprKind::Call { callee, .. } => match &callee.kind {
+                ExprKind::Identifier(n) => ctor(n),
+                ExprKind::Path { segments, .. } => {
+                    segments.last().is_some_and(|n| ctor(n))
+                        || super::exprs::ctor_with_literal_args(arg)
+                }
+                _ => false,
+            },
+            // B-2026-11-18-50 — a generic struct (or struct-shaped
+            // variant) literal takes its parameters from the slot, as
+            // under an annotated `let`: `Reverse { value: x }` into a
+            // `Vec[Reverse[i32]]` with `x: ref i32`.
+            ExprKind::StructLiteral { .. } => true,
+            // The library's `collect` (on the MIR pipeline) is
+            // generic in its target; the legacy one makes a `Vec`.
+            ExprKind::MethodCall { method, args, .. } => {
+                self.library_methods_from_source && method == "collect" && args.is_empty()
+            }
+            // B-2026-10-14-19 — and a tuple literal holding one.
+            ExprKind::Tuple(es) => {
+                (self.library_methods_from_source
+                    && matches!(elem, Type::Tuple(_))
+                    && es.iter().any(super::exprs::is_bare_collect))
+                    // design.md § `dyn Trait`: an element coerces
+                    // into its `dyn` slot (`(path, Hello {})` into a
+                    // `Vec[(String, dyn Handler)]`).
+                    || super::exprs::tuple_has_dyn_slot(&resolve_type_var_top(
+                        elem,
+                        &self.env.substitutions,
+                    ))
+                    // And one holding `Some(x)`, `Ok(x)` or `Err(x)`,
+                    // checked against its slot as one pushed alone
+                    // is, so a borrowed `x` is copied in:
+                    // `below.push((r, Some(node)))` into a
+                    // `Vec[(Node, Option[Node])]` (kata 1660).
+                    || (matches!(
+                        resolve_type_var_top(elem, &self.env.substitutions),
+                        Type::Tuple(ref slots) if slots.len() == es.len()
+                    ) && es.iter().any(|e| match &e.kind {
+                        ExprKind::Call { callee, .. } => matches!(
+                            &callee.kind,
+                            ExprKind::Identifier(n) if matches!(n.as_str(), "Some" | "Ok" | "Err")
+                        // Or a constructor whose literal arguments
+                        // the slot types, as one pushed alone is:
+                        // `(Vec.filled(n, 20000), 1, 2)` into a
+                        // `Vec[(Vec[i32], i32, i32)]` (kata 1803,
+                        // B-2026-11-26-86).
+                        ) || super::exprs::ctor_with_literal_args(e),
+                        _ => false,
+                    }))
+            }
+            _ => false,
+        }
     }
 
     /// An argument for a container's element slot. A list literal follows
