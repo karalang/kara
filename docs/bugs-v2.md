@@ -133,7 +133,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-27-4 | 2026-11-27 | typecheck | low | `a.min(b)` / `a.max(b)` on a tuple is refused E0236 "no method 'min' on type '(i64, i64)'" with no hint and no fix, where a tuple compares and takes the free `min(a, b)` / `max(a, b)` | — |
 | B-2026-11-27-5 | 2026-11-27 | ownership | medium | `let mut sorted = costs; sorted.sort();` with `costs` a bare parameter: `karac fix` declares `costs: mut ref` and marks every call site `mut`, sorting the caller's list (and writing `mut [1, 3, 2, 4, 1]` on literals), where E0517 also offers `own` or `.clone()` for a copy of the function's own; the same-name `let mut s = s;` is given `own` (B-2026-11-17-146) | — |
 | B-2026-11-27-6 | 2026-11-27 | typecheck | medium | a `fold` closure with its accumulator pattern annotated, `|(prev, total): (i64, i64), x| (x, total + x.max(prev))` over `nums.iter()`, is refused "expected 'i64', found 'ref i64'" at the tuple's `x`, where the same closure unannotated and `let p: (i64, i64) = (x, 1)` pass | — |
-| B-2026-11-27-7 | 2026-11-27 | typecheck | medium | A collection's `.clone()` and `to_vec` of an unbounded type parameter pass `karac check`: `fn f[T](v: Vec[T]) -> Vec[T] { v.clone() }` clones a `Vec[T]` field by field whatever `T` is (a `Vec[Mutex[i64]]` becomes a second set of independent mutexes); the remainder of B-2026-11-25-48 | — |
 
 ### Relocated
 
@@ -2405,6 +2404,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-91 | cli | low | `karac catalog` reports a bare parameter `x: T` with mode `own`, where design.md §7, `karac explain` and `karac query ownership` all read it as borro… | 836e368319 |
 | B-2026-11-26-94 | interp+mir-llvm+runtime | low | The HTTP server answers 400 to a request whose header value holds a byte that is not UTF-8 (obs-text such as Latin-1 `caf\xe9`), which RFC 9110 §5.5… | c874d5b637 |
 | B-2026-11-27-1 | typecheck | medium | Regression from the B-2026-11-26-1 fix (293934a062): a literal left open past an `as` cast is refused as a tensor index (`t[i, j] = (i * 3 + j) as f3… | 1a7d6a29e6 |
+| B-2026-11-27-7 | typecheck | medium | A collection's `.clone()` and `to_vec` of an unbounded type parameter pass `karac check`: `fn f[T](v: Vec[T]) -> Vec[T] { v.clone() }` clones a `Vec[… | b7e16eae6c |
 
 </details>
 
