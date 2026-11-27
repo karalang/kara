@@ -1,0 +1,10 @@
+source = "B-2026-11-27-49"
+dedup_of = []
+expect = "error:E0516"
+exit = 1
+tags = ["references"]
+expected_from = "spec"
+rules = ["5.3"]
+backends = []
+env = {}
+note = "core-semantics cs.340: cs.337, cs.340: `x = ref r.f` borrows what `r` borrows (`a`), at `a.f`. Reassigning `r` changes only which value `r` holds; `a.f` stays borrowed until `x`'s last use, so writing `a.f` is refused, at the assignment (line 12). The expected.out wording of an error pin is guidance, not a byte oracle."

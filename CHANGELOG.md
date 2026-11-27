@@ -1272,6 +1272,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- A reference local may be reassigned while a borrow through it
+  (`let x = ref r.f`, `mut ref r.f`) is live, as core-semantics §5.3 says;
+  it was refused E0516. The earlier referent stays borrowed until the
+  borrow's last use (B-2026-11-27-49).
 - Three programs the check accepted no longer stop before they run. A
   `for` over an `Array` in a function that suspends (its body reads a
   socket) failed with "index is held across a suspension point"

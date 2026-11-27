@@ -1144,14 +1144,27 @@ impl Walk<'_, '_> {
         let Some((root, path, handle)) = self.place_path(place) else {
             return;
         };
+        // §5.3: a borrow of a place through a reference local `r` borrows
+        // `r`'s origins, not `r`, so `r` may be reassigned while it is live
+        // (B-2026-11-27-49). The earlier referent stays borrowed, which the
+        // origin checker enforces; the rebind below drops the borrows of
+        // places through `r`, which now name another value.
+        let rebinds_ref = path.is_empty()
+            && !handle
+            && matches!(
+                self.node_types.get(&place.id),
+                Some((Type::Ref(_) | Type::MutRef(_), _))
+            );
         let branches = &self.branches;
         let dead = &self.dead_after;
         let overlaps = |b: &Borrowed| {
-            b.binding.as_ref().is_none_or(|h| {
-                h.uses.iter().any(|(u, p, _)| {
-                    *u >= after && !exclusive(p, branches) && !dead.iter().any(|d| u >= d)
+            !(rebinds_ref && !b.path.is_empty())
+                && b.binding.as_ref().is_none_or(|h| {
+                    h.uses.iter().any(|(u, p, _)| {
+                        *u >= after && !exclusive(p, branches) && !dead.iter().any(|d| u >= d)
+                    })
                 })
-            }) && b.root == root
+                && b.root == root
                 && b.path
                     .iter()
                     .zip(&path)
@@ -1427,6 +1440,15 @@ impl Walk<'_, '_> {
             StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => self.block(body),
             StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
                 self.expr(value);
+                // `x = v` does not read `x`: a `mut ref` borrow through a
+                // reference local `x` does not stop its reassignment (§5.3,
+                // B-2026-11-27-49); the write check below is the one that
+                // applies.
+                if matches!(s.kind, StmtKind::Assign { .. })
+                    && matches!(target.kind, ExprKind::Identifier(_))
+                {
+                    self.place_seen.insert(target as *const Expr as usize);
+                }
                 self.expr(target);
                 self.check_assign(target);
                 let after = value.span.offset + value.span.length;
@@ -2242,22 +2264,28 @@ impl Walk<'_, '_> {
             callee.span,
             if let Some(g) = generic {
                 let why = if kind == "MutFn" {
-                    "a `MutFn` is called only through an owned binding, an `own` parameter \
-                     or a `mut ref`"
+                    "a `MutFn` is called only through a mutable binding: a `let mut` local, a \
+                     `mut ref` parameter, or an `own` parameter rebound with `let mut`"
                 } else {
                     "calling an `OnceFn` moves it, and a borrowed parameter cannot be moved"
+                };
+                let rebind = if kind == "MutFn" {
+                    format!(", then rebind it before the call (`let mut {name} = {name};`)")
+                } else {
+                    String::new()
                 };
                 format!(
                     "`{name}` is a borrowed `{g}`, whose bound is `{kind}`, so it cannot be \
                      called (core-semantics.md §9.6): {why}. Declare the parameter \
-                     `{name}: own {g}`"
+                     `{name}: own {g}`{rebind}"
                 )
             } else if kind == "MutFn" {
                 format!(
                     "`{name}` is a borrowed `MutFn`, so it cannot be called \
-                     (core-semantics.md §9.6): a `MutFn` is called only through an owned \
-                     binding, an `own` parameter or a `mut ref`. Declare the parameter \
-                     `{name}: own MutFn(...)`"
+                     (core-semantics.md §9.6): a `MutFn` is called only through a mutable \
+                     binding: a `let mut` local, a `mut ref` parameter, or an `own` parameter \
+                     rebound with `let mut`. Declare the parameter `{name}: own MutFn(...)`, \
+                     then rebind it before the call (`let mut {name} = {name};`)"
                 )
             } else {
                 format!(
@@ -2706,8 +2734,9 @@ impl Walk<'_, '_> {
                     format!(
                         "`{x}` is a `MutFn` held by a shared borrow, so it cannot be passed \
                          to a function parameter, which calls it (core-semantics.md §9.6): a \
-                         `MutFn` is called only through an owned binding, an `own` parameter \
-                         or a `mut ref`. Declare the parameter `{x}: mut ref ...`"
+                         `MutFn` is called only through a mutable binding: a `let mut` local, \
+                         a `mut ref` parameter, or an `own` parameter rebound with `let mut`. \
+                         Declare the parameter `{x}: mut ref ...`"
                     ),
                     Some(insert(t, "mut ")),
                 ),
@@ -2724,8 +2753,9 @@ impl Walk<'_, '_> {
                         format!(
                             "`{x}` is a borrowed `MutFn`, so it cannot be passed to a function \
                              parameter, which calls it (core-semantics.md §9.6): a `MutFn` is \
-                             called only through an owned binding, an `own` parameter or a \
-                             `mut ref`. Declare the parameter `{x}: mut ref ...`, or \
+                             called only through a mutable binding: a `let mut` local, a \
+                             `mut ref` parameter, or an `own` parameter rebound with `let mut`. \
+                             Declare the parameter `{x}: mut ref ...`, or \
                              `{x}: own ...` if the function keeps it"
                         ),
                         declared

@@ -1,0 +1,10 @@
+source = "B-2026-11-27-49"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["references"]
+expected_from = "spec"
+rules = ["5.3"]
+backends = []
+env = {}
+note = "core-semantics cs.338: cs.337-cs.339: `x = ref r.f` borrows what `r` holds (`a.f`), not the local `r`, so `r` may be reassigned while `x` is live. x = \"a\", r.f = \"b\". Prints \"a b\"."

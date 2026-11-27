@@ -1,0 +1,14 @@
+// cs.337, cs.340: `x = ref r.f` borrows what `r` borrows (`a`), at `a.f`.
+// Reassigning `r` changes only which value `r` holds; `a.f` stays borrowed
+// until `x`'s last use, so writing `a.f` is refused, at the assignment
+// (line 12).
+struct B { f: String }
+fn main() {
+    let mut a = B { f: "a".to_string() };
+    let b = B { f: "b".to_string() };
+    let mut r = ref a;
+    let x = ref r.f;
+    r = ref b;
+    a.f = "z".to_string();
+    println(x);
+}

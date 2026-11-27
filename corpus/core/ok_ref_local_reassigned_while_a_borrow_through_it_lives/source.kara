@@ -1,0 +1,12 @@
+// cs.337-cs.339: `x = ref r.f` borrows what `r` holds (`a.f`), not the local
+// `r`, so `r` may be reassigned while `x` is live. x = "a", r.f = "b".
+// Prints "a b".
+struct B { f: String }
+fn main() {
+    let a = B { f: "a".to_string() };
+    let b = B { f: "b".to_string() };
+    let mut r = ref a;
+    let x = ref r.f;
+    r = ref b;
+    println(f"{x} {r.f}");
+}

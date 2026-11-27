@@ -1,0 +1,15 @@
+// cs.337, cs.339, cs.340: `x = mut ref r.n` borrows `a.n` (what `r` holds),
+// not the local `r`, so `r` may be reassigned while `x` is live, and after
+// the reassignment using `r` (now `b`) does not conflict with `x`.
+// r.n += 10 makes b.n 12; *x += 100 makes a.n 101. Prints "101 12".
+struct B { n: i64 }
+fn main() {
+    let mut a = B { n: 1 };
+    let mut b = B { n: 2 };
+    let mut r = mut ref a;
+    let x = mut ref r.n;
+    r = mut ref b;
+    r.n += 10;
+    *x += 100;
+    println(f"{a.n} {b.n}");
+}

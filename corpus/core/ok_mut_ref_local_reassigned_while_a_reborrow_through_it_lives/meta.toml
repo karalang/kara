@@ -1,0 +1,10 @@
+source = "B-2026-11-27-49"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["references"]
+expected_from = "spec"
+rules = ["5.3"]
+backends = []
+env = {}
+note = "core-semantics cs.339: cs.337, cs.339, cs.340: `x = mut ref r.n` borrows `a.n` (what `r` holds), not the local `r`, so `r` may be reassigned while `x` is live, and after the reassignment using `r` (now `b`) does not conflict with `x`. r.n += 10 makes b.n 12; *x += 100 makes a.n 101. Prints \"101 12\"."
