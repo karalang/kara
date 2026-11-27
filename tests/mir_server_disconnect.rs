@@ -163,7 +163,7 @@ fn exchange<S: Read + Write>(mut s: S, request: &str) -> String {
 /// Each path the handler answers prints it, so a request the handler
 /// never sees prints nothing. `/big` is a body many writes long; `/stop`
 /// ends the program.
-const ROUTE: &str = r#"import std.net.{Request};
+const ROUTE: &str = r#"import std.net.{Request, Server};
 import std.process.{exit};
 
 struct Response { status: i64, body: String }

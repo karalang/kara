@@ -1,4 +1,5 @@
 import std.time.{Duration, sleep};
+import std.sync.{TaskGroup};
 fn main() {
     let g = TaskGroup.new();
     let h = g.spawn(|| { let v: Vec[i64] = []; v[env.args().len()] });

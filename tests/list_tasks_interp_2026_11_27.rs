@@ -25,17 +25,17 @@ fn run(name: &str, src: &str, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
-const SHOW: &str = "fn show(ts: Vec[TaskInfo]) {\n    for t in ts.iter() {\n        let w = match t.wait_target {\n            WaitTarget.Running => \"running\",\n            WaitTarget.PeerTask(_) => \"peer\",\n            WaitTarget.IoHandle(_) => \"io\",\n            WaitTarget.Sleep => \"sleep\",\n        };\n        println(f\"{t.task_id} {t.parent_task_id} {w}\");\n    }\n}\n";
+const SHOW: &str = "import std.runtime.{TaskInfo, WaitTarget}; fn show(ts: Vec[TaskInfo]) {\n    for t in ts.iter() {\n        let w = match t.wait_target {\n            WaitTarget.Running => \"running\",\n            WaitTarget.PeerTask(_) => \"peer\",\n            WaitTarget.IoHandle(_) => \"io\",\n            WaitTarget.Sleep => \"sleep\",\n        };\n        println(f\"{t.task_id} {t.parent_task_id} {w}\");\n    }\n}\n";
 
 fn waiting_tasks_src() -> String {
     format!(
-        "import std.runtime;\nimport std.time.{{Duration, sleep}};\n{SHOW}fn main() {{\n    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1);\n    let g = TaskGroup.new();\n    let h = g.spawn(|| rx.recv());\n    let h2 = g.spawn(|| {{ sleep(Duration.ms(500)); 7 }});\n    sleep(Duration.ms(50));\n    show(runtime.list_tasks());\n    let _ = tx.send(1);\n    let _ = h.join();\n    let _ = h2.join();\n}}\n"
+        "import std.runtime.{{TaskInfo, WaitTarget}}; import std.sync.{{Receiver, Sender, TaskGroup}}; import std.runtime;\nimport std.time.{{Duration, sleep}};\n{SHOW}fn main() {{\n    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1);\n    let g = TaskGroup.new();\n    let h = g.spawn(|| rx.recv());\n    let h2 = g.spawn(|| {{ sleep(Duration.ms(500)); 7 }});\n    sleep(Duration.ms(50));\n    show(runtime.list_tasks());\n    let _ = tx.send(1);\n    let _ = h.join();\n    let _ = h2.join();\n}}\n"
     )
 }
 
 fn root_listed_src() -> String {
     format!(
-        "import std.runtime;\nimport std.time.{{Duration, sleep}};\n{SHOW}fn main() {{\n    let g = TaskGroup.new();\n    let h = g.spawn(|| {{ sleep(Duration.ms(300)); 7 }});\n    let h2 = g.spawn(|| {{ show(runtime.list_tasks()); 1 }});\n    sleep(Duration.ms(50));\n    let _ = h2.join();\n    let _ = h.join();\n}}\n"
+        "import std.runtime.{{TaskInfo, WaitTarget}}; import std.sync.{{TaskGroup}}; import std.runtime;\nimport std.time.{{Duration, sleep}};\n{SHOW}fn main() {{\n    let g = TaskGroup.new();\n    let h = g.spawn(|| {{ sleep(Duration.ms(300)); 7 }});\n    let h2 = g.spawn(|| {{ show(runtime.list_tasks()); 1 }});\n    sleep(Duration.ms(50));\n    let _ = h2.join();\n    let _ = h.join();\n}}\n"
     )
 }
 

@@ -1,5 +1,6 @@
 import std.sync.{TaskFailed};
 import std.time.{Duration, sleep};
+import std.sync.{TaskGroup};
 fn main() {
     let g = TaskGroup.isolating();
     let bad = g.spawn(|| { panic("bad"); 0 });

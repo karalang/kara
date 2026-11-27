@@ -149,6 +149,8 @@ fn volatile_cell_refusal_names_its_section() {
         "fn main() {\n    let mut r: VolatileCell[i64] = VolatileCell.new(1);\n    r.write(2);\n    println(f\"{r.read()}\");\n}\n",
     );
     assert!(out.contains("error[E0520]"), "{out}");
+    // One refusal per use, from library_imports' deferred table.
+    assert!(out.contains("`VolatileCell` is deferred"), "{out}");
     assert!(
         out.contains("docs/deferred.md § Volatile Memory Access (MMIO)"),
         "{out}"

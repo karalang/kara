@@ -1,3 +1,5 @@
+import std.sync.{TaskGroup};
+
 fn main() {
     let s = "hello".to_string();
     let g = TaskGroup.new();

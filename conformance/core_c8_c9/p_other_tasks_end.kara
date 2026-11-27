@@ -1,4 +1,5 @@
 import std.time.{Duration, sleep};
+import std.sync.{TaskGroup};
 fn main() {
     let g = TaskGroup.new();
     let _h = g.spawn(|| { sleep(Duration.ms(2000)); println("sibling finished"); 1 });

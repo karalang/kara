@@ -1,5 +1,6 @@
 import std.sync.{channel, Sender, Receiver, TaskFailed};
 import std.time.{Duration, sleep};
+import std.sync.{TaskGroup};
 struct R { id: i64 }
 impl Drop for R { fn drop(mut ref self) { println(f"drop {self.id}"); } }
 fn inner(rx: ref Receiver[i64]) -> Result[i64, String] {

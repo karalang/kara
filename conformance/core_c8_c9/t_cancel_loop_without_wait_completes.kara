@@ -1,5 +1,6 @@
 import std.sync.{Atomic, TaskFailed};
 import std.time.{Duration, sleep};
+import std.sync.{TaskGroup};
 fn main() {
     let started = Atomic.new(false);
     let g = TaskGroup.new();

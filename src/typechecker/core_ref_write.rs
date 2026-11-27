@@ -1959,21 +1959,8 @@ impl Walk<'_, '_> {
         if ty == "Server" && method.starts_with("serve") && method != "serve_static" {
             self.check_handler_response(call, method);
         }
-        if ty == "VolatileCell" && !self.program_owns_type_name(ty) {
-            // The baked `VolatileCell[T]` checks but no lane lowers it, and
-            // its accesses would be plain loads and stores until MIR carries
-            // a volatile marker (B-2026-11-26-97), so it is deferred
-            // (review-thread ruling 2026-11-26, B-2026-11-26-96).
-            self.removed_calls.push((
-                call.span,
-                format!(
-                    "`VolatileCell.{method}` is not in 0.8: the volatile register cell is \
-                     deferred with the rest of volatile memory access (docs/deferred.md § \
-                     Volatile Memory Access (MMIO))"
-                ),
-            ));
-            return false;
-        }
+        // `VolatileCell` is deferred: the lexical check refuses each use
+        // (library_imports::DEFERRED_LIBRARY_NAMES, B-2026-11-26-96).
         if !crate::prelude::REMOVED_LIBRARY_TYPES.contains(&ty) {
             return false;
         }

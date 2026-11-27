@@ -1,4 +1,5 @@
 import std.time.{Duration, sleep};
+import std.sync.{TaskGroup};
 fn main() {
     let v: Vec[i64] = [1, 2, 3];
     let g = TaskGroup.new();
