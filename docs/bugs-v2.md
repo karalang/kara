@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 802 |
+| diagnostics | 803 |
 | false-positive | 409 |
 | missing-feature | 271 |
 | perf | 206 |
@@ -77,7 +77,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 984 |
-| mir | 355 |
+| mir | 356 |
 | mir-llvm | 341 |
 | cli | 326 |
 | parser | 170 |
@@ -125,6 +125,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-27-50 | 2026-11-27 | typecheck | low | A `mut ref` binding declared without `let mut` can be rebound: `let up = mut ref a; up = mut ref b;` is accepted, where core-semantics §5.1 says only `let mut` lets it be rebound | — |
 | B-2026-11-27-51 | 2026-11-27 | typecheck | low | A function returning a view with no parameter it could borrow from is accepted (`fn mk(n: i64) -> Vec[ref String] { Vec.new() }`), where the core-semantics §5.4 signature rule makes it an error | — |
 | B-2026-11-27-52 | 2026-11-27 | typecheck | low | E0509 for a generic instance that stores a view where a view may not go is reported at the generic body's line only; core-semantics §5.8 puts it at the instantiation site with a note at the body | — |
+| B-2026-11-27-61 | 2026-11-27 | mir | medium | A closure that suspends (a `Mutex.lock`, `recv`, `send` or `join` in it) passed to a native that calls it synchronously (`sort_by`, `sort_by_key`, `retain`, `Map.entry(k).or_insert_with`) passes `karac check`; `karac run` and `karac build` then stop with a bare 'error[mir]: ... main.c0 suspends and is passed to `Vec[i64].sort_by`, which calls it where it cannot wait', with no code, no span and no fix | — |
 
 ### Relocated
 
