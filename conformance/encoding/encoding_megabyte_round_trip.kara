@@ -1,0 +1,25 @@
+// encoding.md at size: one MiB of bytes from a fixed LCG through every
+// encoder and back. Each encoded text's SHA-256 is held to Python's
+// base64, bytes.hex and urllib.parse.quote of the same bytes, and each
+// decode must give the bytes back.
+import std.encoding.{base64_encode, base64_decode, base64url_encode, base64url_decode, hex_encode, hex_decode, percent_encode, percent_decode};
+import std.crypto.sha2.{sha256};
+
+fn main() {
+    let n = 1048576 + 2;
+    let mut data: Vec[u8] = Vec.with_capacity(n);
+    let mut x: u64 = 12345;
+    for _ in 0..n {
+        x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        data.push((x >> 56) as u8);
+    }
+    let b = base64_encode(data.as_slice());
+    let u = base64url_encode(data.as_slice());
+    let h = hex_encode(data.as_slice());
+    let p = percent_encode(data.as_slice());
+    println(f"b64 {b.len()} {hex_encode(sha256(b.bytes()).as_slice())}");
+    println(f"url {u.len()} {hex_encode(sha256(u.bytes()).as_slice())}");
+    println(f"hex {h.len()} {hex_encode(sha256(h.bytes()).as_slice())}");
+    println(f"pct {p.len()} {hex_encode(sha256(p.bytes()).as_slice())}");
+    println(f"back {base64_decode(b.as_str()).unwrap() == data} {base64url_decode(u.as_str()).unwrap() == data} {hex_decode(h.as_str()).unwrap() == data} {percent_decode(p.as_str()).unwrap() == data}");
+}
