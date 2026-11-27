@@ -620,6 +620,9 @@ impl Parser {
             match t {
                 Token::LeftParen | Token::LeftBracket => depth += 1,
                 Token::RightParen | Token::RightBracket => depth -= 1,
+                // A struct pattern's braces, `for P { x, y } in ps`: an `in`
+                // follows them, where a loop's body ends the statement.
+                Token::LeftBrace if depth == 0 && self.brace_group_then_in(i) => return None,
                 Token::LeftBrace if depth == 0 => break,
                 Token::In | Token::Semicolon | Token::Colon | Token::Comma if depth == 0 => {
                     return None
@@ -640,6 +643,29 @@ impl Parser {
         );
         self.tokens[p].token = Token::While;
         Some(Token::While)
+    }
+
+    /// Whether the `{` at `open` closes into a group that an `in` follows:
+    /// a struct pattern in a `for` head (`for Reverse { value: (_, a) } in
+    /// q`), which Go's `for cond {` reading must leave alone.
+    fn brace_group_then_in(&self, open: usize) -> bool {
+        let mut depth = 0i32;
+        let mut i = open;
+        while let Some(t) = self.tok_at(i) {
+            match t {
+                Token::LeftBrace => depth += 1,
+                Token::RightBrace => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return matches!(self.tok_at(i + 1), Some(Token::In));
+                    }
+                }
+                Token::EOF => return false,
+                _ => {}
+            }
+            i += 1;
+        }
+        false
     }
 
     /// Go writes a parameter or a field as `name T`; Kāra as `name: T`
