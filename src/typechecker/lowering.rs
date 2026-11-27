@@ -422,7 +422,7 @@ impl<'a> super::TypeChecker<'a> {
     /// users see which call site triggered the rejection. `Array[T, N]`
     /// const-args don't reach here — they're special-cased in
     /// `lower_array_type` before `lower_generic_args` is invoked.
-    fn lower_generic_args_named(
+    pub(super) fn lower_generic_args_named(
         &mut self,
         generic_args: &Option<Vec<GenericArg>>,
         generic_scope: &[String],

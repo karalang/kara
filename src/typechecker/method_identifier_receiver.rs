@@ -1129,16 +1129,49 @@ impl<'a> super::TypeChecker<'a> {
                 // substitution through. Const-args at this position are
                 // ignored for dispatch but still parsed so the shape
                 // round-trips cleanly.
-                let mut target_args: Vec<Type> = generic_args
-                    .iter()
-                    .filter_map(|a| match a {
-                        GenericArg::Type(t) => Some(self.lower_type_expr(t, &[])),
-                        GenericArg::Const(_) => None,
-                        // Shape args are ignored for dispatch (Dim/Shape
-                        // kind system lands in Phase 11 Q1).
-                        GenericArg::Shape(_) => None,
-                    })
-                    .collect();
+                //
+                // A type with `const` parameters has its arguments lowered
+                // by position, the enclosing item's parameters in scope
+                // (`Buf[i64, M]` inside `impl[const M: i64] ..`): dispatch
+                // reads the type positions, and the impl's parameters bind
+                // all of them, so `Buf[i64, 3].fill(7)` returns the
+                // `Array[i64, 3]` its `-> Array[T, N]` names
+                // (B-2026-11-27-8).
+                let const_positions = self.env.const_param_positions.get(&type_name).cloned();
+                let positional: Option<Vec<Type>> = match &const_positions {
+                    Some(ps) if ps.iter().any(|&c| c) && ps.len() == generic_args.len() => {
+                        let scope = self
+                            .node_generic_frames
+                            .get(self.current_generic_frame as usize)
+                            .cloned()
+                            .unwrap_or_default();
+                        let all = self.lower_generic_args_named(
+                            &Some(generic_args.clone()),
+                            &scope,
+                            Some(&type_name),
+                        );
+                        (all.len() == ps.len()).then_some(all)
+                    }
+                    _ => None,
+                };
+                let mut target_args: Vec<Type> = match (&positional, &const_positions) {
+                    (Some(all), Some(ps)) => all
+                        .iter()
+                        .zip(ps)
+                        .filter(|(_, &c)| !c)
+                        .map(|(t, _)| t.clone())
+                        .collect(),
+                    _ => generic_args
+                        .iter()
+                        .filter_map(|a| match a {
+                            GenericArg::Type(t) => Some(self.lower_type_expr(t, &[])),
+                            GenericArg::Const(_) => None,
+                            // Shape args are ignored for dispatch (Dim/Shape
+                            // kind system lands in Phase 11 Q1).
+                            GenericArg::Shape(_) => None,
+                        })
+                        .collect(),
+                };
                 // `Map[K, V, H].new()`: the hasher the parser took off the
                 // receiver is the type's last argument (B-2026-10-25-31).
                 if crate::typechecker::types::hasher_slot(&type_name) == Some(target_args.len()) {
@@ -1237,6 +1270,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     return Some(Type::Error);
                 }
+                let target_args: Vec<Type> = positional.unwrap_or(target_args);
                 // `Set[i64].from_iter(it)` names no hasher: the default one,
                 // which an impl over any hasher binds its `H` to
                 // (B-2026-11-21-3).

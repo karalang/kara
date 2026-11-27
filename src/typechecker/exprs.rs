@@ -4342,6 +4342,22 @@ impl<'a> super::TypeChecker<'a> {
                         ExprKind::MethodCall { method, args: margs, .. }
                             if method == "into" && margs.is_empty()
                     );
+                    // `Ok(Array.from_fn(n, f))` into a `Result[Array[T, N],
+                    // E]`: the length is the slot's, which only check mode
+                    // hands `from_fn` (B-2026-11-26-83), and `Vec.from_fn`
+                    // takes its element type from the slot the same way.
+                    let payload_is_from_fn = matches!(
+                        &args[0].value.kind,
+                        ExprKind::Call { callee: inner_callee, args: inner_args }
+                            if inner_args.len() == 2
+                                && matches!(
+                                    &inner_callee.kind,
+                                    ExprKind::Path { segments, .. }
+                                        if segments.len() == 2
+                                            && matches!(segments[0].as_str(), "Array" | "Vec")
+                                            && segments[1] == "from_fn"
+                                )
+                    );
                     if let Some(slot) = payload_slot {
                         // B-2026-09-30-90 — and a payload literal that only
                         // check mode can type as written: `Some(([4, 5], 7))`
@@ -4396,7 +4412,10 @@ impl<'a> super::TypeChecker<'a> {
                                 _ => false,
                             };
                         if payload_is_inferred_ctor
-                            || ((payload_is_unsuffixed_int || payload_is_into) && !slot_unsolved)
+                            || ((payload_is_unsuffixed_int
+                                || payload_is_into
+                                || payload_is_from_fn)
+                                && !slot_unsolved)
                             || payload_needs_slot
                         {
                             let payload = self.check_expr(&args[0].value, &slot);

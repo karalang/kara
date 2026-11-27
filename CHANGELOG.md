@@ -1215,6 +1215,18 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Wrong behaviour fixed
 
+- `Ok(Array.from_fn(n, f))` and `Some(..)` where a `Result[Array[T, N],
+  E]` or `Option[Array[T, N]]` is wanted take the length from the slot, as
+  the same call does as a tail or at an annotated `let`; it was refused
+  "Array.from_fn needs the array's length". `Some(Vec.from_fn(n, |i| 7))`
+  into an `Option[Vec[i32]]` takes its element type the same way. A
+  run-time `n` that is not the length still stops the program
+  (B-2026-11-26-83).
+- A type-qualified call on a type with `const` parameters binds them from
+  the receiver: `Buf[i64, 3].fill(7)` over `fn fill(x: T) -> Array[T, N]`
+  is an `Array[i64, 3]`, and `Buf[i64, M]` inside `impl[const M: i64]`
+  resolves. The const argument was dropped, so the first was refused as
+  `Array[i64, N]` and the second as "no method" (B-2026-11-27-8).
 - A `ref` binding of a `Vector` (`let g = ref v[0];` on a
   `Vec[Vector[i64, 4]]`, `let r = ref w;`) works as a method receiver:
   `g.reduce_sum()` runs as `v[0].reduce_sum()` does. It checked with
