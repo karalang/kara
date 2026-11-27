@@ -41,7 +41,7 @@ impl Eq for M {}
 /// A 200000-deep chain whose every link sits in the cell `link` builds.
 fn deep(field: &str, empty: &str, link: &str) -> String {
     format!(
-        "shared struct M {{ v: i64, next: {field} }}
+        "import std.sync.{{Mutex, OnceLock}}; shared struct M {{ v: i64, next: {field} }}
 {HASH_EQ}
 fn main() {{
     let mut head = M {{ v: 0, next: {empty} }};
