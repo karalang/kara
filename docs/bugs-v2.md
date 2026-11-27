@@ -66,7 +66,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | soundness | 145 |
 | miscompile | 113 |
 | run-vs-build | 80 |
-| crash | 72 |
+| crash | 73 |
 | codegen-gap | 49 |
 | use-after-free | 14 |
 | leak | 5 |
@@ -83,7 +83,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | parser | 168 |
 | ownership | 148 |
 | runtime | 121 |
-| interp | 118 |
+| interp | 119 |
 | effect | 73 |
 | resolver | 59 |
 | other | 56 |
@@ -2436,6 +2436,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-27-43 | mir | medium | A `mut ref self` call on a struct with a `ref` field is refused (E0509/E0516) for keeping its `Str` / `Slice` arguments, though the struct has no fie… | 6f31555eec |
 | B-2026-11-27-44 | mir | medium | A `for` over an `Array` in a function that suspends stops before running with 'index _N is held across a suspension point' | 6f31555eec |
 | B-2026-11-27-45 | mir | medium | `Some(ref v)` with `v: Vec[u8]` passed to an `Option[Slice[u8]]` parameter passes the check and builds invalid MIR: 'field 0 of Option has the wrong… | 6f31555eec |
+| B-2026-11-27-53 | interp | medium | The MIR interpreter segfaults calling an extern "C" function that returns a 16-aligned #[repr(C)] struct (an i128 field) by value: its result slot is… | 08cc0362b8 |
 
 </details>
 
