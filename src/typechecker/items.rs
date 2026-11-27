@@ -898,6 +898,8 @@ impl<'a> super::TypeChecker<'a> {
         // are visible to default method bodies. Restored after the trait's
         // items are checked.
         let saved_bounds = self.enclosing_bounds.clone();
+        let saved_param_sites = self.enclosing_param_sites.clone();
+        self.note_param_sites(&t.generic_params);
         for (name, bounds) in Self::collect_param_bounds(&t.generic_params, &t.where_clause) {
             self.enclosing_bounds.insert(name, bounds);
         }
@@ -974,6 +976,7 @@ impl<'a> super::TypeChecker<'a> {
 
         self.enclosing_assoc_eqs = saved_assoc_eqs;
         self.enclosing_bounds = saved_bounds;
+        self.enclosing_param_sites = saved_param_sites;
         self.enclosing_trait = saved_enclosing_trait;
         self.lint_override_stack.pop();
     }
@@ -3041,6 +3044,8 @@ impl<'a> super::TypeChecker<'a> {
         // generics. `merge` semantics: function-level entries shadow outer
         // entries with the same name (innermost wins, mirroring scope).
         let saved_bounds = self.enclosing_bounds.clone();
+        let saved_param_sites = self.enclosing_param_sites.clone();
+        self.note_param_sites(&f.generic_params);
         for (name, bounds) in Self::collect_param_bounds(&f.generic_params, &f.where_clause) {
             self.enclosing_bounds.insert(name, bounds);
         }
@@ -3486,6 +3491,7 @@ impl<'a> super::TypeChecker<'a> {
         self.current_self_borrowed = false;
         self.fn_self_type = None;
         self.enclosing_bounds = saved_bounds;
+        self.enclosing_param_sites = saved_param_sites;
         self.enclosing_assoc_eqs = saved_assoc_eqs;
         self.enclosing_proj_bounds = saved_proj_bounds;
         self.current_body_dim_scope = saved_body_dim_scope;
@@ -6602,6 +6608,8 @@ impl<'a> super::TypeChecker<'a> {
         // both the impl's generic params and their own; `check_function`
         // further merges method-level bounds and restores after each method.
         let saved_bounds = self.enclosing_bounds.clone();
+        let saved_param_sites = self.enclosing_param_sites.clone();
+        self.note_param_sites(&imp.generic_params);
         for (name, bounds) in Self::collect_param_bounds(&imp.generic_params, &imp.where_clause) {
             self.enclosing_bounds.insert(name, bounds);
         }
@@ -6886,6 +6894,7 @@ impl<'a> super::TypeChecker<'a> {
         }
 
         self.enclosing_bounds = saved_bounds;
+        self.enclosing_param_sites = saved_param_sites;
         self.blanket_impl_bound = saved_blanket_bound;
         self.enclosing_assoc_eqs = saved_assoc_eqs;
         self.enclosing_proj_bounds = saved_proj_bounds;

@@ -3,8 +3,8 @@ fn head[T: Clone](v: Vec[T]) -> T { return v[0].clone(); }
 fn take_i(v: Vec[i64]) -> i64 { return v.len(); }
 fn passthru[T](v: own Vec[T]) -> Vec[T] { return v; }
 fn id[T](v: own Vec[T]) -> Vec[T] { return v; }
-fn pick[T](a: Vec[T], b: Vec[T]) -> Vec[T] { return id(a.clone()); }
-fn sink[T](acc: mut ref Vec[Vec[T]], v: Vec[T]) { acc.push(v.clone()); }
+fn pick[T: Clone](a: Vec[T], b: Vec[T]) -> Vec[T] { return id(a.clone()); }
+fn sink[T: Clone](acc: mut ref Vec[Vec[T]], v: Vec[T]) { acc.push(v.clone()); }
 fn two[T](v: Vec[i64], t: T) -> i64 { return v.len(); }
 fn mk() -> Vec[i64] { let v: Vec[i64] = [10, 20, 30]; return v; }
 fn main() {

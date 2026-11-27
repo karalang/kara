@@ -63,7 +63,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | missing-feature | 268 |
 | perf | 206 |
 | other | 159 |
-| soundness | 139 |
+| soundness | 140 |
 | miscompile | 112 |
 | run-vs-build | 80 |
 | crash | 71 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 968 |
+| typecheck | 969 |
 | mir | 350 |
 | mir-llvm | 340 |
 | cli | 323 |
@@ -133,6 +133,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-27-4 | 2026-11-27 | typecheck | low | `a.min(b)` / `a.max(b)` on a tuple is refused E0236 "no method 'min' on type '(i64, i64)'" with no hint and no fix, where a tuple compares and takes the free `min(a, b)` / `max(a, b)` | — |
 | B-2026-11-27-5 | 2026-11-27 | ownership | medium | `let mut sorted = costs; sorted.sort();` with `costs` a bare parameter: `karac fix` declares `costs: mut ref` and marks every call site `mut`, sorting the caller's list (and writing `mut [1, 3, 2, 4, 1]` on literals), where E0517 also offers `own` or `.clone()` for a copy of the function's own; the same-name `let mut s = s;` is given `own` (B-2026-11-17-146) | — |
 | B-2026-11-27-6 | 2026-11-27 | typecheck | medium | a `fold` closure with its accumulator pattern annotated, `|(prev, total): (i64, i64), x| (x, total + x.max(prev))` over `nums.iter()`, is refused "expected 'i64', found 'ref i64'" at the tuple's `x`, where the same closure unannotated and `let p: (i64, i64) = (x, 1)` pass | — |
+| B-2026-11-27-7 | 2026-11-27 | typecheck | medium | A collection's `.clone()` and `to_vec` of an unbounded type parameter pass `karac check`: `fn f[T](v: Vec[T]) -> Vec[T] { v.clone() }` clones a `Vec[T]` field by field whatever `T` is (a `Vec[Mutex[i64]]` becomes a second set of independent mutexes); the remainder of B-2026-11-25-48 | — |
 
 ### Relocated
 

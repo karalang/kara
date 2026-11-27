@@ -4661,6 +4661,12 @@ pub struct TypeChecker<'a> {
     /// path. Used to resolve bare `method(args)` calls at expected-type
     /// positions when the expected type is a generic param.
     pub(super) enclosing_bounds: FxHashMap<String, Vec<crate::ast::TraitBound>>,
+    /// Where each enclosing type parameter is declared (its span, through
+    /// its inline bounds) and whether it has inline bounds, for a fix-it
+    /// that adds a missing bound there (`T` -> `T: Clone`, `T: Ord` ->
+    /// `T: Ord + Clone`). Saved and restored with `enclosing_bounds`; a
+    /// parameter with a default (`Rhs = Self`) has no entry.
+    pub(super) enclosing_param_sites: FxHashMap<String, (Span, bool)>,
     /// Inside a blanket impl (`impl[T: Display] Shout for T`), its parameter
     /// and the impl's own trait: a method call on a value of `T` finds that
     /// trait's methods beside those of `T`'s bounds (B-2026-11-04-49,
@@ -5448,6 +5454,7 @@ impl<'a> TypeChecker<'a> {
             pending_typevar_pattern_bindings: Vec::new(),
             freshened_scrutinee_vars: std::collections::HashSet::new(),
             enclosing_bounds: FxHashMap::default(),
+            enclosing_param_sites: FxHashMap::default(),
             blanket_impl_bound: None,
             enclosing_assoc_eqs: FxHashMap::default(),
             ambiguous_assoc_reported: FxHashSet::default(),

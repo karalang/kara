@@ -482,7 +482,7 @@ impl[T: Clone] Iterator for Product[T] {
     }
 }
 
-fn product[T](pools: own Vec[Vec[T]], times: i64) -> Product[T] {
+fn product[T: Clone](pools: own Vec[Vec[T]], times: i64) -> Product[T] {
     let mut all: Vec[Vec[T]] = Vec.new();
     for _ in 0..times {
         for p in pools.iter() {

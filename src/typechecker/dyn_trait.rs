@@ -329,10 +329,30 @@ impl<'a> super::TypeChecker<'a> {
     /// type that lacks it gets a derive; a `dyn` element needs its trait to
     /// have `Clone` as a supertrait, or its table has no `clone` entry.
     pub(super) fn require_elements_clone(&mut self, what: &str, self_ty: &Type, span: &Span) {
-        if !self.cli_lint_overrides.strict_core || self.type_supports_clone(self_ty) {
+        if !self.cli_lint_overrides.strict_core {
             return;
         }
         let shown = type_display(self_ty);
+        // `type_supports_clone` lets any type parameter through, so a
+        // `Vec[T]` of an unbounded `T` cloned field by field: a `Mutex`
+        // duplicated, a struct with no `Clone` copied (B-2026-11-27-7, the
+        // remainder of B-2026-11-25-48). Only a parameter of an enclosing
+        // item counts, as in `unbounded_param_within`.
+        if let Some(p) = self.unbounded_clone_param_in_elements(self_ty) {
+            self.missing_param_bound(
+                format!(
+                    "`{what}` on '{shown}' clones each element, and the type parameter `{p}` \
+                     has no `Clone` bound: declare it `{p}: Clone`"
+                ),
+                &p,
+                "Clone",
+                span,
+            );
+            return;
+        }
+        if self.type_supports_clone(self_ty) {
+            return;
+        }
         if let Some((name, fix)) = self.copy_derive_fix_named(self_ty) {
             self.type_error_with_fix_it(
                 format!(
@@ -395,14 +415,15 @@ impl<'a> super::TypeChecker<'a> {
         }
         let shown = type_display(&elem);
         if let Some(p) = self.unbounded_clone_param_within(&elem) {
-            self.type_error(
+            self.missing_param_bound(
                 format!(
                     "`{what}` copies its value into each new slot, so '{shown}' needs \
                      `.clone()`, and the type parameter `{p}` has no `Clone` bound: declare \
                      it `{p}: Clone`"
                 ),
-                *span,
-                TypeErrorKind::TraitBoundNotSatisfied,
+                &p,
+                "Clone",
+                span,
             );
         } else if let Some((name, fix)) = self.copy_derive_fix_named(&elem) {
             self.type_error_with_fix_it(
@@ -425,6 +446,97 @@ impl<'a> super::TypeChecker<'a> {
                 *span,
                 TypeErrorKind::TraitBoundNotSatisfied,
             );
+        }
+    }
+
+    /// The first enclosing type parameter with no `Clone` bound among the
+    /// elements a collection's `.clone()` / `to_vec` clones: through
+    /// tuples, arrays, `Option`, `Result` and the library collections, not
+    /// behind a view (a view copies) and not into a user or `shared` type,
+    /// whose own `Clone` decides.
+    fn unbounded_clone_param_in_elements(&self, ty: &Type) -> Option<String> {
+        match ty {
+            Type::TypeParam(p) => (self.enclosing_bounds.contains_key(p)
+                && !self.type_param_satisfies_bound(p, "Clone"))
+            .then(|| p.clone()),
+            Type::Refinement { base, .. } => self.unbounded_clone_param_in_elements(base),
+            Type::Tuple(elems) => elems
+                .iter()
+                .find_map(|e| self.unbounded_clone_param_in_elements(e)),
+            Type::Array { element, .. } | Type::Vector { element, .. } => {
+                self.unbounded_clone_param_in_elements(element)
+            }
+            Type::Named { name, args }
+                if matches!(
+                    name.as_str(),
+                    "Option"
+                        | "Result"
+                        | "Vec"
+                        | "VecDeque"
+                        | "Slice"
+                        | "Map"
+                        | "SortedMap"
+                        | "Set"
+                        | "SortedSet"
+                ) =>
+            {
+                super::types::element_args(name, args)
+                    .iter()
+                    .find_map(|a| self.unbounded_clone_param_in_elements(a))
+            }
+            _ => None,
+        }
+    }
+
+    /// Records where each type parameter of `generics` is declared, for
+    /// [`Self::param_bound_fix`].
+    pub(super) fn note_param_sites(&mut self, generics: &Option<crate::ast::GenericParams>) {
+        if let Some(g) = generics {
+            for p in &g.params {
+                if p.is_const || p.is_variadic_shape || p.default.is_some() {
+                    self.enclosing_param_sites.remove(&p.name);
+                    continue;
+                }
+                self.enclosing_param_sites
+                    .insert(p.name.clone(), (p.span, !p.bounds.is_empty()));
+            }
+        }
+    }
+
+    /// A fix-it adding `trait_name` to the declaration of the enclosing
+    /// type parameter `p`: `T` becomes `T: Clone`, `T: Ord` becomes
+    /// `T: Ord + Clone`. `None` when `p` has no recorded declaration.
+    pub(super) fn param_bound_fix(&self, p: &str, trait_name: &str) -> Option<super::FixIt> {
+        let (site, bounded) = self.enclosing_param_sites.get(p)?;
+        if site.length == 0 {
+            return None;
+        }
+        Some(super::FixIt {
+            span: Span {
+                offset: site.offset + site.length,
+                length: 0,
+                line: site.line,
+                column: site.column + site.length,
+            },
+            replacement: if *bounded {
+                format!(" + {trait_name}")
+            } else {
+                format!(": {trait_name}")
+            },
+        })
+    }
+
+    /// Reports that the enclosing type parameter `p` lacks `trait_name`,
+    /// with the fix-it that declares it when the declaration is known.
+    fn missing_param_bound(&mut self, message: String, p: &str, trait_name: &str, span: &Span) {
+        match self.param_bound_fix(p, trait_name) {
+            Some(fix) => self.type_error_with_fix_it(
+                message,
+                *span,
+                TypeErrorKind::TraitBoundNotSatisfied,
+                fix,
+            ),
+            None => self.type_error(message, *span, TypeErrorKind::TraitBoundNotSatisfied),
         }
     }
 
@@ -500,14 +612,15 @@ impl<'a> super::TypeChecker<'a> {
         let elem = self.resolved_now(elem);
         let shown = type_display(&elem);
         if let Some(p) = self.unbounded_param_within(&elem, "PartialEq") {
-            self.type_error(
+            self.missing_param_bound(
                 format!(
                     "`{what}` compares elements with `==`, so '{shown}' needs `PartialEq`, \
                      and the type parameter `{p}` has no `PartialEq` bound: declare it \
                      `{p}: PartialEq`"
                 ),
-                *span,
-                TypeErrorKind::TraitBoundNotSatisfied,
+                &p,
+                "PartialEq",
+                span,
             );
         } else if !self.type_supports_partial_eq(&elem) {
             self.type_error(
