@@ -5321,7 +5321,7 @@ fn calculate(x: f64, y: f64) -> f64 { ... }    // no effects
 
 `reads`, `writes`, `sends` and `receives` are the conflict verbs. `allocates` and `panics` are capabilities that never conflict, and both are [default-permitted](#default-permitted-effects). `blocks` is an [execution effect](#blocks): it says where a function may wait, not what it touches.
 
-`suspends` is the second execution effect: the task may yield cooperatively, so its thread runs other tasks while it waits (a socket read, `time.sleep` on the task pool). Like `blocks` it takes no resource, never conflicts, is inferred for private functions and declared on public ones; a declared `blocks` admits a `suspends` effect, never the reverse ([core-semantics.md §11.8](core-semantics.md#11-concurrency-c9)). The standard library's waiting primitives declare both (`time.sleep` is `reads(Clock) blocks suspends`). (Review-thread ruling 2026-11-16.)
+`suspends` is the second execution effect: the task may yield cooperatively, so its thread runs other tasks while it waits (a socket read, `time.sleep` on the task pool). Like `blocks` it takes no resource, never conflicts, is inferred for private functions and declared on public ones; a declared `blocks` admits a `suspends` effect, never the reverse ([core-semantics.md §11.8](core-semantics.md#11-concurrency-c9)). The channel and socket waits, `join` and `Mutex.lock` declare `suspends` alone (B-2026-11-27-10); `time.sleep` (`reads(Clock) blocks suspends`) and a process wait, which also suspend inside a task, declare `blocks` too. (Review-thread rulings 2026-11-16 and 2026-11-27.)
 
 **Syntax.** An effect clause follows the return type: `fn f(x: T) -> U with reads(A) writes(B)`. Effects are written side by side, and a verb may list several resources: `reads(UserDb, OrderDb)`. Every effect word, `with` excepted, is a contextual keyword: `reads`, `writes`, `sends`, `receives`, `allocates`, `panics`, `blocks` and `suspends` are ordinary identifiers outside an effect clause ([§3](#3-lexical-structure)).
 
@@ -5635,7 +5635,7 @@ The bare form must be the broad one. `panics` and `blocks` take no resource, so 
 
 ### `blocks`
 
-`blocks` means a call may park the OS thread in a kernel wait: while it waits, the thread does no other work. Examples: sleeping, synchronous file I/O, `Mutex.lock` under contention, channel `send` and `recv`, and a foreign function that waits on a condition variable. In v1 all I/O blocks the thread it runs on.
+`blocks` means a call may park the OS thread in a kernel wait: while it waits, the thread does no other work. Examples: sleeping, synchronous file I/O, a process wait, and a foreign function that waits on a condition variable. `Mutex.lock` under contention, channel `send` and `recv`, a join and the socket waits carry `suspends` instead ([Effect verbs](#effect-verbs), [core-semantics.md §11.8](core-semantics.md#11-concurrency-c9)), which a declared `blocks` admits.
 
 - **No resource.** A function either may block or it may not.
 - **Never conflicts.** Two blocking branches may run in parallel.
@@ -5643,7 +5643,7 @@ The bare form must be the broad one. `panics` and `blocks` take no resource, so 
 - **Forbidden where waiting is unacceptable**, with `#[no_effect(blocks)]`.
 
 **Where `blocks` comes from:**
-1. **Standard library declarations.** Primitives such as `time.sleep`, synchronous file reads, `Mutex.lock` and the channel operations declare `blocks`.
+1. **Standard library declarations.** Primitives such as `time.sleep`, synchronous file reads, process waits and binding a listener declare `blocks`.
 2. **`extern` functions.** A foreign function has the effects it declares, or every effect, `blocks` included ([§15](#15-unsafe-ffi-and-layout-control)).
 3. **Nothing else.** A loop that burns CPU is not blocking: it uses the thread rather than parking it.
 
@@ -6072,7 +6072,7 @@ The language-level rules:
 - **The element type must be `CrossTask`**, and no view may be sent ([What may cross a task boundary](#what-may-cross-a-task-boundary)).
 - **Effects are keyed by the channel.** `tx.send(v)` has `sends(tx)` and `rx.recv()` has `receives(rx)` ([Value-rooted resources](#value-rooted-resources)). Clones of one `Sender` name the same channel. So two branches that send on one channel conflict, two that receive from one channel conflict, and a branch that sends and a branch that receives do not.
 - **Fan-in uses `TaskGroup`.** Concurrent producers on one channel run as `TaskGroup` tasks, each with its own clone of the `Sender`. Tasks are not checked for effect conflicts, so their messages arrive in no fixed order; `par` stays deterministic.
-- **`send` and `recv` have `blocks` and `suspends`**, because they may wait: inside a task, a wait suspends the task and other tasks run ([core-semantics.md §11.8](core-semantics.md#11-concurrency-c9)). On sequential `wasm_wasi`, `recv` yields instead, and panics with kind `deadlock` if no task can run ([§16](#concurrency-across-targets)).
+- **`send` and `recv` have `suspends`**, because they may wait: inside a task, a wait suspends the task and other tasks run ([core-semantics.md §11.8](core-semantics.md#11-concurrency-c9)). On sequential `wasm_wasi`, `recv` yields instead, and panics with kind `deadlock` if no task can run ([§16](#concurrency-across-targets)).
 - **The ends are ordinary owned values.** They can be moved into tasks, passed to functions and returned.
 
 `recv_timeout(d)` and `send_timeout(v, d)` bound one wait ([library/concurrency.md](library/concurrency.md#channels)).

@@ -27,8 +27,9 @@ in its message; that count is wrong.
   `blocks` for them (only `sleep` carries both), and `docs/library/concurrency.md`
   declares `blocks`. So cs.851's promise is unwritable: a public
   `fn take(rx) -> Option[i64] with suspends receives(rx) { rx.recv() }` is refused
-  E0400 "performs blocks" (`t_suspends_alone_admits_recv`, which PREDICTS the row). Review ruled the
-  spec wins: the library moves to `suspends` (Thread B).
+  E0400 "performs blocks" (`t_suspends_alone_admits_recv`). Resolved for the spec
+  (review ruling): B-2026-11-27-10 moved those calls, the socket waits and the
+  HTTP client's request to `suspends`, and the cell now runs.
 - **B. A `Never`-typed block in arithmetic.** `let a = { return 7; }; a + 1` is
   refused E0208 "type 'Never' does not implement trait Add" (met writing the
   §11.7 cells). Fixed under B-2026-11-27-11: a `Never` operand coerces.
@@ -147,7 +148,7 @@ in its message; that count is wrong.
 | cs.848 | §11.8 | With several workers (M4 item 10), the runtime may start another worker to make up for it. | — | existing pin (CORE_SENTENCE_MAP.md) |
 | cs.849 | §11.8 | - **`blocks` admits `suspends`.** Wherever a declared effect clause is a ceiling (a public function's `with`, a trait method's clause, an… | `t_blocks_admits_suspends` | interp ✓ jit ✓ build ✓ asan ✓ tsan ✓ |
 | cs.850 | §11.8 | A public function that declares `blocks` may call a `suspends` callee, and a trait method declared `blocks` may have an impl that suspends. | `t_blocks_admits_suspends` | interp ✓ jit ✓ build ✓ asan ✓ tsan ✓ |
-| cs.851 | §11.8 | Declaring `suspends` alone is the narrower promise: the function never holds its worker while it waits, so it may not call a `blocks` cal… | `t_suspends_alone_admits_recv`, `t_suspends_alone_refuses_file_io` | **refused on every lane (E0400)**; see FINDING-A |
+| cs.851 | §11.8 | Declaring `suspends` alone is the narrower promise: the function never holds its worker while it waits, so it may not call a `blocks` cal… | `t_suspends_alone_admits_recv`, `t_suspends_alone_refuses_file_io` | admits_recv: interp, jit, build (B-2026-11-27-10, FINDING-A); refuses_file_io: refused (E0400) |
 | cs.852 | §11.8 | - **Every body that may suspend is a coroutine** (the stackless transform, `docs/spikes/coroutines.md`), not only a function with network… | — | existing pin (CORE_SENTENCE_MAP.md) |
 | cs.853 | §11.8 | This supersedes deferred.md's network-boundary-only lowering. | — | existing pin (CORE_SENTENCE_MAP.md) |
 | cs.854 | §11.8 | - **No rule about `ref` across a wait.** A task's frame never moves, and no frame is a value (§9.5), so a `ref` held across a suspension … | `t_ref_across_wait` | interp ✓ jit ✓ build ✓ asan ✓ tsan ✓ |

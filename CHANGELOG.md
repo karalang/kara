@@ -1067,6 +1067,19 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Changed
 
+- The waits core semantics §11.8 says suspend now carry `suspends`
+  instead of `blocks`: a channel `send` and `recv`, `recv_timeout` and
+  `send_timeout`, `TaskHandle.join`, `Mutex.lock`, the socket, TLS and
+  WebSocket waits (`accept`, `connect`, `read`, `write`, UDP `send` and
+  `recv`, a buffered reader or writer over a socket) and the HTTP client's
+  requests. A `pub fn` that waits on one may now declare `suspends` alone,
+  the promise that it never holds its worker while it waits; it was refused
+  E0400 "performs blocks". A declared `blocks` still admits them, so no
+  existing declaration has to change, but the fix E0400 suggests for an
+  undeclared one now says `suspends`. File I/O, process waits, `sleep`,
+  binding a listener, `shutdown_write`, UDP `connect` and
+  `TaskGroup.spawn` keep `blocks` (B-2026-11-27-10).
+
 - A function's effects are listed in the order of their text
   (`allocates(Heap)`, `panics`, `writes(Stderr)`, `writes(Stdout)`) in
   `program_effects`, `public_function_effects` and the list an E0400

@@ -1788,10 +1788,10 @@ fn buffered_socket_effects(
     Some(match (base, method) {
         ("BufReader", "read" | "read_line" | "read_to_string" | "fill_buf")
         | ("LinesIter", "next") => {
-            vec![(Receives, "Network", Some(0)), (Blocks, "", None), HEAP]
+            vec![(Receives, "Network", Some(0)), (Suspends, "", None), HEAP]
         }
         ("BufWriter", "write" | "write_all" | "flush") => {
-            vec![(Sends, "Network", Some(0)), (Blocks, "", None)]
+            vec![(Sends, "Network", Some(0)), (Suspends, "", None)]
         }
         _ => return native_effects(base, method),
     })
@@ -1900,11 +1900,13 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         (_, "cmp" | "partial_cmp" | "eq" | "ne") => vec![PANICS],
         // Atomics and locks are how concurrent branches and tasks share
         // mutable state (design.md "Locks and atomics"), so their operations
-        // order nothing; taking a lock may wait.
+        // order nothing; taking a lock may wait, which suspends the task
+        // (core-semantics §11.8, B-2026-11-27-10), as a join and a channel
+        // wait do.
         ("Atomic", "load" | "store" | "swap" | "compare_exchange" | "fetch_add" | "fetch_sub") => {
             vec![]
         }
-        ("Mutex", "lock" | "acquire") => vec![(Blocks, "", None)],
+        ("Mutex", "lock" | "acquire") => vec![(Suspends, "", None)],
         // The try form never waits (B-2026-11-19-30).
         ("Mutex", "try_lock" | "try_mark" | "held_value") => vec![],
         // A group's own natives; `spawn` is charged with its task's effects
@@ -1915,22 +1917,24 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         ) => {
             vec![HEAP]
         }
-        ("TaskHandle", "join" | "try_join") => vec![(Blocks, "", None)],
+        ("TaskHandle", "join" | "try_join") => vec![(Suspends, "", None)],
         ("Mutex", "release") => vec![],
         // D6: channels and connections key their effects by the endpoint
         // (argument 0, the receiver); files by the open file. These have no
         // MIR natives yet (M2 brings the I/O intrinsics); the entries fix
         // the keying the conflict rule relies on.
         ("Channel", "new") => vec![HEAP],
-        ("Sender", "send") => vec![(Sends, "Channel", Some(0)), (Blocks, "", None)],
+        ("Sender", "send") => vec![(Sends, "Channel", Some(0)), (Suspends, "", None)],
         ("Sender", "try_send") => vec![(Sends, "Channel", Some(0))],
-        ("Receiver", "recv") => vec![(Receives, "Channel", Some(0)), (Blocks, "", None)],
+        ("Receiver", "recv") => vec![(Receives, "Channel", Some(0)), (Suspends, "", None)],
         ("Receiver", "try_recv") => vec![(Receives, "Channel", Some(0))],
         ("Receiver", "__closed") => vec![(Receives, "Channel", Some(0))],
-        ("TlsStream", "write" | "shutdown_write") => {
-            vec![(Sends, "Network", Some(0)), (Blocks, "", None)]
-        }
-        ("TlsStream", "read") => vec![(Receives, "Network", Some(0)), (Blocks, "", None)],
+        // A socket wait suspends its task (core-semantics §11.8); binding,
+        // a shutdown and a UDP `connect` do not wait on the peer and keep
+        // `blocks`, as the library declares them.
+        ("TlsStream", "write") => vec![(Sends, "Network", Some(0)), (Suspends, "", None)],
+        ("TlsStream", "shutdown_write") => vec![(Sends, "Network", Some(0)), (Blocks, "", None)],
+        ("TlsStream", "read") => vec![(Receives, "Network", Some(0)), (Suspends, "", None)],
         // Opening a connection or a listener sends and receives on the
         // network; accepting receives on the listener (core semantics
         // §14.12: two clients of the real network do not conflict).
@@ -1942,24 +1946,30 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         ("TcpListener" | "UdpSocket" | "TlsListener", "local_addr")
         | ("TcpStream" | "UdpSocket", "try_clone") => vec![HEAP],
         ("TcpStream" | "UdpSocket" | "TlsStream" | "WebSocket", "set_read_timeout") => vec![],
-        ("TcpStream", "connect") | ("TcpListener", "bind") => vec![
+        ("TcpStream", "connect") => vec![
+            (Sends, "Network", None),
+            (Receives, "Network", None),
+            (Suspends, "", None),
+        ],
+        ("TcpListener", "bind") => vec![
             (Sends, "Network", None),
             (Receives, "Network", None),
             (Blocks, "", None),
         ],
-        ("TcpListener", "accept") => vec![(Receives, "Network", Some(0)), (Blocks, "", None)],
+        ("TcpListener", "accept") => vec![(Receives, "Network", Some(0)), (Suspends, "", None)],
         ("TcpStream", "shutdown_write") => vec![(Sends, "Network", Some(0))],
         ("TcpStream", "write" | "write_all" | "flush") => {
-            vec![(Sends, "Network", Some(0)), (Blocks, "", None)]
+            vec![(Sends, "Network", Some(0)), (Suspends, "", None)]
         }
         ("TcpStream", "read" | "read_line" | "read_to_string") => {
-            vec![(Receives, "Network", Some(0)), (Blocks, "", None)]
+            vec![(Receives, "Network", Some(0)), (Suspends, "", None)]
         }
-        ("UdpSocket", "send_to" | "send" | "connect") => {
-            vec![(Sends, "Network", Some(0)), (Blocks, "", None)]
+        ("UdpSocket", "send_to" | "send") => {
+            vec![(Sends, "Network", Some(0)), (Suspends, "", None)]
         }
+        ("UdpSocket", "connect") => vec![(Sends, "Network", Some(0)), (Blocks, "", None)],
         ("UdpSocket", "recv_from" | "recv") => {
-            vec![(Receives, "Network", Some(0)), (Blocks, "", None)]
+            vec![(Receives, "Network", Some(0)), (Suspends, "", None)]
         }
         ("File", "write" | "write_all" | "flush") => {
             vec![(Writes, "File", Some(0)), (Blocks, "", None)]
@@ -2013,7 +2023,7 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         ("Client", "get" | "post") | ("RequestBuilder", "send") => vec![
             (Sends, "Network", None),
             (Receives, "Network", None),
-            (Blocks, "", None),
+            (Suspends, "", None),
             HEAP,
         ],
         // Paths name files by string value, which a key cannot follow: the
@@ -5058,22 +5068,12 @@ fn main() -> () {
         let r = analyze(&p, &tys);
         assert_eq!(
             effects(&r, "pipe"),
-            [
-                "sends(Channel @ p1)",
-                "receives(Channel @ p2)",
-                "blocks",
-                "suspends"
-            ],
+            ["sends(Channel @ p1)", "receives(Channel @ p2)", "suspends"],
         );
         let site = r.sites["main"].iter().find(|s| s.block.0 == 2).unwrap();
         assert_eq!(
             site.effects.display(),
-            [
-                "sends(Channel @ l1)",
-                "receives(Channel @ l2)",
-                "blocks",
-                "suspends"
-            ],
+            ["sends(Channel @ l1)", "receives(Channel @ l2)", "suspends"],
         );
         // The summary cannot name `main`'s locals, which no caller can
         // reach: they are fresh.

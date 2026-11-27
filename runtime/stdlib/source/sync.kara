@@ -176,7 +176,7 @@ pub struct MutexGuard[T] {
 
 impl[T] Mutex[T] {
     /// Waits until no other task holds the mutex, then returns its guard.
-    fn lock(ref self) -> MutexGuard[T] with blocks {
+    fn lock(ref self) -> MutexGuard[T] with suspends {
         MutexGuard { value: self.acquire(), mutex: self }
     }
 
@@ -201,7 +201,7 @@ impl[T] Mutex[T] {
     // Waits until no other task holds the mutex, marks it held and returns
     // the protected value. A native of each MIR backend.
     #[compiler_builtin]
-    fn acquire(ref self) -> mut ref T with blocks {
+    fn acquire(ref self) -> mut ref T with suspends {
         self.acquire()
     }
 

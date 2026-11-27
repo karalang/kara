@@ -26,13 +26,13 @@ let (tx, rx): (Sender[Job], Receiver[Job]) = channel(64);
 import std.sync.{SendError, Sender};
 
 impl[T: CrossTask] Sender[T] {
-    fn send(self, value: own T) -> Result[(), SendError[T]] with sends(self) blocks
+    fn send(self, value: own T) -> Result[(), SendError[T]] with sends(self) suspends
     fn try_send(self, value: own T) -> Result[(), SendError[T]] with sends(self)
     fn clone(self) -> Sender[T]
 }
 
 impl[T] Receiver[T] {
-    fn recv(self) -> Option[T] with receives(self) blocks
+    fn recv(self) -> Option[T] with receives(self) suspends
     fn try_recv(self) -> Option[T] with receives(self)
 }
 
@@ -54,7 +54,7 @@ Sending returns a `Result` instead of panicking because a panic ends the whole p
 
 **Closing.** The channel closes when the last `Sender` drops: `recv` then drains the buffered messages and returns `None`. When the `Receiver` drops, the messages still buffered drop with it, since nothing can receive them any more, and every later `send`, and any `send` waiting on a full channel, returns `Err(SendError.Closed(value))`.
 
-**Effects.** `tx.send(v)` has `sends(tx)` and `rx.recv()` has `receives(rx)`, keyed by the channel value ([core-semantics.md §12](../core-semantics.md#12-effects-soundness-defaults-c10), item 5), so two channels are two resources. Clones of one `Sender` name the same channel. A function type, whose parameters have no names, writes `sends(Channel)` or `receives(Channel)`, which conflicts with every channel ([design.md](../design.md#value-rooted-resources)). Which `par` branches may use one channel together is [core-semantics.md §11.2](../core-semantics.md#11-concurrency-c9). `send` and `recv` also have `blocks`, because they may wait. On `wasm_wasi`, where tasks run one at a time, a waiting `recv` yields to the other tasks; if no task can run, the program panics with a deadlock message ([design.md §16](../design.md#concurrency-across-targets)).
+**Effects.** `tx.send(v)` has `sends(tx)` and `rx.recv()` has `receives(rx)`, keyed by the channel value ([core-semantics.md §12](../core-semantics.md#12-effects-soundness-defaults-c10), item 5), so two channels are two resources. Clones of one `Sender` name the same channel. A function type, whose parameters have no names, writes `sends(Channel)` or `receives(Channel)`, which conflicts with every channel ([design.md](../design.md#value-rooted-resources)). Which `par` branches may use one channel together is [core-semantics.md §11.2](../core-semantics.md#11-concurrency-c9). `send` and `recv` also have `suspends`, because they may wait: a waiting call suspends its task, and the worker runs other tasks meanwhile ([core-semantics.md §11.8](../core-semantics.md#11-concurrency-c9)). A function that declares `blocks` may still call them, since `blocks` admits `suspends`. On `wasm_wasi`, where tasks run one at a time, a waiting `recv` yields to the other tasks; if no task can run, the program panics with a deadlock message ([design.md §16](../design.md#concurrency-across-targets)).
 
 **Fan-in.** Two `par` branches that send on clones of one `Sender` conflict, because sends on one channel keep their order ([core-semantics.md §11.2](../core-semantics.md#11-concurrency-c9)). To fan in from concurrent producers, run each producer, with its own clone, as a `TaskGroup` task: tasks are not checked for effect conflicts, and their messages arrive in no fixed order ([`TaskGroup`](#taskgroup)). `par` stays deterministic.
 
@@ -82,11 +82,11 @@ select {
 
 ```kara,fragment
 impl[T] Receiver[T] {
-    fn recv_timeout(self, d: Duration) -> Result[T, RecvTimeoutError] with receives(self) blocks
+    fn recv_timeout(self, d: Duration) -> Result[T, RecvTimeoutError] with receives(self) suspends
 }
 
 impl[T: CrossTask] Sender[T] {
-    fn send_timeout(self, value: own T, d: Duration) -> Result[(), SendTimeoutError[T]] with sends(self) blocks
+    fn send_timeout(self, value: own T, d: Duration) -> Result[(), SendTimeoutError[T]] with sends(self) suspends
 }
 
 enum RecvTimeoutError {
@@ -144,14 +144,14 @@ impl TaskGroup {
 }
 
 impl[T] TaskHandle[T] {
-    fn join(own self) -> T with blocks
+    fn join(own self) -> T with suspends
 }
 ```
 
 - **`new`** makes an empty group. `TaskGroup.new(limit: n)` lets at most `n` of its tasks run at once. Without `limit` the group is unbounded: the default, `i64.MAX`, is never reached.
 - **`spawn`** starts `f` as a task that runs concurrently with the caller, and waits first while the group already runs `limit` tasks; that wait is its `blocks`. Its receiver is a borrowed `self`, so the functions and tasks that spawn into a group, such as a server's request handlers, take it as an ordinary borrowed parameter; spawns on one group are synchronized. `f` is not escaping: its captures are inferred place by place, so a task may borrow from the enclosing scope, and the group holds those borrows until it drops. The borrowing rules, including what a task spawned from inside another task may capture, are [core-semantics.md §9.5](../core-semantics.md#9-closures).
 - **Dropping a group joins every task it started**, so every task finishes before the scope that owns the group ends, and the drop waits (`blocks`).
-- **`TaskHandle[T]`** owns its task's result and borrows nothing, so it may outlive its group. `join` waits for the task and returns its result. After the group has dropped, every task is done, and `join` returns the stored result at once. A result that is never joined drops with its handle, or with the group if the handle dropped first.
+- **`TaskHandle[T]`** owns its task's result and borrows nothing, so it may outlive its group. `join` waits for the task and returns its result; the wait suspends the caller's task (`suspends`). After the group has dropped, every task is done, and `join` returns the stored result at once. A result that is never joined drops with its handle, or with the group if the handle dropped first.
 - **Tasks are not checked against each other for effect conflicts.** The borrow rules and `CrossTask` keep them from racing on memory, but two tasks may both print, or both write to one database, and their order is not fixed ([design.md §13](../design.md#taskgroup)). `par {}` and `par for` are the deterministic constructs.
 - **Failure.** A task that returns `Err` does not affect its siblings; the error reaches whoever joins its handle. A panic in any task ends the process ([core-semantics.md §11.4](../core-semantics.md#11-concurrency-c9)), except in an isolating group (below).
 - **Cancellation** ([core-semantics.md §11.9–§11.10](../core-semantics.md#11-concurrency-c9)):
@@ -211,7 +211,7 @@ import std.sync.{Mutex};
 
 impl[T] Mutex[T] {
     fn new(value: own T) -> Mutex[T]
-    fn lock(self) -> MutexGuard[T] with blocks
+    fn lock(self) -> MutexGuard[T] with suspends
     fn try_lock(self) -> Option[MutexGuard[T]]
     fn into_inner(own self) -> T
 }
@@ -247,7 +247,7 @@ impl Stats {
 - **`try_lock`** never waits: it returns the guard when no task holds the mutex, and `None` when one does, the task that calls it included. It is how a task that already holds one lock tries a second and backs off instead of waiting, as Rust's `Mutex::try_lock`, Go's `TryLock` and Java's `tryLock` do: `if let Some(right) = forks[r].try_lock() { .. }`, else drop the first guard and start again. It adds no effect (B-2026-11-19-30).
 - **`into_inner`** consumes the mutex and returns its value, as Rust's does, once the tasks that shared it are done (after their group has dropped): `let totals = stats.into_inner();`. There is no poisoning, so it returns the value itself, not a `Result` (B-2026-11-15-35).
 - **No poisoning.** A panic ends the process, so a lock is never left held by a failed task.
-- **Effect-transparent.** Code run while holding the lock has its ordinary effects, counted as if there were no lock; `lock` itself adds only `blocks`. The effect system orders access to whole resources at compile time, and a `Mutex` orders access within one resource at run time.
+- **Effect-transparent.** Code run while holding the lock has its ordinary effects, counted as if there were no lock; `lock` itself adds only `suspends`: a lock that waits suspends its task. The effect system orders access to whole resources at compile time, and a `Mutex` orders access within one resource at run time.
 
 A `sync` type holds its mutable state in `Mutex[T]` and `Atomic[T]` fields. Their methods take a borrowed `self`, so those fields are never written `mut` ([design.md §11](../design.md#sync-types)). A `Mutex` can also be used on its own.
 

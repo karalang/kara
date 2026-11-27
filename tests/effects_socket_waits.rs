@@ -1,8 +1,9 @@
 //! The library's socket, TLS, WebSocket and child-process waits carry the
-//! execution verbs `docs/library/io.md` gives them: `accept`, `connect`,
-//! `read`, `write`, UDP `recv` and `Child.wait` are `blocks suspends`, and the
-//! binds and UDP sends `blocks` (`docs/core-semantics.md` §11.8). A public
-//! caller has to declare them, and a declared `blocks` covers `suspends`.
+//! execution verbs `docs/library/io.md` gives them (`docs/core-semantics.md`
+//! §11.8): `accept`, `connect`, `read`, `write` and UDP `send` and `recv`
+//! are `suspends` (B-2026-11-27-10), `Child.wait` is `blocks suspends`, and
+//! the binds `blocks`. A public caller has to declare them, and a declared
+//! `blocks` covers `suspends`.
 
 use std::path::PathBuf;
 use std::process::{Command, Output};
@@ -49,15 +50,28 @@ fn tcp_read_under_a_network_only_clause_is_refused() {
              }
          }
          fn main() {}",
-        &[
-            "performs blocks but does not declare it (via call to 'TcpStream.read'",
-            "performs suspends but does not declare it (via call to 'TcpStream.read'",
-        ],
+        &["performs suspends but does not declare it (via call to 'TcpStream.read'"],
+    );
+    let out = check(
+        "tcp-read-no-blocks",
+        "pub fn pull(s: ref TcpStream) -> i64 with sends(Network) receives(Network) {
+             let mut buf = [0u8; 16];
+             match s.read(mut buf) {
+                 Ok(n) => n,
+                 Err(_) => -1,
+             }
+         }
+         fn main() {}",
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !err.contains("performs blocks"),
+        "a socket read does not block: {err}"
     );
 }
 
 #[test]
-fn undeclared_tcp_read_asks_for_blocks_and_suspends() {
+fn undeclared_tcp_read_asks_for_suspends_alone() {
     refused(
         "tcp-read-undeclared",
         "pub fn pull(s: ref TcpStream) -> i64 {
@@ -68,8 +82,9 @@ fn undeclared_tcp_read_asks_for_blocks_and_suspends() {
              }
          }
          fn main() {}",
-        // A read only receives (io.md § Effects; B-2026-11-25-35).
-        &["Add: with blocks receives(Network) suspends"],
+        // A read only receives (io.md § Effects; B-2026-11-25-35), and its
+        // wait suspends without blocking (B-2026-11-27-10).
+        &["Add: with receives(Network) suspends to"],
     );
 }
 
@@ -123,7 +138,7 @@ fn websocket_send_under_a_network_only_clause_is_refused() {
              ws.send_text(\"hi\").is_ok()
          }
          fn main() {}",
-        &["performs blocks but does not declare it (via call to 'WebSocket.send_text'"],
+        &["performs suspends but does not declare it (via call to 'WebSocket.send_text'"],
     );
 }
 
@@ -139,7 +154,7 @@ fn udp_recv_under_a_network_only_clause_is_refused() {
              }
          }
          fn main() {}",
-        &["performs blocks but does not declare it (via call to 'UdpSocket.recv'"],
+        &["performs suspends but does not declare it (via call to 'UdpSocket.recv'"],
     );
 }
 
@@ -195,5 +210,69 @@ pub fn pull(s: ref TcpStream) -> i64 with sends(Network) receives(Network) block
         out.status.success(),
         "{}",
         String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// §11.8 cs.851: `suspends` alone is the promise a socket waiter can make,
+/// since every socket wait suspends its task (B-2026-11-27-10).
+#[test]
+fn declared_suspends_alone_covers_every_socket_wait() {
+    let out = check(
+        "declared-suspends",
+        "import std.net.{TcpListener, TcpStream, TlsStream, WebSocket};
+
+pub fn pull(s: ref TcpStream) -> i64 with sends(Network) receives(Network) suspends {
+             let mut buf = [0u8; 16];
+             match s.read(mut buf) {
+                 Ok(n) => n,
+                 Err(_) => -1,
+             }
+         }
+         pub fn pull_tls(s: ref TlsStream) -> i64 with sends(Network) receives(Network) suspends {
+             let mut buf = [0u8; 16];
+             match s.read(mut buf) {
+                 Ok(n) => n,
+                 Err(_) => -1,
+             }
+         }
+         pub fn swap(s: ref UdpSocket, buf: mut Slice[u8]) -> i64 with sends(Network) receives(Network) suspends {
+             let _ = s.send(buf);
+             match s.recv(mut buf) {
+                 Ok(n) => n,
+                 Err(_) => -1,
+             }
+         }
+         pub fn serve(l: ref TcpListener) -> bool with sends(Network) receives(Network) suspends {
+             match WebSocket.accept(l) {
+                 Ok(ws) => {
+                     let mut ws = ws;
+                     ws.send_text(\"hi\").is_ok()
+                 }
+                 Err(_) => false,
+             }
+         }
+         pub fn dial(addr: Str) -> bool with sends(Network) receives(Network) suspends {
+             TcpStream.connect(addr).is_ok()
+         }
+         fn main() {}",
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// Binding does not wait on a peer and keeps `blocks`, so `suspends` alone
+/// does not cover it.
+#[test]
+fn declared_suspends_alone_does_not_cover_a_bind() {
+    refused(
+        "bind-suspends",
+        "pub fn open(addr: Str) -> bool with sends(Network) receives(Network) suspends {
+             TcpListener.bind(addr).is_ok()
+         }
+         fn main() {}",
+        &["performs blocks but does not declare it (via call to 'TcpListener.bind'"],
     );
 }

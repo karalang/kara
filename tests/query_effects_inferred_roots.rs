@@ -107,7 +107,7 @@ fn the_whole_program_graph_carries_the_roots() {
     let t = query("whole", "m.kara");
     assert!(
         t.contains(&format!(
-            "{{\"function\":\"inner\",\"line\":1,\"is_test\":false,\"inferred_effects\":[{{\"verb\":\"allocates\",\"resource\":\"Heap\"}},{{\"verb\":\"blocks\",\"resource\":\"\"}},{SENDS},\"roots\":[\"tx\"]}}]"
+            "{{\"function\":\"inner\",\"line\":1,\"is_test\":false,\"inferred_effects\":[{{\"verb\":\"allocates\",\"resource\":\"Heap\"}},{SENDS},\"roots\":[\"tx\"]}},{{\"verb\":\"suspends\",\"resource\":\"\"}}]"
         )),
         "{t}"
     );

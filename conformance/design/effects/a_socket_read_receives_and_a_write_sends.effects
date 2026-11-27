@@ -1,5 +1,5 @@
-rd has receives(Network), blocks
-rd lacks sends(Network)
-wr has sends(Network), blocks
-wr lacks receives(Network)
+rd has receives(Network), suspends
+rd lacks sends(Network), blocks
+wr has sends(Network), suspends
+wr lacks receives(Network), blocks
 dial has sends(Network), receives(Network)

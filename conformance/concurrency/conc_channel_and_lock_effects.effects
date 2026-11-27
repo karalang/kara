@@ -1,5 +1,6 @@
-put has blocks
-get has blocks
-bump has blocks
-try_bump lacks blocks
-count lacks blocks
+put has suspends
+get has suspends
+bump has suspends
+bump lacks blocks
+try_bump lacks blocks, suspends
+count lacks blocks, suspends

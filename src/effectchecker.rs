@@ -2605,8 +2605,8 @@ impl<'a> EffectChecker<'a> {
                 set.add(effect.clone(), EffectOrigin::Direct(builtin_span));
             }
             // B-2026-08-22-21 — `recv_blocking` additionally carries `blocks`.
-            // `recv` gets the same `blocks` below (B-2026-10-21-70: it carried
-            // `suspends` until then, which v1 does not have).
+            // `recv` gets `suspends` below (core-semantics §11.8,
+            // B-2026-11-27-10).
             {
                 let blocks_effect = Effect {
                     verb: EffectVerbKind::Blocks,
@@ -3103,53 +3103,67 @@ impl<'a> EffectChecker<'a> {
             }
         }
 
-        // `blocks` on every operation that may park the OS thread
-        // (B-2026-10-21-62, B-2026-10-21-70). design.md § `blocks`: "In v1 all
-        // I/O blocks the thread it runs on", and unlike `allocates(Heap)` and
-        // `panics` it is not default-permitted, so a `pub fn` that reads a
-        // file must say so. library/io.md gives `blocks` to every file and
-        // network operation, so it is added to every seed above that carries
-        // a `FileSystem` or `Network` effect rather than listed again; the
-        // seeds without one (constructors, `BufReader.new`) touch nothing.
-        // library/concurrency.md gives it to `send` and `recv` (they wait on a
-        // full or empty channel) and to `TaskGroup.spawn` and
-        // `TaskHandle.join`; `try_send` and `try_recv` never wait and get
-        // none. `Receiver.recv` carried `suspends` here before, which v1 does
-        // not have (it returns with coroutines in M4a), so a `pub fn` that
-        // declared the spec's `blocks` was refused.
+        // The wait effect of every operation that may wait (B-2026-10-21-62,
+        // B-2026-10-21-70, B-2026-11-27-10). core-semantics §11.8: a call
+        // that waits on a channel (`send`, `recv`), a join, a held `Mutex`
+        // or a socket (`accept`, `connect`, `read`, `write`, UDP `send` and
+        // `recv`, the HTTP client's request) suspends its task and carries
+        // `suspends`; every other waiting call (file I/O, an `extern` call,
+        // a process wait) blocks its worker and carries `blocks`. Unlike
+        // `allocates(Heap)` and `panics`, neither is default-permitted, so a
+        // `pub fn` that reads a file or a socket says so; a declared `blocks`
+        // admits `suspends` (`declared_admits`), so declaring `blocks` still
+        // covers a socket wait. The verb is added to every seed above that
+        // carries a `FileSystem` (`blocks`) or `Network` (`suspends`) effect
+        // rather than listed again; the seeds without one (constructors,
+        // `BufReader.new`) touch nothing. A server also binds its listener,
+        // which does not suspend, so `Server.serve*` carry both. `try_send`
+        // and `try_recv` never wait and get neither. `TaskGroup.spawn` waits
+        // for a slot under the group's limit and keeps `blocks`
+        // (library/concurrency.md), which §11.8's list does not name.
         {
             let blocks = Effect {
                 verb: EffectVerbKind::Blocks,
                 resource: String::new(),
             };
-            let mut keys: Vec<Symbol> = self
-                .inferred_effects
-                .iter()
-                .filter(|(_, set)| {
-                    set.effects.iter().any(|t| {
-                        matches!(
-                            t.effect.verb,
-                            EffectVerbKind::Reads
-                                | EffectVerbKind::Writes
-                                | EffectVerbKind::Sends
-                                | EffectVerbKind::Receives
-                        ) && (t.effect.resource == "FileSystem" || t.effect.resource == "Network")
+            let resource_seeds = |inferred: &FxHashMap<Symbol, EffectSet>, resource: &str| {
+                inferred
+                    .iter()
+                    .filter(|(_, set)| {
+                        set.effects.iter().any(|t| {
+                            matches!(
+                                t.effect.verb,
+                                EffectVerbKind::Reads
+                                    | EffectVerbKind::Writes
+                                    | EffectVerbKind::Sends
+                                    | EffectVerbKind::Receives
+                            ) && t.effect.resource == resource
+                        })
                     })
-                })
-                .map(|(k, _)| *k)
-                .collect();
+                    .map(|(k, _)| *k)
+                    .collect::<Vec<Symbol>>()
+            };
+            let mut blocking = resource_seeds(&self.inferred_effects, "FileSystem");
+            let mut suspending = resource_seeds(&self.inferred_effects, "Network");
             for name in [
-                "Sender.send",
-                "Receiver.recv",
                 "TaskGroup.spawn",
                 "IsolatingGroup.spawn",
-                "TaskHandle.join",
+                "Server.serve",
+                "Server.serve_tls",
+                "Server.serve_static",
             ] {
-                keys.push(self.interner.intern(name));
+                blocking.push(self.interner.intern(name));
             }
-            for key in keys {
+            for name in ["Sender.send", "Receiver.recv", "TaskHandle.join"] {
+                suspending.push(self.interner.intern(name));
+            }
+            for key in blocking {
                 let set = self.inferred_effects.entry(key).or_default();
                 set.add(blocks.clone(), EffectOrigin::Direct(builtin_span));
+            }
+            for key in suspending {
+                let set = self.inferred_effects.entry(key).or_default();
+                set.add(suspends_effect.clone(), EffectOrigin::Direct(builtin_span));
             }
         }
 

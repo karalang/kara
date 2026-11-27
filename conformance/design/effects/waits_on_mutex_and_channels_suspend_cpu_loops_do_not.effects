@@ -1,0 +1,7 @@
+lock has suspends
+lock lacks blocks
+send has suspends
+send lacks blocks
+recv has suspends
+recv lacks blocks
+spin lacks blocks, suspends

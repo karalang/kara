@@ -5143,10 +5143,10 @@ fn test_sender_send_infers_allocates_heap() {
 }
 
 #[test]
-fn test_receiver_recv_infers_blocks() {
-    // Receiver.recv() waits until a message arrives, so it infers `blocks`
-    // (library/concurrency.md). It inferred `suspends` until B-2026-10-21-70,
-    // an effect v1 does not have.
+fn test_receiver_recv_infers_suspends() {
+    // Receiver.recv() waits until a message arrives, which suspends its task:
+    // it infers `suspends`, not `blocks` (core-semantics §11.8,
+    // B-2026-11-27-10; it inferred `blocks` from B-2026-10-21-70 until then).
     let result = effectcheck_ok(
         "fn do_recv(r: Receiver[i64]) -> i64 {
              r.recv()
@@ -5157,16 +5157,16 @@ fn test_receiver_recv_infers_blocks() {
         inferred
             .effects
             .iter()
-            .any(|e| e.effect.verb == EffectVerbKind::Blocks),
-        "Expected blocks for Receiver.recv(), got: {:?}",
+            .any(|e| e.effect.verb == EffectVerbKind::Suspends),
+        "Expected suspends for Receiver.recv(), got: {:?}",
         inferred.effects
     );
     assert!(
         !inferred
             .effects
             .iter()
-            .any(|e| e.effect.verb == EffectVerbKind::Suspends),
-        "Receiver.recv() must not infer suspends, got: {:?}",
+            .any(|e| e.effect.verb == EffectVerbKind::Blocks),
+        "Receiver.recv() must not infer blocks, got: {:?}",
         inferred.effects
     );
 }
@@ -10860,8 +10860,8 @@ fn test_channel_recv_infers_receives_channel() {
             inferred.effects
         );
     }
-    // `recv`'s own `blocks` seed shares its key and must survive the merge
-    // (it was `suspends` until B-2026-10-21-70).
+    // `recv`'s own `suspends` seed shares its key and must survive the merge
+    // (B-2026-11-27-10; it was `blocks` from B-2026-10-21-70 until then).
     let result = effectcheck_ok(
         "fn r() {\n\
          \x20   let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();\n\
@@ -10873,8 +10873,8 @@ fn test_channel_recv_infers_receives_channel() {
         inferred
             .effects
             .iter()
-            .any(|e| e.effect.verb == EffectVerbKind::Blocks),
-        "the blocks seed on Receiver.recv must not be clobbered, got: {:?}",
+            .any(|e| e.effect.verb == EffectVerbKind::Suspends),
+        "the suspends seed on Receiver.recv must not be clobbered, got: {:?}",
         inferred.effects
     );
 }
@@ -12824,23 +12824,28 @@ fn fs_exists_carries_reads_filesystem() {
 }
 
 #[test]
-fn channel_send_and_recv_carry_blocks_not_suspends() {
+fn channel_send_and_recv_carry_suspends_not_blocks() {
+    // core-semantics §11.8: a channel wait suspends its task, so `send` and
+    // `recv` carry `suspends` (B-2026-11-27-10), and a declared `blocks`
+    // still admits them (cs.849).
     let result = effectcheck_full_pipeline(
         "pub fn put(tx: Sender[i64]) with sends(tx) { let _ = tx.send(1); }",
     );
     let errs = real_errors(&result);
     assert!(
-        errs.iter().any(|m| m.contains("blocks")),
-        "a send without `blocks` must be refused, got: {errs:?}"
+        errs.iter().any(|m| m.contains("performs suspends")),
+        "a send without `suspends` must be refused, got: {errs:?}"
     );
-    let result = effectcheck_full_pipeline(
-        "pub fn get(rx: Receiver[i64]) with receives(rx) blocks { let _ = rx.recv(); }",
-    );
-    let errs = real_errors(&result);
-    assert!(
-        errs.is_empty(),
-        "the spec's recv declaration must pass, got: {errs:?}"
-    );
+    for clause in ["receives(rx) suspends", "receives(rx) blocks"] {
+        let result = effectcheck_full_pipeline(&format!(
+            "pub fn get(rx: Receiver[i64]) with {clause} {{ let _ = rx.recv(); }}"
+        ));
+        let errs = real_errors(&result);
+        assert!(
+            errs.is_empty(),
+            "`with {clause}` must admit recv, got: {errs:?}"
+        );
+    }
     // `try_send` and `try_recv` never wait.
     let result = effectcheck_full_pipeline(
         "pub fn poll(tx: Sender[i64], rx: Receiver[i64]) \

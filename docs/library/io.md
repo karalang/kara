@@ -1,6 +1,6 @@
 # Input and output
 
-**I/O blocks, and socket waits suspend.** Outside a task, a read or write occupies the calling thread until it completes, so every file and network operation has `blocks`. The socket, TLS and WebSocket waits, `Child.wait`, reads of a child's output pipes and the HTTP client's requests also have `suspends`: inside a task, a call that would wait suspends its task, and the program's other tasks run until it can go on ([core semantics §11.8](../core-semantics.md)). File I/O, writes to a child's stdin and a `BufReader` over a pipe still hold the thread inside a task.
+**File I/O blocks, and socket waits suspend** ([core semantics §11.8](../core-semantics.md)). A file read or write, a write to a child's stdin and a `BufReader` over a pipe hold the worker they run on until they complete, so they have `blocks`. The socket, TLS and WebSocket waits (`accept`, `connect`, `read`, `write`, UDP `send` and `recv`) and the HTTP client's requests have `suspends` instead: a call that would wait suspends its task, and the program's other tasks run until it can go on. Binding a listener and `shutdown_write` do not wait on a peer and keep `blocks`; a server, which binds and then accepts, has both. `Child.wait` and reads of a child's output pipes suspend inside a task too, but they are process waits and keep `blocks` as well. A function that declares `blocks` may call a `suspends` callee, since `blocks` admits `suspends`.
 
 **Effects.** Each function lists its effects ([design.md §12](../design.md#resources)):
 - **`FileSystem` and `Network` are capabilities**, not conflict keys: `reads(FileSystem)` means "may read files" and `sends(Network)` "may use the network". Path-taking functions such as `fs.write(path, content)` carry `writes(FileSystem)` (and `blocks`, like all I/O) and do not conflict with each other, so two `par` branches that write the same path by name are not detected.
@@ -282,17 +282,17 @@ import std.net.{TcpListener, TcpStream};
 
 impl TcpListener {
     fn bind(addr: Str) -> Result[TcpListener, NetError] with sends(Network) receives(Network) blocks
-    fn accept(self) -> Result[TcpStream, NetError] with receives(self) blocks suspends
+    fn accept(self) -> Result[TcpStream, NetError] with receives(self) suspends
     fn local_addr(self) -> Result[String, NetError]
 }
 
 impl TcpStream {
-    fn connect(addr: Str) -> Result[TcpStream, NetError] with sends(Network) receives(Network) blocks suspends
-    fn read(self, buf: mut Slice[u8]) -> Result[i64, NetError] with receives(self) blocks suspends
-    fn read_exact(self, buf: mut Slice[u8]) -> Result[(), NetError] with receives(self) blocks suspends
-    fn read_to_end(self, buf: mut ref Vec[u8]) -> Result[i64, NetError] with receives(self) blocks suspends
-    fn write(self, buf: Slice[u8]) -> Result[i64, NetError] with sends(self) blocks suspends
-    fn write_all(self, buf: Slice[u8]) -> Result[i64, NetError] with sends(self) blocks suspends
+    fn connect(addr: Str) -> Result[TcpStream, NetError] with sends(Network) receives(Network) suspends
+    fn read(self, buf: mut Slice[u8]) -> Result[i64, NetError] with receives(self) suspends
+    fn read_exact(self, buf: mut Slice[u8]) -> Result[(), NetError] with receives(self) suspends
+    fn read_to_end(self, buf: mut ref Vec[u8]) -> Result[i64, NetError] with receives(self) suspends
+    fn write(self, buf: Slice[u8]) -> Result[i64, NetError] with sends(self) suspends
+    fn write_all(self, buf: Slice[u8]) -> Result[i64, NetError] with sends(self) suspends
     fn try_clone(self) -> Result[TcpStream, NetError]
     fn shutdown_write(self) -> Result[(), NetError] with sends(self) blocks
     fn set_read_timeout(self, ms: Option[i64]) -> Result[(), NetError]
@@ -300,11 +300,11 @@ impl TcpStream {
 
 impl UdpSocket {
     fn bind(addr: Str) -> Result[UdpSocket, NetError] with sends(Network) receives(Network) blocks
-    fn send_to(self, buf: Slice[u8], addr: Str) -> Result[i64, NetError] with sends(self) blocks
-    fn recv_from(self, buf: mut Slice[u8]) -> Result[(i64, String), NetError] with receives(self) blocks suspends
+    fn send_to(self, buf: Slice[u8], addr: Str) -> Result[i64, NetError] with sends(self) suspends
+    fn recv_from(self, buf: mut Slice[u8]) -> Result[(i64, String), NetError] with receives(self) suspends
     fn connect(self, addr: Str) -> Result[(), NetError] with sends(self) blocks
-    fn send(self, buf: Slice[u8]) -> Result[i64, NetError] with sends(self) blocks
-    fn recv(self, buf: mut Slice[u8]) -> Result[i64, NetError] with receives(self) blocks suspends
+    fn send(self, buf: Slice[u8]) -> Result[i64, NetError] with sends(self) suspends
+    fn recv(self, buf: mut Slice[u8]) -> Result[i64, NetError] with receives(self) suspends
     fn local_addr(self) -> Result[String, NetError]
     fn set_read_timeout(self, ms: Option[i64]) -> Result[(), NetError]
     fn try_clone(self) -> Result[UdpSocket, NetError]
@@ -376,16 +376,16 @@ import std.net.{TlsListener, TlsStream};
 
 impl TlsListener {
     fn bind_tls(addr: Str, cert_pem: Str, key_pem: Str) -> Result[TlsListener, NetError] with sends(Network) receives(Network) blocks
-    fn accept(self) -> Result[TlsStream, NetError] with receives(self) blocks suspends
+    fn accept(self) -> Result[TlsStream, NetError] with receives(self) suspends
     fn local_addr(self) -> Result[String, NetError]
 }
 
 impl TlsStream {
-    fn read(self, buf: mut Slice[u8]) -> Result[i64, NetError] with receives(self) blocks suspends
-    fn read_exact(self, buf: mut Slice[u8]) -> Result[(), NetError] with receives(self) blocks suspends
-    fn read_to_end(self, buf: mut ref Vec[u8]) -> Result[i64, NetError] with receives(self) blocks suspends
-    fn write(self, buf: Slice[u8]) -> Result[i64, NetError] with sends(self) blocks suspends
-    fn write_all(self, buf: Slice[u8]) -> Result[i64, NetError] with sends(self) blocks suspends
+    fn read(self, buf: mut Slice[u8]) -> Result[i64, NetError] with receives(self) suspends
+    fn read_exact(self, buf: mut Slice[u8]) -> Result[(), NetError] with receives(self) suspends
+    fn read_to_end(self, buf: mut ref Vec[u8]) -> Result[i64, NetError] with receives(self) suspends
+    fn write(self, buf: Slice[u8]) -> Result[i64, NetError] with sends(self) suspends
+    fn write_all(self, buf: Slice[u8]) -> Result[i64, NetError] with sends(self) suspends
     fn shutdown_write(self) -> Result[(), NetError] with sends(self) blocks
     fn set_read_timeout(self, ms: Option[i64]) -> Result[(), NetError]
 }
@@ -403,13 +403,13 @@ A failed connection fails with `NetError.Tls`, and every later call on it fails 
 import std.net.{TcpListener, TlsListener, WebSocket};
 
 impl WebSocket {
-    fn accept(listener: TcpListener) -> Result[WebSocket, NetError] with receives(listener) blocks suspends
-    fn accept_tls(listener: TlsListener) -> Result[WebSocket, NetError] with receives(listener) blocks suspends
-    fn recv(mut ref self) -> Result[WsMessage, NetError] with receives(self) sends(self) blocks suspends
-    fn send_text(mut ref self, text: Str) -> Result[(), NetError] with sends(self) blocks suspends
-    fn send_binary(mut ref self, data: Slice[u8]) -> Result[(), NetError] with sends(self) blocks suspends
-    fn send_ping(mut ref self, data: Slice[u8]) -> Result[(), NetError] with sends(self) blocks suspends
-    fn close(mut ref self, code: u16) -> Result[(), NetError] with sends(self) receives(self) blocks suspends
+    fn accept(listener: TcpListener) -> Result[WebSocket, NetError] with receives(listener) suspends
+    fn accept_tls(listener: TlsListener) -> Result[WebSocket, NetError] with receives(listener) suspends
+    fn recv(mut ref self) -> Result[WsMessage, NetError] with receives(self) sends(self) suspends
+    fn send_text(mut ref self, text: Str) -> Result[(), NetError] with sends(self) suspends
+    fn send_binary(mut ref self, data: Slice[u8]) -> Result[(), NetError] with sends(self) suspends
+    fn send_ping(mut ref self, data: Slice[u8]) -> Result[(), NetError] with sends(self) suspends
+    fn close(mut ref self, code: u16) -> Result[(), NetError] with sends(self) receives(self) suspends
     fn set_read_timeout(self, ms: Option[i64]) -> Result[(), NetError]
 }
 
@@ -505,8 +505,8 @@ import std.net.{Client, HttpError, RequestBuilder, Response};
 
 impl Client {
     fn new() -> Client
-    fn get(self, url: own String) -> Result[Response, HttpError] with sends(Network) receives(Network) blocks suspends
-    fn post(self, url: own String, body: own String) -> Result[Response, HttpError] with sends(Network) receives(Network) blocks suspends
+    fn get(self, url: own String) -> Result[Response, HttpError] with sends(Network) receives(Network) suspends
+    fn post(self, url: own String, body: own String) -> Result[Response, HttpError] with sends(Network) receives(Network) suspends
     fn request(self, method: own String, url: own String) -> RequestBuilder
 }
 
@@ -515,7 +515,7 @@ impl RequestBuilder {
     fn body(own self, b: own String) -> RequestBuilder
     fn body_bytes(own self, b: own Vec[u8]) -> RequestBuilder
     fn timeout(own self, ms: i64) -> RequestBuilder
-    fn send(self) -> Result[Response, HttpError] with sends(Network) receives(Network) blocks suspends
+    fn send(self) -> Result[Response, HttpError] with sends(Network) receives(Network) suspends
 }
 
 impl Response {

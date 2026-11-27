@@ -330,7 +330,8 @@ fn bufreader_read_exact_over_a_file_a_socket_and_a_pipe() {
 }
 
 /// A buffered socket's `read_exact` has the network effects its `read`
-/// has, so a function that calls it is seen to receive from the network.
+/// has, so a function that calls it is seen to receive from the network,
+/// and its wait suspends without blocking (B-2026-11-27-10).
 #[test]
 fn bufreader_read_exact_over_a_socket_has_the_socket_effects() {
     let dir = Scratch::new("effects");
@@ -353,8 +354,12 @@ fn bufreader_read_exact_over_a_socket_has_the_socket_effects() {
     let text = stdout_of(out, "query effects");
     for want in [
         r#"{"verb":"receives","resource":"Network"}"#,
-        r#"{"verb":"blocks","resource":""}"#,
+        r#"{"verb":"suspends","resource":""}"#,
     ] {
         assert!(text.contains(want), "{want} missing from {text}");
     }
+    assert!(
+        !text.contains(r#"{"verb":"blocks","resource":""}"#),
+        "a socket read does not block: {text}"
+    );
 }

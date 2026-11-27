@@ -1,12 +1,12 @@
 import std.sync.{Atomic, Mutex};
 
 // A public function declares its effects; atomics add none, and lock adds
-// only `blocks`.
+// only `suspends` (B-2026-11-27-10).
 pub fn bump(c: Atomic[i64]) -> i64 {
     c.fetch_add(1)
 }
 
-pub fn read_locked(m: Mutex[i64]) -> i64 with blocks {
+pub fn read_locked(m: Mutex[i64]) -> i64 with suspends {
     let g = m.lock();
     *g.value
 }

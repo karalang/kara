@@ -233,9 +233,9 @@ Run with `python3 conformance/cases.py conformance/design/effects` and, for the 
 | 5621 | Never conflicts | covered | allocates_panics_blocks_never_conflict (new) |
 | 5622 | Declared on public functions; private ones infer it | covered | blocks_must_be_declared_on_a_pub_fn, std_time_sleep_is_reads_clock_blocks_suspends |
 | 5623 | Forbidden with `#[no_effect(blocks)]` | covered | no_effect_blocks_rejects_a_sleep_below_it |
-| 5626 | The library's `sleep`, file reads, `Mutex.lock` and channel operations declare it | covered | blocks_comes_from_mutex_and_channels_not_cpu_loops (new), builtin_resource_verbs (new: file and stdin I/O) |
+| 5626 | The library's `sleep`, file reads, process waits and binds declare it (`Mutex.lock` and the channel operations `suspends`, B-2026-11-27-10) | covered | waits_on_mutex_and_channels_suspend_cpu_loops_do_not (lock, send and recv suspend, not block), builtin_resource_verbs (new: file and stdin I/O) |
 | 5627 | A foreign function without a clause has `blocks` | covered | extern_fn_with_neither_has_every_effect_blocks |
-| 5628 | A CPU loop is not blocking | covered | blocks_comes_from_mutex_and_channels_not_cpu_loops (new) |
+| 5628 | A CPU loop is not blocking | covered | waits_on_mutex_and_channels_suspend_cpu_loops_do_not |
 | 5632 | `karac explain f` traces `blocks` edge by edge | covered | explain_traces_blocks_edge_by_edge (new) |
 
 ## Observability
