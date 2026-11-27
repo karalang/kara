@@ -1012,7 +1012,9 @@ pub struct Program {
     /// items, which keeps its `Reverse` and so needs the largest-first
     /// queue too, unless the program's other heaps drop `Reverse`
     /// (B-2026-11-15-86).
-    pub rust_heap_collect: rustc_hash::FxHashMap<usize, (crate::resolver::TextEdit, bool)>,
+    /// A field's heap, filled by `collect` in a struct literal, holds one
+    /// edit per literal (B-2026-11-27-3).
+    pub rust_heap_collect: rustc_hash::FxHashMap<usize, Vec<(crate::resolver::TextEdit, bool)>>,
     /// Rust's `m.entry(k).or_default()` on a map declared as one of
     /// `BinaryHeap`s, `m: HashMap<K, BinaryHeap<T>>`. Set by the PARSER from
     /// the tokens; the resolver reports each beside the `BinaryHeap` it

@@ -13292,21 +13292,32 @@ fn a_write_through_a_bare_parameter_fixes_to_mut_ref() {
     let main =
         "fn main() {\n    let mut v = [\"b\".to_string(), \"a\".to_string()].to_vec();\n    \
                 println(sorted_names(v));\n}\n";
-    for (tag, body, expect) in [
-        (
-            "bare-param-write",
-            "    items.sort();\n    items.join(\",\")\n",
-            "`items` is a bare parameter, which borrows",
-        ),
-        (
-            "bare-param-local-write",
-            "    let mut s = items;\n    s.sort();\n    s.join(\",\")\n",
-            "`s` is bound from `items`, a bare parameter, which borrows",
-        ),
-    ] {
-        let src = format!("fn sorted_names(items: Vec[String]) -> String {{\n{body}}}\n{main}");
-        rejected_then_fixed_in(tag, &src, expect, "items: mut ref Vec[String]", 2);
-    }
+    let src = format!(
+        "fn sorted_names(items: Vec[String]) -> String {{\n    items.sort();\n    \
+         items.join(\",\")\n}}\n{main}"
+    );
+    rejected_then_fixed_in(
+        "bare-param-write",
+        &src,
+        "`items` is a bare parameter, which borrows",
+        "items: mut ref Vec[String]",
+        2,
+    );
+    // B-2026-11-27-5 flipped this one: Rust's `let mut s = items;` takes an
+    // owned argument to change, so the fix is `items: own`, as for the
+    // same-name `let mut items = items;`, not a `mut ref` that would sort
+    // the caller's list.
+    let src = format!(
+        "fn sorted_names(items: Vec[String]) -> String {{\n    let mut s = items;\n    \
+         s.sort();\n    s.join(\",\")\n}}\n{main}"
+    );
+    rejected_then_fixed_in(
+        "bare-param-local-write",
+        &src,
+        "`s` is bound from the bare parameter `items`, which borrows",
+        "items: own Vec[String]",
+        2,
+    );
     let src = format!(
         "fn sorted_names(items: ref Vec[String]) -> String {{\n    let mut s = items;\n    \
          s.sort();\n    s.join(\",\")\n}}\n{main}"

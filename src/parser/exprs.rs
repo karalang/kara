@@ -4380,38 +4380,55 @@ impl super::Parser {
         value: &Expr,
         end: usize,
     ) {
-        let Some(crate::ast::TypeExpr {
-            kind: crate::ast::TypeKind::Path(path),
-            ..
-        }) = ty
-        else {
+        let Some((at, reversed)) = ty.and_then(rust_heap_type) else {
             return;
         };
-        if path.segments.len() != 1 || path.segments[0] != "BinaryHeap" {
-            return;
+        if let Some(edit) = self.rust_heap_collect_edit(value, end) {
+            self.rust_heap_collect
+                .entry(at)
+                .or_default()
+                .push((edit, reversed));
         }
-        let reversed = path.generic_args.as_ref().is_some_and(|args| {
-            matches!(args.first(), Some(crate::ast::GenericArg::Type(t))
-                if matches!(&t.kind, crate::ast::TypeKind::Path(p)
-                    if p.segments.last().is_some_and(|s| s == "Reverse")))
-        });
-        let ExprKind::MethodCall { method, args, .. } = &value.kind else {
+    }
+
+    /// `field: it.collect()` in a `Name { .. }` literal, the value ending at
+    /// `end`: noted for [`Self::rust_heap_collects`], which keeps it when
+    /// `Name`'s `field` is a Rust `BinaryHeap` (B-2026-11-27-3).
+    fn note_rust_heap_literal_collect(
+        &mut self,
+        path: &[String],
+        field: &str,
+        value: &Expr,
+        end: usize,
+    ) {
+        let Some(name) = path.last() else {
             return;
+        };
+        if let Some(edit) = self.rust_heap_collect_edit(value, end) {
+            self.rust_heap_literal_collects
+                .push((name.clone(), field.to_string(), edit));
+        }
+    }
+
+    /// The edit that writes `value`, a bare `it.collect()` ending at `end`,
+    /// as `PriorityQueue.max_first_from(it.collect())`.
+    fn rust_heap_collect_edit(
+        &self,
+        value: &Expr,
+        end: usize,
+    ) -> Option<crate::resolver::TextEdit> {
+        let ExprKind::MethodCall { method, args, .. } = &value.kind else {
+            return None;
         };
         if method != "collect" || !args.is_empty() {
-            return;
+            return None;
         }
-        let Some((source, base)) = self.source.as_ref() else {
-            return;
-        };
+        let (source, base) = self.source.as_ref()?;
         let mut start = value.span.offset;
-        let Some(mut text) = start
+        let mut text = start
             .checked_sub(*base)
             .zip(end.checked_sub(*base))
-            .and_then(|(s, e)| source.get(s..e))
-        else {
-            return;
-        };
+            .and_then(|(s, e)| source.get(s..e))?;
         // A chain on a parenthesized receiver, `(0..n).map(..).collect()`,
         // starts its span inside the `(`: take the opening parens back in,
         // or the wrap would open inside them (kata 2402, B-2026-11-21-40).
@@ -4419,27 +4436,20 @@ impl super::Parser {
             t.chars().filter(|&c| c == ')').count() > t.chars().filter(|&c| c == '(').count()
         };
         while unclosed(text) {
-            let Some(before) = start.checked_sub(*base).and_then(|s| source.get(..s)) else {
-                return;
-            };
+            let before = start.checked_sub(*base).and_then(|s| source.get(..s))?;
             let trimmed = before.trim_end();
             if !trimmed.ends_with('(') {
-                return;
+                return None;
             }
             start = *base + trimmed.len() - 1;
-            let Some(wider) = source.get(start - *base..end - *base) else {
-                return;
-            };
-            text = wider;
+            text = source.get(start - *base..end - *base)?;
         }
         let text = text.trim_end();
-        let edit = crate::resolver::TextEdit {
+        Some(crate::resolver::TextEdit {
             offset: start,
             length: text.len(),
             replacement: format!("PriorityQueue.max_first_from({text})"),
-        };
-        self.rust_heap_collect
-            .insert(path.span.offset, (edit, reversed));
+        })
     }
 
     /// Rust's `BinaryHeap.new()` / `BinaryHeap.from(v)`, whose `BinaryHeap`
@@ -5666,6 +5676,8 @@ impl super::Parser {
             if self.eat(&Token::Colon) {
                 // Explicit field: name: value
                 let value = self.parse_expression()?;
+                let end = self.current_span().offset;
+                self.note_rust_heap_literal_collect(&path, &name, &value, end);
                 fields.push(FieldInit {
                     name,
                     value,
@@ -6310,4 +6322,21 @@ fn fixed_number(fixed: &str) -> Option<ExprKind> {
         _ => return None,
     };
     (lexer.next_token().token == Token::EOF).then_some(kind)
+}
+
+/// A Rust `BinaryHeap<..>` type: where its name starts, and whether its items
+/// are `Reverse` (B-2026-11-15-86).
+pub(super) fn rust_heap_type(ty: &crate::ast::TypeExpr) -> Option<(usize, bool)> {
+    let crate::ast::TypeKind::Path(path) = &ty.kind else {
+        return None;
+    };
+    if path.segments.len() != 1 || path.segments[0] != "BinaryHeap" {
+        return None;
+    }
+    let reversed = path.generic_args.as_ref().is_some_and(|args| {
+        matches!(args.first(), Some(crate::ast::GenericArg::Type(t))
+            if matches!(&t.kind, crate::ast::TypeKind::Path(p)
+                if p.segments.last().is_some_and(|s| s == "Reverse")))
+    });
+    Some((path.span.offset, reversed))
 }

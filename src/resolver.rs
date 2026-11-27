@@ -3140,11 +3140,21 @@ impl<'a> Resolver<'a> {
         // its `Reverse` stays: the largest `Reverse` is the smallest item
         // Rust's heap pops (B-2026-11-15-86). Where the program drops `Reverse`
         // from its heaps, the plain queue already pops the smallest.
-        let collected = (name == "BinaryHeap")
-            .then(|| self.program.rust_heap_collect.get(&span.offset).cloned())
-            .flatten()
-            .filter(|(_, reversed)| !(*reversed && self.rust_heaps_pop_smallest()))
-            .map(|(edit, _)| edit);
+        // A field's heap has one per struct literal that fills it
+        // (B-2026-11-27-3).
+        let collected: Vec<TextEdit> = if name == "BinaryHeap" {
+            let pop_smallest = self.rust_heaps_pop_smallest();
+            self.program
+                .rust_heap_collect
+                .get(&span.offset)
+                .into_iter()
+                .flatten()
+                .filter(|(_, reversed)| !(*reversed && pop_smallest))
+                .map(|(edit, _)| edit.clone())
+                .collect()
+        } else {
+            Vec::new()
+        };
         self.errors.push(ResolveError {
             message,
             span,
@@ -3188,7 +3198,7 @@ impl<'a> Resolver<'a> {
                 });
             }
         }
-        if let Some(edit) = collected {
+        for edit in collected {
             self.errors.push(ResolveError {
                 message: "this `BinaryHeap` is filled by `collect`, and Rust's heap pops the \
                           largest first while Kāra's `PriorityQueue` pops the smallest: \

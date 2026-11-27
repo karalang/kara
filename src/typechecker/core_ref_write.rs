@@ -1305,10 +1305,13 @@ impl Walk<'_, '_> {
                     // Rust's `let mut x = x;` over a bare parameter `x` is
                     // how Rust changes an owned argument: the edit that
                     // keeps that meaning is `x: own T`, not `mut ref`, which
-                    // would change the caller's value (kata 2007).
+                    // would change the caller's value (kata 2007). So is
+                    // `let mut sorted = costs;`, a binding named apart that
+                    // reads as a copy of its own (kata 1833,
+                    // B-2026-11-27-5).
                     ExprKind::Identifier(n)
                         if *is_mut
-                            && matches!(&pattern.kind, PatternKind::Binding(m) if m == n)
+                            && matches!(&pattern.kind, PatternKind::Binding(_))
                             && self.is_bare_param(n) =>
                     {
                         let fix = self.lookup(n).and_then(|b| b.2.clone()).map(|f| FixIt {
@@ -3237,6 +3240,16 @@ impl Walk<'_, '_> {
                     .lookup(name)
                     .and_then(|b| b.2.as_ref())
                     .is_some_and(|f| f.replacement == "own ");
+                if owns && param != name {
+                    return format!(
+                        "`{name}` is bound from the bare parameter `{param}`, which borrows \
+                         (design.md § Parameter modes), so {action} cannot modify it \
+                         (core-semantics.md §5.9). Rust's `let mut {name} = {param};` takes \
+                         an owned argument to change: declare it `{param}: own ...`, or \
+                         `{param}: mut ref ...` with its call sites marked `mut` to change \
+                         the caller's value"
+                    );
+                }
                 if owns && param == name {
                     return format!(
                         "`{name}` is bound from the bare parameter `{name}`, which borrows \

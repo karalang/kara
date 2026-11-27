@@ -587,7 +587,12 @@ pub struct Parser {
     /// See [`crate::ast::Program::rust_heap_ctor`].
     pub(crate) rust_heap_ctor: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
     /// See [`crate::ast::Program::rust_heap_collect`].
-    pub(crate) rust_heap_collect: rustc_hash::FxHashMap<usize, (crate::resolver::TextEdit, bool)>,
+    pub(crate) rust_heap_collect:
+        rustc_hash::FxHashMap<usize, Vec<(crate::resolver::TextEdit, bool)>>,
+    /// `Name { field: it.collect() }`: the struct, the field and the edit
+    /// that wraps the collect, for [`Self::rust_heap_collects`] to keep
+    /// when the field is declared a `BinaryHeap` (B-2026-11-27-3).
+    pub(crate) rust_heap_literal_collects: Vec<(String, String, crate::resolver::TextEdit)>,
     /// See [`crate::ast::Program::parse_target_edits`].
     pub(crate) parse_target_edits: rustc_hash::FxHashMap<usize, crate::resolver::TextEdit>,
     /// See [`crate::ast::Program::range_arg_edits`].
@@ -967,6 +972,7 @@ impl Parser {
             expr_stmt_semis: rustc_hash::FxHashMap::default(),
             rust_heap_ctor: rustc_hash::FxHashMap::default(),
             rust_heap_collect: rustc_hash::FxHashMap::default(),
+            rust_heap_literal_collects: Vec::new(),
             parse_target_edits: rustc_hash::FxHashMap::default(),
             range_arg_edits: rustc_hash::FxHashMap::default(),
             unsigned_floor_names: rustc_hash::FxHashMap::default(),
@@ -1462,6 +1468,7 @@ impl Parser {
         }
         let std_cmp_reverse_import = self.std_cmp_reverse_import(&items);
         let import_insert = self.import_insert(&items);
+        let rust_heap_collect = self.rust_heap_collects(&items);
         Program {
             script_main,
             items,
@@ -1486,7 +1493,7 @@ impl Parser {
             expr_stmt_semis: std::mem::take(&mut self.expr_stmt_semis),
             rust_heap_ctor_sides: self.rust_heap_ctor_sides(),
             rust_heap_ctor: std::mem::take(&mut self.rust_heap_ctor),
-            rust_heap_collect: std::mem::take(&mut self.rust_heap_collect),
+            rust_heap_collect,
             rust_heap_or_defaults: self.rust_heap_or_defaults(),
             rust_reverse_wraps: if self.rust_reverse_stays() {
                 rustc_hash::FxHashMap::default()
@@ -1689,6 +1696,37 @@ impl Parser {
     /// (Rust's `Box<T>`, kata 2046) with the edit that writes `T` in its
     /// place. A `Box[T]` followed by `.` or `(` is an expression, not a
     /// type, and gets no edit.
+    /// [`Self::rust_heap_collect`], with each struct literal's collect into a
+    /// field the program declares a Rust `BinaryHeap` keyed by that field's
+    /// type, as a `let`-typed collect is by its annotation (B-2026-11-27-3).
+    fn rust_heap_collects(
+        &mut self,
+        items: &[crate::ast::Item],
+    ) -> rustc_hash::FxHashMap<usize, Vec<(crate::resolver::TextEdit, bool)>> {
+        let mut out = std::mem::take(&mut self.rust_heap_collect);
+        let literals = std::mem::take(&mut self.rust_heap_literal_collects);
+        if literals.is_empty() {
+            return out;
+        }
+        for item in items {
+            let crate::ast::Item::StructDef(s) = item else {
+                continue;
+            };
+            for f in &s.fields {
+                let Some((at, reversed)) = exprs::rust_heap_type(&f.ty) else {
+                    continue;
+                };
+                for (_, _, edit) in literals
+                    .iter()
+                    .filter(|(st, field, _)| *st == s.name && *field == f.name)
+                {
+                    out.entry(at).or_default().push((edit.clone(), reversed));
+                }
+            }
+        }
+        out
+    }
+
     fn rust_box_new_and_types(
         &mut self,
     ) -> rustc_hash::FxHashMap<usize, crate::resolver::TextEdit> {
