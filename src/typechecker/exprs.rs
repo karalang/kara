@@ -18094,6 +18094,21 @@ impl<'a> super::TypeChecker<'a> {
         true
     }
 
+    /// The tuple literal holding an unsuffixed number that a branch ends
+    /// in, through blocks: `(0, 0)` in `if c { (0, 0) } else { (r, steps)
+    /// }`. Its numbers are open for the sibling branch to fix, as a bare
+    /// literal branch's are; settled at `i64` where they were written, the
+    /// `if` joined as an `(i64, i64)` (B-2026-11-27-17).
+    pub(super) fn literal_tuple_tail(e: &Expr) -> Option<&Expr> {
+        match &e.kind {
+            ExprKind::Block(b) => b.final_expr.as_deref().and_then(Self::literal_tuple_tail),
+            ExprKind::Tuple(_) if !e.id.is_dummy() && Self::tuple_holds_number_literal(e) => {
+                Some(e)
+            }
+            _ => None,
+        }
+    }
+
     /// A tuple literal with an unsuffixed number among its parts, or in a
     /// tuple among them: `("append", 2)` (B-2026-11-18-72).
     fn tuple_holds_number_literal(e: &Expr) -> bool {
@@ -18226,6 +18241,12 @@ impl<'a> super::TypeChecker<'a> {
         if !holds_literal(self, a) && !holds_literal(self, b) {
             return None;
         }
+        // Two different number types beside the literals have no join
+        // (`(steps, 1)` beside `(r, 1)`), though unifying took the first
+        // (B-2026-11-27-17).
+        if self.numbers_differ_inside(a, b) {
+            return None;
+        }
         let saved = self.env.substitutions.clone();
         let saved_consts = self.env.const_substitutions.clone();
         if !unify_types(
@@ -18249,7 +18270,7 @@ impl<'a> super::TypeChecker<'a> {
 
     /// The literal variable `t` is, unbound, with its kind.
     /// Whether `t` holds a literal variable nothing fixed yet.
-    fn has_open_literal(&self, t: &Type) -> bool {
+    pub(super) fn has_open_literal(&self, t: &Type) -> bool {
         let mut ids = Vec::new();
         type_var_ids(&self.resolved_now(t), &mut ids);
         ids.iter()
@@ -18260,7 +18281,7 @@ impl<'a> super::TypeChecker<'a> {
     /// variable nothing fixed yet, fixes it by the other side's number,
     /// unifies it with the other side's open variable, or reads it at its
     /// default against anything else comparable (B-2026-11-08-86).
-    fn pair_open_literals(&mut self, a: &Type, b: &Type) {
+    pub(super) fn pair_open_literals(&mut self, a: &Type, b: &Type) {
         let (a, b) = (self.resolved_now(a), self.resolved_now(b));
         for (this, other) in [(&a, &b), (&b, &a)] {
             let other = self.resolved_now(other);
@@ -20230,7 +20251,7 @@ impl<'a> super::TypeChecker<'a> {
                     if open_join {
                         Some(t)
                     } else {
-                        Self::indexed_literal_list_tail(t)
+                        Self::indexed_literal_list_tail(t).or_else(|| Self::literal_tuple_tail(t))
                     }
                 });
                 let saved_open = then_tail.map(|t| self.open_literal_expr.replace(t.id));
@@ -20247,7 +20268,9 @@ impl<'a> super::TypeChecker<'a> {
                     let else_open = if open_join {
                         Some(else_expr.as_ref())
                     } else {
-                        Self::indexed_literal_list_tail(else_expr).map(|_| else_expr.as_ref())
+                        Self::indexed_literal_list_tail(else_expr)
+                            .map(|_| else_expr.as_ref())
+                            .or_else(|| Self::literal_tuple_tail(else_expr))
                     };
                     let saved_open = else_open.map(|t| self.open_literal_expr.replace(t.id));
                     let else_ty = match (early_else, sibling_array_expectation(else_expr, &then_ty))

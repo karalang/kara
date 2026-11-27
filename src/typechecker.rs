@@ -8237,6 +8237,47 @@ impl<'a> TypeChecker<'a> {
     /// the base type. For non-refinement arms this preserves the previous
     /// behavior exactly — one-directional `types_compatible_with_projections`
     /// acceptance, returning the first arm (`a`) as the join.
+    /// Whether `a` and `b` hold two different number types at the same
+    /// place inside a tuple, a generic argument, a list or a reference
+    /// (`(i64, i32)` beside `(i64, i64)`, `Option[i32]` beside
+    /// `Option[i64]`). Open variables differ from nothing.
+    fn numbers_differ_inside(&self, a: &Type, b: &Type) -> bool {
+        fn differ(a: &Type, b: &Type) -> bool {
+            let num = |t: &Type| matches!(t, Type::Int(_) | Type::UInt(_) | Type::Float(_));
+            match (a, b) {
+                (Type::Ref(x) | Type::MutRef(x), y) | (y, Type::Ref(x) | Type::MutRef(x))
+                    if !matches!(y, Type::Ref(_) | Type::MutRef(_)) =>
+                {
+                    differ(x, y)
+                }
+                (Type::Ref(x), Type::Ref(y))
+                | (Type::MutRef(x), Type::MutRef(y))
+                | (Type::Ref(x), Type::MutRef(y))
+                | (Type::MutRef(x), Type::Ref(y)) => differ(x, y),
+                (x, y) if num(x) && num(y) => x != y,
+                (Type::Tuple(xs), Type::Tuple(ys)) => {
+                    xs.len() == ys.len() && xs.iter().zip(ys).any(|(x, y)| differ(x, y))
+                }
+                (Type::Named { name: n, args: xs }, Type::Named { name: m, args: ys }) => {
+                    n == m && xs.len() == ys.len() && xs.iter().zip(ys).any(|(x, y)| differ(x, y))
+                }
+                (Type::Array { element: x, .. }, Type::Array { element: y, .. })
+                | (Type::Slice { element: x, .. }, Type::Slice { element: y, .. }) => differ(x, y),
+                _ => false,
+            }
+        }
+        let resolve = |t: &Type| {
+            inference::resolve_type_vars(
+                t,
+                &self.env.substitutions,
+                &std::collections::HashMap::new(),
+                &self.env.const_substitutions,
+                &std::collections::HashMap::new(),
+            )
+        };
+        differ(&resolve(a), &resolve(b))
+    }
+
     pub(super) fn join_branch_types(&self, a: &Type, b: &Type) -> Option<Type> {
         if a == b {
             return Some(a.clone());
@@ -8256,6 +8297,15 @@ impl<'a> TypeChecker<'a> {
             if x != y {
                 return None;
             }
+        }
+        // LUB rule 4 holds inside a tuple, a generic argument or a list
+        // too: `(r, steps)` with `steps: i32` beside `(r, r)` has no join.
+        // Joined at the first branch, the second's `i64` was narrowed into
+        // the `i32` part silently (B-2026-11-27-17).
+        if !matches!(a, Type::Int(_) | Type::UInt(_) | Type::Float(_))
+            && self.numbers_differ_inside(a, b)
+        {
+            return None;
         }
         // On the MIR pipeline a branch giving a `ref` to a `Copy` value or
         // handle and one giving the value join at the value (core semantics

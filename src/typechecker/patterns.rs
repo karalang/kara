@@ -719,7 +719,13 @@ impl<'a> super::TypeChecker<'a> {
                         .find(|t| **t != Type::Never && super::exprs::expectation_is_concrete(t))
                         .cloned()
                 });
-            let saved_open = open_arms.then(|| self.open_literal_expr.replace(arm.body.id));
+            // An arm ending in a tuple of literals leaves its numbers open
+            // for the join, as an `if`'s branch does (B-2026-11-27-17).
+            let open_id = match open_arms {
+                true => Some(arm.body.id),
+                false => Self::literal_tuple_tail(&arm.body).map(|t| t.id),
+            };
+            let saved_open = open_id.map(|id| self.open_literal_expr.replace(id));
             let arm_ty = match sibling {
                 Some(expected) => self.check_expr(&arm.body, &expected),
                 None => self.infer_expr(&arm.body),
@@ -5195,6 +5201,32 @@ impl<'a> super::TypeChecker<'a> {
         branches: &[Option<&Expr>],
         types: &mut [Type],
     ) {
+        // A branch's tuple of literals leaves its numbers open (B-2026-11-27-17):
+        // they meet a settled sibling's, or each other's, first, part by
+        // part, so `(2, "")` beside `(1, view)` joins as it did when both
+        // numbers were settled `i64`s. Only tuples: two bare literals of
+        // different kinds (`if c { 1 } else { 2.5 }`) stay a mismatch, and
+        // pairing them made the `1` a float.
+        let open_tuple = |this: &Self, t: &Type| {
+            matches!(this.resolved_now(t), Type::Tuple(_)) && this.has_open_literal(t)
+        };
+        if types.iter().any(|t| open_tuple(self, t)) {
+            let live = |t: &&Type| matches!(self.resolved_now(t), Type::Tuple(_));
+            let peer = types
+                .iter()
+                .filter(live)
+                .find(|t| !self.has_open_literal(t))
+                .or_else(|| types.iter().find(live))
+                .cloned();
+            if let Some(peer) = peer {
+                for t in types.iter_mut() {
+                    if open_tuple(self, t) {
+                        self.pair_open_literals(t, &peer);
+                        *t = self.resolved_now(t);
+                    }
+                }
+            }
+        }
         let mut want: Option<Type> = None;
         for t in types.iter() {
             if matches!(t, Type::Never | Type::Error) {
