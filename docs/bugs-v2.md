@@ -131,7 +131,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-27-12 | 2026-11-27 | runtime | low | The HTTP client refuses a response whose header block uses obs-fold (a header line continued on the next line that starts with a space or tab): `Client.get` returns Err 'request failed: invalid HTTP header parsed', where RFC 9112 §5.2 requires a user agent that receives obs-fold in a response to replace each fold with SP and read the value | — |
 | B-2026-11-27-13 | 2026-11-27 | runtime | low | The HTTP client refuses any response with more than 100 header fields, or a head over about 400 KiB, with Err 'request failed: message head is too large'; neither limit is documented, and 100 fields is low for real responses (many Set-Cookie, CDN and tracing headers) | — |
 | B-2026-11-27-16 | 2026-11-27 | cli | low | In a package, the E0520 import fix-it for a library name used only in a test file (src/main_test.kara) is labelled src/main.kara at offset 0, so `karac fix` applies nothing and the error stays | — |
-| B-2026-11-27-17 | 2026-11-27 | typecheck | high | `if c { (r, steps) } else { (r, r) }` with `steps: i32` and `r: i64` checks clean as an `(i64, i32)` and narrows the second branch's `r` silently (3000000000 prints -1294967296): an `if` or `match` joins tuples, `Option`s and lists at their first branch without LUB rule 4's refusal of two number types, and a branch's tuple of literals settles at `i64` before the sibling can type it | — |
 
 ### Relocated
 
@@ -2415,6 +2414,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-27-9 | typecheck | medium | A type-qualified call on a type with `const` parameters drops the const argument: `Buf[i64, 3].fill(7)` over `impl[T, const N: i64] Buf[T, N] { fn fi… | afb988da49 |
 | B-2026-11-27-14 | interp+mir-llvm | medium | `text_backend` wrote a record's message as it was, so a message holding a line end split one record over two lines (and a crafted one could forge a s… | 59c73d71d5 |
 | B-2026-11-27-15 | typecheck | medium | The compiler's prelude held library names README keeps in modules: Server, Request, Response, Client, Channel, Sender, TaskGroup, Mutex, File, Durati… | 9172fa1572 |
+| B-2026-11-27-17 | typecheck | high | `if c { (r, steps) } else { (r, r) }` with `steps: i32` and `r: i64` checks clean as an `(i64, i32)` and narrows the second branch's `r` silently (30… | 0c8496bc2e |
 
 </details>
 
