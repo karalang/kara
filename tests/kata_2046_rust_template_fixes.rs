@@ -120,8 +120,10 @@ fn main() {
     assert_eq!(run(&fixed), "2\n1\n");
 }
 
+// The loop's literals stay open for `half(v)` to fix (B-2026-11-26-2), so
+// the template checks as written; it once needed `10i32`.
 #[test]
-fn kata_2046_for_over_literal_array_fixes_with_a_suffix() {
+fn kata_2046_for_over_literal_array_needs_no_suffix() {
     let src = "fn half(x: i32) -> i32 {
     x / 2
 }
@@ -136,7 +138,7 @@ fn main() {
 ";
     let (fixed, clean, _) = fix("k2046-lit", src);
     assert!(clean, "{fixed}");
-    assert!(fixed.contains("for v in [10i32, -10, 6, 0] {"), "{fixed}");
+    assert_eq!(fixed, src, "nothing to fix");
     assert_eq!(run(&fixed), "3\n");
 }
 

@@ -15865,11 +15865,14 @@ impl<'a> super::TypeChecker<'a> {
         vec![(name.clone(), prev)]
     }
 
-    /// `for (lo, hi, sign) in [(0, peak, 1), (peak + 1, n - 1, -1)]`: each
-    /// tuple's literal is settled to `i64` when the tuple is built, so `lo`
-    /// is an `i64` beside an `i32` `peak`, and a refusal at a use of `lo`
-    /// offers the suffix on the first literal in its position, which types
-    /// that position of every tuple (kata 1095, B-2026-11-10-30).
+    /// `for (lo, hi) in [(0, 1), (2, 3)]`: a position whose literals no use
+    /// fixes keeps the default, so `lo` is an `i64`, and a refusal at a use
+    /// of `lo` the literals could not take offers the suffix on the first
+    /// literal in its position, which types that position of every tuple
+    /// (kata 1095, B-2026-11-10-30). A position beside a typed value
+    /// (`[(0, peak), (peak + 1, n)]` over an `i32` `peak`) takes its type,
+    /// and the loop's uses fix the rest: the literals stay open as a
+    /// `let`'s do (B-2026-11-26-2).
     fn note_literal_for_tuple(
         &mut self,
         pattern: &Pattern,
@@ -20626,7 +20629,27 @@ impl<'a> super::TypeChecker<'a> {
                 if let Some(n) = par.as_ref().and_then(|p| p.limit.as_ref()) {
                     self.check_expr(n, &Type::Int(IntSize::I64));
                 }
-                let iter_ty = self.infer_expr(iterable);
+                // A `for` over a list literal leaves its numbers open for the
+                // body to fix, as `let v = [1, 2]; for a in v` does (design.md
+                // §8 Literals, B-2026-11-26-2): `for a in [1, 2] { take_i32(a) }`
+                // makes the literals `i32`. So does `.iter()` of one.
+                let iter_ty = match &iterable.kind {
+                    ExprKind::ArrayLiteral(_) => {
+                        let saved = self.open_collection_let.replace(iterable.id);
+                        let t = self.infer_expr_open(iterable);
+                        self.open_collection_let = saved;
+                        t
+                    }
+                    ExprKind::MethodCall { object, method, .. }
+                        if method == "iter" && matches!(object.kind, ExprKind::ArrayLiteral(_)) =>
+                    {
+                        let saved = self.iter_literal_chain.replace(object.id);
+                        let t = self.infer_expr(iterable);
+                        self.iter_literal_chain = saved;
+                        t
+                    }
+                    _ => self.infer_expr(iterable),
+                };
                 // Core §11.3: each iteration of a `par for` is a branch, and
                 // what it captures crosses into a task (B-2026-10-19-46).
                 if par.is_some() && self.cli_lint_overrides.strict_core {

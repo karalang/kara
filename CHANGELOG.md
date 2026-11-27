@@ -728,6 +728,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   panics `div_by_zero`, as scalar division does, where it stopped on an
   internal error (B-2026-11-26-87, the interpreter's side).
 
+- A `for` over a list literal leaves its numbers open for the loop's uses
+  to fix, as a `let` of the list does: `for (rider, start, end) in [(10, 3,
+  8), (5, 10, 16)] { b.check_in(rider, .., start) }` with `i32` parameters
+  checks, where each literal took `i64` first and was refused
+  (B-2026-11-26-2).
+
 - `karac explain <file>.<fn>` on a function in a recursive group, or one
   that calls itself, adds a `Fixpoint:` section: the group, then the
   chain `φ0 = ∅`, `φ1`, … up to `φ*`, each step with the atoms it added

@@ -71,8 +71,12 @@ fn a_value_computed_from_a_literal_binding_names_it() {
     assert_eq!(run(&out), "2 4\n");
 }
 
+// The `for` over a literal list of tuples once needed `0i32` too: its
+// literals were settled to `i64` when the loop walked them. Since
+// B-2026-11-26-2 they stay open as a `let`'s do, so `0` takes `i32` beside
+// `n / 2` and the loop needs no suffix.
 #[test]
-fn a_tuple_literal_and_a_for_over_tuples_take_the_suffix() {
+fn a_tuple_literal_takes_the_suffix_and_a_for_over_tuples_needs_none() {
     let src = format!(
         "{AT}fn find(v: Vec[i32], target: i32) -> i32 {{\n\
          \x20   let n = v.len() as i32;\n\
@@ -107,7 +111,7 @@ fn a_tuple_literal_and_a_for_over_tuples_take_the_suffix() {
     let out = fixed_fully(&src);
     assert!(out.contains("let mut (l, r) = (0i32, n - 1);"), "{out}");
     assert!(
-        out.contains("for (lo, hi) in [(0i32, n / 2), (n / 2, n)]"),
+        out.contains("for (lo, hi) in [(0, n / 2), (n / 2, n)]"),
         "{out}"
     );
     assert_eq!(run(&out), "2 -1 38\n");
