@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 791 |
-| false-positive | 402 |
+| false-positive | 403 |
 | missing-feature | 268 |
 | perf | 206 |
 | other | 160 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 969 |
+| typecheck | 970 |
 | mir | 350 |
 | mir-llvm | 340 |
 | cli | 323 |
@@ -118,7 +118,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-79 | 2026-11-26 | mir-llvm | low | A hand-written element shift down a slice (`while i > 0 { p[i] = p[i - 1]; i -= 1; }`) compiles to a scalar copy with a bounds check per element, where rustc and clang turn the same loop into one `memmove` | — |
 | B-2026-11-26-81 | 2026-11-26 | typecheck | low | After "no method 'fold' on type 'Slice'" (`s.bytes().fold(0, |c, b| c * 31 + b as i64)`, the `.iter()` left out), the closure's parameter stays an open type and its cast adds a second error naming an internal variable, "cannot cast '?T1' to 'i64'" | — |
 | B-2026-11-26-82 | 2026-11-26 | typecheck | low | The fix for `a + b.as_str()` (a `String` plus a `Str`, as Rust writes it) appends `.to_string()`, giving `a + b.as_str().to_string()`, a view copied back into a new `String`, where `a + ref b` checks with no copy and is what `karac fix` makes of Rust's `a + &b` | — |
-| B-2026-11-26-83 | 2026-11-26 | typecheck | low | `Ok(Array.from_fn(n, f))` (or `Some(..)`) where the expected type is `Result[Array[T, N], E]` is refused "Array.from_fn needs the array's length": the variant constructor does not hand its payload slot's `Array[T, N]` to `from_fn` | — |
 | B-2026-11-26-84 | 2026-11-26 | typecheck | low | E0208 "'+' on 'String' requires a 'String' right operand, found 'Str'" puts its caret under the LEFT operand: `a + s[1..]` underlines `a`, and `s[..k].to_string() + "1" + s[k + 1..]` underlines `s[..k].to_string() + "1"`, while the fault and the fix are on the right | — |
 | B-2026-11-26-86 | 2026-11-26 | typecheck | low | `f = g` with `f: Vec[i32]` and `g = Vec.filled(n, f[0] + size)`, `size` a bare `let size = 0` literal, is refused "expected 'Vec[i32]', found 'Vec[i64]'" with no fix, where annotating `g` makes check trace the fill to `size` and offer the machine fix `size: i32` | — |
 | B-2026-11-26-89 | 2026-11-26 | ownership | high | A method with a `self` receiver that returns a closure holding a local closure over another bare parameter (`fn mk(self, pre: String) -> Fn(String) -> String { let c = || pre.clone(); |s| f"{c()}{s}" }`) is accepted, and a caller passing a temporary reads freed memory | — |
@@ -2396,6 +2395,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-77 | typecheck+mir | low | Three programs printed an internal E0516 instead of a user diagnostic: a `ref` binding of a `Vec[Vector[..]]` element as a receiver and a let-bound c… | 41639e5e46 |
 | B-2026-11-26-78 | typecheck | low | `let w: (Vec[i32], i64) = ([1, 2].to_vec(), 3)` is refused as a `(Vec[i64], i64)`, with advice to annotate the binding that already is and no fix, th… | a648c7a471 |
 | B-2026-11-26-80 | ownership+cli | low | E0516 on a temporary argument that a view result borrows (`let f = make("abc".to_string(), 1);` with `make` returning a closure over its bare paramet… | cab05d25c8 |
+| B-2026-11-26-83 | typecheck | low | `Ok(Array.from_fn(n, f))` (or `Some(..)`) where the expected type is `Result[Array[T, N], E]` is refused "Array.from_fn needs the array's length": th… | afb988da49 |
 | B-2026-11-26-85 | typecheck | high | A table lookup by a tuple needle narrowed unchecked: `given.contains((city, next))` with `city: i64` on a `Set[(i32, i32)]` passed check, and the com… | 4777a670cf |
 | B-2026-11-26-87 | mir-llvm | medium | Compiled `Vector[i8, N]` lane division `MIN / -1` and `MIN % -1` print garbage (`karac run` 784 and 1, `karac build` 0 and 0) where the spec's wrap g… | 1c72d43533 |
 | B-2026-11-26-88 | ownership | high | A method with a `self` receiver that returns a closure over another bare parameter (`fn mk(self, pre: String) -> Fn(String) -> String { \|s\| f"{pre}{s… | 104ad243a3 |
@@ -2406,6 +2406,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-95 | typecheck | high | A write through a `*const T` is accepted and writes: `*p = v`, `*p += v`, `(*p).f = v` and `p.write(v)` / `write_unaligned` / `write_volatile`, even… | 6c7f2f430f |
 | B-2026-11-27-1 | typecheck | medium | Regression from the B-2026-11-26-1 fix (293934a062): a literal left open past an `as` cast is refused as a tensor index (`t[i, j] = (i * 3 + j) as f3… | 1a7d6a29e6 |
 | B-2026-11-27-7 | typecheck | medium | A collection's `.clone()` and `to_vec` of an unbounded type parameter pass `karac check`: `fn f[T](v: Vec[T]) -> Vec[T] { v.clone() }` clones a `Vec[… | b7e16eae6c |
+| B-2026-11-27-9 | typecheck | medium | A type-qualified call on a type with `const` parameters drops the const argument: `Buf[i64, 3].fill(7)` over `impl[T, const N: i64] Buf[T, N] { fn fi… | afb988da49 |
 
 </details>
 

@@ -1136,7 +1136,7 @@ impl<'a> super::TypeChecker<'a> {
                 // reads the type positions, and the impl's parameters bind
                 // all of them, so `Buf[i64, 3].fill(7)` returns the
                 // `Array[i64, 3]` its `-> Array[T, N]` names
-                // (B-2026-11-27-8).
+                // (B-2026-11-27-9).
                 let const_positions = self.env.const_param_positions.get(&type_name).cloned();
                 let positional: Option<Vec<Type>> = match &const_positions {
                     Some(ps) if ps.iter().any(|&c| c) && ps.len() == generic_args.len() => {

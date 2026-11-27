@@ -4,7 +4,7 @@
 //! 3]`. The const argument was dropped, so the call's type was `Array[i64,
 //! N]` and `let a: Array[i64, 3] = Buf[i64, 3].fill(7)` was refused E0200;
 //! `Buf[i64, M]` inside `impl[const M: i64]` was E0236 "no method"
-//! (B-2026-11-27-8).
+//! (B-2026-11-27-9).
 
 mod common;
 
