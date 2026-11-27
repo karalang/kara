@@ -7979,6 +7979,28 @@ impl<'a> TypeChecker<'a> {
             return;
         }
 
+        // An operand nothing has typed yet: after an error that left it so
+        // (a method that was not found, whose closure's parameter nothing
+        // then typed), the cast says nothing more; else it says what to
+        // annotate rather than naming the internal variable
+        // (B-2026-11-26-81).
+        if let Type::TypeVar(id) = self.resolved_now(from_ty) {
+            if inference::literal_var_kind(id).is_none() {
+                if !self.errors.is_empty() {
+                    return;
+                }
+                self.type_error(
+                    format!(
+                        "cannot cast a value whose type nothing has fixed yet to '{}': \
+                         annotate the binding or closure parameter it comes from",
+                        type_display(to_ty)
+                    ),
+                    *span,
+                    TypeErrorKind::InvalidCast,
+                );
+                return;
+            }
+        }
         // Anything else falls through to the generic diagnostic.
         self.type_error(
             format!(
