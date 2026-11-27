@@ -342,6 +342,51 @@ fn replace_word_in_item(src: &[u8], at: usize, from: &str, to: &str) -> Option<V
     (!edits.is_empty()).then_some(edits)
 }
 
+/// `edits` (each renaming `from` to `to`), and, when nothing else in the
+/// program names `from`, the same rename in the `import` that brought it
+/// in, so the fix leaves no import of a name nothing uses. An import that
+/// already names `to` keeps `from` (a second `to` would be a duplicate).
+fn rename_in_imports_too(
+    src: &[u8],
+    mut edits: Vec<TextEdit>,
+    from: &str,
+    to: &str,
+) -> Vec<TextEdit> {
+    let text = String::from_utf8_lossy(src);
+    // Each top-level `import ...;`, as a byte range.
+    let mut imports: Vec<std::ops::Range<usize>> = Vec::new();
+    let mut line_start = 0;
+    for line in text.split_inclusive('\n') {
+        if line.starts_with("import ") {
+            let end = text[line_start..]
+                .find(';')
+                .map_or(text.len(), |p| line_start + p + 1);
+            imports.push(line_start..end);
+        }
+        line_start += line.len();
+    }
+    let renamed = |i: usize| edits.iter().any(|e| e.offset == i);
+    let mut in_import = Vec::new();
+    for i in 0..src.len() {
+        if !word_at(src, i, from) || renamed(i) {
+            continue;
+        }
+        match imports.iter().find(|r| r.contains(&i)) {
+            Some(r)
+                if !text[r.clone()]
+                    .split(|c: char| !c.is_alphanumeric() && c != '_')
+                    .any(|w| w == to) =>
+            {
+                in_import.push(i)
+            }
+            // A use elsewhere, or an import that cannot take the rename.
+            _ => return edits,
+        }
+    }
+    edits.extend(in_import.into_iter().map(|i| edit(i, from.len(), to)));
+    edits
+}
+
 /// Where the line of the declaration `kind name` starts, and its indent.
 fn item_line(src: &[u8], kind: &str, name: &str) -> Option<(usize, String)> {
     let text = std::str::from_utf8(src).ok()?;
@@ -1410,7 +1455,8 @@ fn typed_fix(src: &[u8], e: &TypeError) -> Option<Vec<TextEdit>> {
         return replace_in_signature(src, e.span.offset, "mut ref self", "self");
     }
     if m.contains("Replace `OnceCell` with `OnceLock`") {
-        return replace_word_in_item(src, e.span.offset, "OnceCell", "OnceLock");
+        let edits = replace_word_in_item(src, e.span.offset, "OnceCell", "OnceLock")?;
+        return Some(rename_in_imports_too(src, edits, "OnceCell", "OnceLock"));
     }
     if m.contains("an unwrapped value needs no fallback — drop the '?? ...'") {
         return drop_fallback(src, e.span);

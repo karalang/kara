@@ -314,9 +314,9 @@ fn fix_coverage_a_once_cell_field_of_a_sync_struct_becomes_a_once_lock() {
     );
     assert_mended(
         &m,
-        // The rename leaves the `OnceCell` import behind; the import fix adds
-        // `OnceLock`'s.
-        "import std.sync.{OnceCell};\nimport std.sync.{OnceLock};\nsync struct S {\n    c: OnceLock[i64],\n}\n\nfn main() {\n    println(1);\n}\n",
+        // The import is renamed with the field: nothing else names
+        // `OnceCell`, so no import of it is left behind.
+        "import std.sync.{OnceLock};\nsync struct S {\n    c: OnceLock[i64],\n}\n\nfn main() {\n    println(1);\n}\n",
         Some("1\n"),
     );
 }
@@ -429,14 +429,13 @@ fn fix_coverage_a_once_cell_at_module_scope_becomes_a_once_lock() {
     let m = mend(
         "oncemod",
         "E_ONCE_CELL_AT_MODULE_SCOPE",
-        "let CFG: Map[String, OnceCell[i64]] = Map.new();\n\nfn main() {\n    println(1);\n}\n",
+        "import std.sync.{OnceCell};\n\nlet CFG: Map[String, OnceCell[i64]] = Map.new();\n\nfn main() {\n    println(1);\n}\n",
     );
     assert!(m.fixable, "no edit on the first record:\n{}", m.first);
     assert_eq!(
         m.text,
-        // The bare `OnceCell` gets its import, then the rename leaves it
-        // behind and `OnceLock` gets its own.
-        "import std.sync.{OnceCell};\nimport std.sync.{OnceLock};\n\nlet CFG: Map[String, OnceLock[i64]] = Map.new();\n\nfn main() {\n    println(1);\n}\n"
+        // The rename takes the program's `OnceCell` import with it.
+        "import std.sync.{OnceLock};\n\nlet CFG: Map[String, OnceLock[i64]] = Map.new();\n\nfn main() {\n    println(1);\n}\n"
     );
     let after: serde_json::Value =
         serde_json::from_str(m.after.lines().next().unwrap_or("")).expect("JSON");

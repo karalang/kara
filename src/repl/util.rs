@@ -1335,6 +1335,50 @@ pub(super) fn type_place(e: &str, at_line: usize) -> String {
     joined
 }
 
+/// A cell's top-level `import` declarations, joined one per line, and the
+/// cell with each blanked to spaces (its newlines kept, so the rest's
+/// places keep their lines). `None` when the cell has no top-level import.
+/// A snippet pasted with its imports is a mixed cell: the imports join
+/// the session as an item cell, and the rest runs as statements.
+pub(super) fn split_cell_imports(src: &str) -> Option<(String, String)> {
+    use crate::token::Token;
+    let tokens = crate::tokenize(src);
+    let mut depth = 0usize;
+    let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
+    let mut i = 0;
+    while i < tokens.len() {
+        match tokens[i].token {
+            Token::LeftBrace => depth += 1,
+            Token::RightBrace => depth = depth.saturating_sub(1),
+            Token::Import if depth == 0 => {
+                let start = tokens[i].span.offset;
+                let mut j = i + 1;
+                while j < tokens.len() && tokens[j].token != Token::Semicolon {
+                    j += 1;
+                }
+                let semi = tokens.get(j)?;
+                ranges.push(start..semi.span.offset + semi.span.length);
+                i = j;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    if ranges.is_empty() {
+        return None;
+    }
+    let imports: Vec<&str> = ranges.iter().filter_map(|r| src.get(r.clone())).collect();
+    let mut rest = src.to_string();
+    for r in ranges.iter().rev() {
+        let blank: String = src[r.clone()]
+            .chars()
+            .map(|c| if c == '\n' { '\n' } else { ' ' })
+            .collect();
+        rest.replace_range(r.clone(), &blank);
+    }
+    Some((imports.join("\n"), rest))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

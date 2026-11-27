@@ -1707,8 +1707,17 @@ impl Session {
     /// are present. Otherwise the cell is treated as statements and run
     /// inside the synthetic `fn main()` wrapper.
     pub fn evaluate_cell(&mut self, src: &str) {
-        let trimmed = src.trim_end();
         self.submitted += 1;
+        let rest = match self.hoist_cell_imports(src.trim_end()) {
+            Ok(rest) => rest,
+            Err(errs) => {
+                for e in errs {
+                    eprintln!("{e}");
+                }
+                return;
+            }
+        };
+        let trimmed = rest.as_deref().unwrap_or(src).trim_end();
         self.push_cell(trimmed.to_string());
 
         if self.classify(trimmed) == CellShape::PureItems {
@@ -2050,8 +2059,17 @@ impl Session {
     /// interpreter's stdout into an in-memory buffer instead of the
     /// process's stdout.
     pub fn evaluate_cell_captured(&mut self, src: &str) -> EvaluatedCell {
-        let trimmed = src.trim_end();
         self.submitted += 1;
+        let rest = match self.hoist_cell_imports(src.trim_end()) {
+            Ok(rest) => rest,
+            Err(errors) => {
+                return EvaluatedCell {
+                    errors,
+                    ..EvaluatedCell::default()
+                }
+            }
+        };
+        let trimmed = rest.as_deref().unwrap_or(src).trim_end();
         self.push_cell(trimmed.to_string());
 
         if self.classify(trimmed) == CellShape::PureItems {
@@ -2099,6 +2117,26 @@ impl Session {
                 }
             }
         }
+    }
+
+    /// A statement cell's top-level imports (a snippet pasted with them)
+    /// join the session as an item cell of their own, numbered as this
+    /// cell, as a file's imports sit above its code. Returns the rest of
+    /// the cell to run, `None` when there is nothing to hoist, or the
+    /// imports' errors, which refuse the cell.
+    fn hoist_cell_imports(&mut self, src: &str) -> Result<Option<String>, Vec<String>> {
+        if self.classify(src) == CellShape::PureItems {
+            return Ok(None);
+        }
+        let Some((imports, rest)) = split_cell_imports(src) else {
+            return Ok(None);
+        };
+        self.push_cell(imports.clone());
+        let errs = self.add_items_v2(&imports);
+        if !errs.is_empty() {
+            return Err(errs);
+        }
+        Ok(Some(rest))
     }
 
     /// The cell's shape. On v2 a statement missing its final `;` (`n = 5`)
