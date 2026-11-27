@@ -594,10 +594,18 @@ async fn http_exchange_h1<T>(
 where
     T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
-    let (mut sender, conn) =
-        hyper::client::conn::http1::handshake(hyper_util::rt::TokioIo::new(io))
-            .await
-            .map_err(|e| format!("{url}: HTTP/1.1 handshake failed: {e}"))?;
+    let read = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let io = CountingIo {
+        inner: io,
+        read: read.clone(),
+    };
+    let (mut sender, conn) = hyper::client::conn::http1::Builder::new()
+        .allow_obsolete_multiline_headers_in_responses(true)
+        .max_headers(MAX_RESPONSE_HEADERS)
+        .max_buf_size(MAX_RESPONSE_HEAD)
+        .handshake(hyper_util::rt::TokioIo::new(io))
+        .await
+        .map_err(|e| format!("{url}: HTTP/1.1 handshake failed: {e}"))?;
     let conn = tokio::task::spawn(async move {
         let _ = conn.await;
     });
@@ -621,15 +629,111 @@ where
     };
     let fetched = async {
         let req = http_build_request(method, &target, Some(&host_header), body, headers, url)?;
-        let resp = sender
-            .send_request(req)
-            .await
-            .map_err(|e| format!("{url}: request failed: {e}"))?;
+        let resp = sender.send_request(req).await.map_err(|e| {
+            if head_too_large(&e) {
+                head_limit_text(url, read.load(std::sync::atomic::Ordering::Relaxed))
+            } else {
+                format!("{url}: request failed: {e}")
+            }
+        })?;
         http_collect_response(resp, url).await
     }
     .await;
     http_close_conn(sender, conn).await;
     fetched
+}
+
+/// The most header fields an HTTP/1.1 response head may carry, and the most
+/// bytes the client buffers while it waits for the head to end: hyper's own
+/// defaults (100 fields; 8 KiB plus 4 KiB per field), set here by name so
+/// the limits the docs state are the ones the client runs with
+/// (docs/library/io.md § HTTP client, B-2026-11-27-13).
+const MAX_RESPONSE_HEADERS: usize = 100;
+const MAX_RESPONSE_HEAD: usize = 8192 + 4096 * MAX_RESPONSE_HEADERS;
+
+/// hyper reports both limits as one parse error, "message head is too
+/// large" (`Parse::TooLarge`, for httparse's `TooManyHeaders` and for a
+/// buffer that filled before the head ended). `is_parse_too_large` needs
+/// hyper's `server` feature, which the compiler's own build does not turn
+/// on, so the kind is read from the error's text.
+fn head_too_large(e: &hyper::Error) -> bool {
+    e.is_parse() && e.to_string().starts_with("message head is too large")
+}
+
+/// Which of the two limits a response head hit. A head that had not filled
+/// the buffer when hyper gave up ran out of header slots: httparse refuses
+/// the 101st field as soon as it is buffered, long before 408 KiB arrive.
+fn head_limit_text(url: &str, bytes_read: usize) -> String {
+    if bytes_read < MAX_RESPONSE_HEAD {
+        format!("{url}: response head has more than {MAX_RESPONSE_HEADERS} header fields")
+    } else {
+        format!(
+            "{url}: response head is larger than {} KiB",
+            MAX_RESPONSE_HEAD / 1024
+        )
+    }
+}
+
+/// An HTTP/1.1 connection's transport, counting the bytes read from it, so
+/// that a refused response head can say which limit it hit.
+struct CountingIo<T> {
+    inner: T,
+    read: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl<T: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for CountingIo<T> {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        let before = buf.filled().len();
+        let polled = std::pin::Pin::new(&mut this.inner).poll_read(cx, buf);
+        if let std::task::Poll::Ready(Ok(())) = polled {
+            this.read.fetch_add(
+                buf.filled().len() - before,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        }
+        polled
+    }
+}
+
+impl<T: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for CountingIo<T> {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_write(cx, buf)
+    }
+
+    fn poll_write_vectored(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        bufs: &[std::io::IoSlice<'_>],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_write_vectored(cx, bufs)
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.inner.is_write_vectored()
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
+    }
 }
 
 /// Close a client connection before its request's `block_on` returns: drop
