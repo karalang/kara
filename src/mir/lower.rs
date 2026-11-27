@@ -11879,6 +11879,22 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
         };
         let lt0 = self.expr_ty(left)?;
+        // A `Never` operand (`let a = { return 7; }; a + 1`): the operation
+        // is never reached. The operands run in order up to the one that
+        // diverges, and nothing after it does (B-2026-11-27-11).
+        let rt0 = self.expr_ty(right)?;
+        let never = |s: &Self, t: Ty| matches!(s.tys().tcx().kind(t), HK::Never);
+        if never(self, lt0) || never(self, rt0) {
+            for (side, t) in [(left, lt0), (right, rt0)] {
+                let tmp = self.temp(t);
+                self.expr_into(side, Place::local(tmp))?;
+                if never(self, t) {
+                    break;
+                }
+            }
+            self.diverge(TerminatorKind::Unreachable);
+            return Ok(());
+        }
         // B-2026-10-14-30 — `a + b` on a user type with an `impl Add` calls
         // its `add` (design.md § Operator traits).
         if let Some((tr, m)) = user_operator_trait(bin) {

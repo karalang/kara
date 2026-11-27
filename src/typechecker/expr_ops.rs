@@ -5360,6 +5360,20 @@ impl<'a> super::TypeChecker<'a> {
         for key in borrowed {
             self.borrowed_deref_operands.remove(&key);
         }
+        // A `Never` operand (`let a = { return 7; }; a + 1`) means the
+        // operation is never reached. `Never` coerces to whatever its use
+        // needs (design.md § Types, the bottom type), so it takes the other
+        // operand's type, and two `Never` operands make a `Never` result
+        // (B-2026-11-27-11).
+        match (
+            matches!(self.resolved_now(&left_ty), Type::Never),
+            matches!(self.resolved_now(&right_ty), Type::Never),
+        ) {
+            (true, true) => return Type::Never,
+            (true, false) => left_ty = right_ty.clone(),
+            (false, true) => right_ty = left_ty.clone(),
+            (false, false) => {}
+        }
         // An `if`, `match` or block whose every value is an unsuffixed
         // literal takes the other operand's numeric type, as a literal
         // written there does: `r += if up { 1 } else { -1 }` with `r: i32`
