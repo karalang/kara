@@ -126,7 +126,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-92 | 2026-11-26 | cli | low | `karac query affected-by` never lists a test: its `tests` array is empty for every seed, because it counts only `test_*`-named functions in a `_test.kara` file and v1 tests are `test "name" { }` blocks | — |
 | B-2026-11-26-93 | 2026-11-26 | interp | low | `std.runtime.list_tasks()` lists no suspended task under `karac run --interp`, where `karac run` and `karac build` list the task suspended on its `recv` | — |
 | B-2026-11-26-94 | 2026-11-26 | interp+mir-llvm+runtime | low | The HTTP server answers 400 to a request whose header value holds a byte that is not UTF-8 (obs-text such as Latin-1 `caf\xe9`), which RFC 9110 §5.5 allows and io.md does not list among its refusals | — |
-| B-2026-11-27-1 | 2026-11-27 | typecheck | medium | Regression from the B-2026-11-26-1 fix (293934a062): a literal left open past an `as` cast is refused as a tensor index (`t[i, j] = (i * 3 + j) as f32` reports two E0200 "tensor index components must be integers, found 'i64'" ahead of the expected E0520), and `lossless_cast` no longer fires on an operator's operand cast of such a literal (`val * (base as i128)`) | — |
 
 ### Relocated
 
@@ -2395,6 +2394,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-85 | typecheck | high | A table lookup by a tuple needle narrowed unchecked: `given.contains((city, next))` with `city: i64` on a `Set[(i32, i32)]` passed check, and the com… | 4777a670cf |
 | B-2026-11-26-88 | ownership | high | A method with a `self` receiver that returns a closure over another bare parameter (`fn mk(self, pre: String) -> Fn(String) -> String { \|s\| f"{pre}{s… | 104ad243a3 |
 | B-2026-11-26-91 | cli | low | `karac catalog` reports a bare parameter `x: T` with mode `own`, where design.md §7, `karac explain` and `karac query ownership` all read it as borro… | 836e368319 |
+| B-2026-11-27-1 | typecheck | medium | Regression from the B-2026-11-26-1 fix (293934a062): a literal left open past an `as` cast is refused as a tensor index (`t[i, j] = (i * 3 + j) as f3… | 1a7d6a29e6 |
 
 </details>
 
