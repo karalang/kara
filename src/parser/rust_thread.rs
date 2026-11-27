@@ -186,72 +186,76 @@ impl super::Parser {
     }
 
     /// The fix for a `thread::spawn(..)` (path tokens from `at`, the path
-    /// spanning `whole`) that starts a statement or a `let`'s initializer in
-    /// a function's own body: a group made on the line before, `let group =
+    /// spanning `whole`) anywhere in a statement of a function's own body:
+    /// a group made on the line before that statement, `let group =
     /// TaskGroup.new();`, and the call written `group.spawn(..)`. The group
-    /// joins its task when it drops at the end of the body, which a Rust
-    /// program that joins its handle has already done; inside a loop or a
-    /// nested block it would join each pass, so there is no fix there.
+    /// joins its tasks when it drops at the end of the body, which a Rust
+    /// program that joins its handles has already done. A spawn inside a
+    /// loop or a nested block (`handles.push(thread::spawn(..))` in a `for`)
+    /// still gets its group before the statement of the body that holds
+    /// it, so the group outlives the loop rather than joining each pass
+    /// (B-2026-11-27-60).
     pub(crate) fn thread_spawn_group_fix(
         &self,
         at: usize,
         whole: crate::token::Span,
     ) -> Option<Vec<TextEdit>> {
         let token = |i: usize| self.tokens.get(i).map(|t| &t.token);
-        let ident = |i: usize| match token(i) {
-            Some(Token::Identifier { name, .. }) => Some(name.as_str()),
-            _ => None,
-        };
-        // Where the statement starts: the path itself, or `let [mut] h =`.
-        let before = |k: usize| at.checked_sub(k).and_then(token);
-        let stmt = if matches!(before(1), Some(Token::Equal)) && ident(at.checked_sub(2)?).is_some()
-        {
-            match (before(3), before(4)) {
-                (Some(Token::Let), _) => at - 3,
-                (Some(Token::Mut), Some(Token::Let)) => at - 4,
-                _ => return None,
+        // The innermost block around the spawn that is a function's body.
+        let fn_body = |open: usize| {
+            let mut parens = 0i64;
+            for k in (0..open).rev() {
+                match token(k) {
+                    Some(Token::RightParen | Token::RightBracket) => parens += 1,
+                    Some(Token::LeftParen | Token::LeftBracket) => parens -= 1,
+                    Some(Token::Semicolon | Token::LeftBrace | Token::RightBrace)
+                        if parens == 0 =>
+                    {
+                        return false
+                    }
+                    Some(Token::Fn) if parens == 0 => return true,
+                    _ => {}
+                }
             }
-        } else if matches!(
-            before(1),
-            Some(Token::Semicolon | Token::LeftBrace | Token::RightBrace)
-        ) {
-            at
-        } else {
-            return None;
+            false
         };
-        // The innermost block around it, which must be a function's body.
         let mut depth = 0usize;
         let mut open = None;
-        for k in (0..stmt).rev() {
+        for k in (0..at).rev() {
             match token(k) {
                 Some(Token::RightBrace) => depth += 1,
                 Some(Token::LeftBrace) if depth == 0 => {
-                    open = Some(k);
-                    break;
+                    if fn_body(k) {
+                        open = Some(k);
+                        break;
+                    }
                 }
                 Some(Token::LeftBrace) => depth -= 1,
                 _ => {}
             }
         }
         let open = open?;
-        let mut parens = 0i64;
-        let mut is_fn = false;
-        for k in (0..open).rev() {
+        // The statement of that body the spawn is in: the token after the
+        // last `;`, or the last block ending a statement, at the body's level.
+        let mut level = 0i64;
+        let mut stmt = open + 1;
+        for k in open + 1..at {
             match token(k) {
-                Some(Token::RightParen | Token::RightBracket) => parens += 1,
-                Some(Token::LeftParen | Token::LeftBracket) => parens -= 1,
-                Some(Token::Semicolon | Token::LeftBrace | Token::RightBrace) if parens == 0 => {
-                    break
+                Some(Token::LeftParen | Token::LeftBracket | Token::LeftBrace) => level += 1,
+                Some(Token::RightParen | Token::RightBracket) => level -= 1,
+                Some(Token::RightBrace) => {
+                    level -= 1;
+                    let goes_on = matches!(
+                        token(k + 1),
+                        Some(Token::Else | Token::Dot | Token::Question | Token::Semicolon)
+                    );
+                    if level == 0 && !goes_on {
+                        stmt = k + 1;
+                    }
                 }
-                Some(Token::Fn) if parens == 0 => {
-                    is_fn = true;
-                    break;
-                }
+                Some(Token::Semicolon) if level == 0 => stmt = k + 1,
                 _ => {}
             }
-        }
-        if !is_fn {
-            return None;
         }
         let taken = |n: &str| {
             self.tokens
@@ -261,6 +265,22 @@ impl super::Parser {
         let group = ["group", "tasks", "task_group"]
             .into_iter()
             .find(|n| !taken(n))?;
+        // An earlier spawn in the same body already makes the group, in
+        // scope here since it sits before a statement of the body: this
+        // one spawns in it too, rather than opening a group per spawn.
+        let spawn_at = |k: usize| {
+            matches!(token(k), Some(Token::Identifier { name, .. }) if matches!(name.as_str(), "thread" | "task" | "tokio"))
+                && matches!(token(k + 1), Some(Token::ColonColon | Token::Dot))
+                && matches!(token(k + 2), Some(Token::Identifier { name, .. }) if name == "spawn")
+        };
+        let respawn = TextEdit {
+            offset: whole.offset,
+            length: whole.length,
+            replacement: format!("{group}.spawn"),
+        };
+        if (open + 1..at).any(spawn_at) {
+            return Some(vec![respawn]);
+        }
         let start = self.tokens[stmt].span.offset;
         let (source, base) = self.source.as_ref()?;
         let line = source.get(..start.checked_sub(*base)?)?;
@@ -276,11 +296,7 @@ impl super::Parser {
                 length: 0,
                 replacement: make,
             },
-            TextEdit {
-                offset: whole.offset,
-                length: whole.length,
-                replacement: format!("{group}.spawn"),
-            },
+            respawn,
         ])
     }
 }

@@ -79,12 +79,14 @@ fn rust_thread_spawn_names_task_group_and_par() {
         "`std::thread::spawn` is Rust: Kāra has no free `spawn`",
         "import std.sync.{TaskGroup};\n\nfn main() { let group = TaskGroup.new(); let h = group.spawn(|| 1); println(h.join()); }\n",
     );
-    // In a loop body a group there would join each task at the end of
-    // its iteration, which may not be what was meant: no fix.
-    check_without_fix(
+    // In a loop body the group goes before the loop, the statement of the
+    // function's body that holds the spawn, so it outlives the loop rather
+    // than joining each pass (B-2026-11-27-60).
+    check_then_fix(
         "spawn-short",
         "fn main() { for i in 0..2 { let h = thread::spawn(|| i); println(h.join()); } }\n",
         "`let g = TaskGroup.new(); let h = g.spawn(|| ..);`",
+        "import std.sync.{TaskGroup};\n\nfn main() { let group = TaskGroup.new(); for i in 0..2 { let h = group.spawn(|| i); println(h.join()); } }\n",
     );
     // A `std::` path that is not a spawn keeps its fix.
     check_then_fix(

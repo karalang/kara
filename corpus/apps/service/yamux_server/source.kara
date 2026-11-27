@@ -1,0 +1,962 @@
+// A yamux stream multiplexer (HashiCorp's spec, the one under Consul, Nomad,
+// Vault's plugins and libp2p) on a loopback TCP port, with the scripted
+// clients that drive it. Many streams share one connection; each has a
+// 256 KiB receive window, and a sender that has used up its window stops
+// until the receiver hands bytes back with a window update. Both ends run
+// the same session engine: it writes every frame the windows allow, and
+// reads one frame only when nothing is left to write.
+
+import std.net.{TcpListener, TcpStream};
+import std.sync.{Mutex};
+import std.time.Duration;
+import std.sync.{TaskGroup};
+
+const VERSION: u8 = 0;
+const TYPE_DATA: u8 = 0;
+const TYPE_WINDOW: u8 = 1;
+const TYPE_PING: u8 = 2;
+const TYPE_GO_AWAY: u8 = 3;
+
+const SYN: u16 = 1;
+const ACK: u16 = 2;
+const FIN: u16 = 4;
+const RST: u16 = 8;
+
+const WINDOW: u32 = 262144;
+const GO_NORMAL: u32 = 0;
+const GO_PROTOCOL: u32 = 1;
+
+const SERVER_CHUNK: i64 = 16384;
+const CLIENT_CHUNK: i64 = 10000;
+const SESSIONS: i64 = 10;
+const WAIT_MS: u64 = 10000;
+const FNV_START: u32 = 2166136261;
+
+// ------------------------------------------------------------ frames
+
+fn header(kind: u8, flags: u16, stream: u32, length: u32) -> Vec[u8] {
+    let mut h = [VERSION, kind];
+    h.extend_from_slice(flags.to_be_bytes());
+    h.extend_from_slice(stream.to_be_bytes());
+    h.extend_from_slice(length.to_be_bytes());
+    h
+}
+
+struct Header {
+    version: u8,
+    kind: u8,
+    flags: u16,
+    stream: u32,
+    length: u32,
+}
+
+fn parse_header(b: Slice[u8]) -> Header {
+    Header {
+        version: b[0],
+        kind: b[1],
+        flags: u16.from_be_bytes([b[2], b[3]]),
+        stream: u32.from_be_bytes([b[4], b[5], b[6], b[7]]),
+        length: u32.from_be_bytes([b[8], b[9], b[10], b[11]]),
+    }
+}
+
+fn flag_names(flags: u16) -> String {
+    let mut names = Vec.new();
+    for (bit, name) in [(SYN, "SYN"), (ACK, "ACK"), (FIN, "FIN"), (RST, "RST")] {
+        if flags & bit != 0 {
+            names.push(name.clone());
+        }
+    }
+    if names.is_empty() {
+        "-".to_string()
+    } else {
+        names.join("|")
+    }
+}
+
+fn kind_name(kind: u8) -> String {
+    match kind {
+        TYPE_DATA => "data".to_string(),
+        TYPE_WINDOW => "window update".to_string(),
+        TYPE_PING => "ping".to_string(),
+        TYPE_GO_AWAY => "go away".to_string(),
+        k => f"type {k}",
+    }
+}
+
+// Fills `buf`; false at the end of the stream or on an error.
+fn read_full(conn: mut ref TcpStream, buf: mut Slice[u8]) -> bool {
+    let mut got = 0;
+    while got < buf.len() {
+        match conn.read(mut buf[got..]) {
+            Ok(0) => return false,
+            Ok(n) => got += n,
+            Err(_) => return false,
+        }
+    }
+    true
+}
+
+fn fnv1a(hash: u32, data: Slice[u8]) -> u32 {
+    let mut h = hash;
+    for b in data {
+        h ^= b;
+        h = h.wrapping_mul(16777619);
+    }
+    h
+}
+
+fn cat_bytes(n: i64) -> Vec[u8] {
+    (0..n).map(|i| (i % 251) as u8).collect()
+}
+
+fn put_bytes(n: i64) -> Vec[u8] {
+    (0..n).map(|i| ((i * 7 + i / 256) % 256) as u8).collect()
+}
+
+// ------------------------------------------------------------ the session
+
+struct Stream {
+    id: u32,
+    label: String,
+    send_window: u32,
+    recv_window: u32,
+    recv_max: u32,
+    out: Vec[u8],
+    sent: i64,
+    syn_on_data: bool,
+    fin_on_data: bool,
+    fin_wanted: bool,
+    fin_sent: bool,
+    fin_received: bool,
+    stalled: bool,
+    bytes_in: i64,
+    bytes_out: i64,
+    frames_in: u32,
+    frames_out: u32,
+    stalls: u32,
+    updates: u32,
+}
+
+impl Stream {
+    fn new(id: u32, send_window: u32, recv_max: u32) -> Stream {
+        Stream {
+            id,
+            label: "-".to_string(),
+            send_window,
+            recv_window: recv_max,
+            recv_max,
+            out: Vec.new(),
+            sent: 0,
+            syn_on_data: false,
+            fin_on_data: false,
+            fin_wanted: false,
+            fin_sent: false,
+            fin_received: false,
+            stalled: false,
+            bytes_in: 0,
+            bytes_out: 0,
+            frames_in: 0,
+            frames_out: 0,
+            stalls: 0,
+            updates: 0,
+        }
+    }
+
+    fn summary(self, how: Str) -> String {
+        f"stream {self.id} {self.label}: in {self.bytes_in}/{self.frames_in}, out {self.bytes_out}/{self.frames_out}, stalls {self.stalls}, updates {self.updates}, {how}"
+    }
+}
+
+enum Event {
+    Opened(u32),
+    Data(u32, Vec[u8]),
+    Fin(u32),
+    Reset(u32),
+    Pong(u32),
+    GoAway(u32),
+}
+
+struct Session {
+    conn: TcpStream,
+    chunk: i64,
+    streams: SortedMap[u32, Stream],
+    control: VecDeque[Vec[u8]],
+    next_id: u32,
+    peer_parity: u32,
+    closing: bool,
+    local_go_away: bool,
+    remote_go_away: bool,
+    frames_in: u64,
+    frames_out: u64,
+    bytes_in: u64,
+    bytes_out: u64,
+    dropped: u64,
+    log: Vec[String],
+    counts: SortedMap[String, u64],
+}
+
+impl Session {
+    fn new(conn: own TcpStream, server: bool) -> Session {
+        conn.set_read_timeout(Some(WAIT_MS)).unwrap();
+        Session {
+            conn,
+            chunk: if server { SERVER_CHUNK } else { CLIENT_CHUNK },
+            streams: SortedMap.new(),
+            control: VecDeque.new(),
+            next_id: if server { 2 } else { 1 },
+            peer_parity: if server { 1 } else { 0 },
+            closing: false,
+            local_go_away: false,
+            remote_go_away: false,
+            frames_in: 0,
+            frames_out: 0,
+            bytes_in: 0,
+            bytes_out: 0,
+            dropped: 0,
+            log: Vec.new(),
+            counts: SortedMap.new(),
+        }
+    }
+
+    fn count(mut ref self, key: Str, n: u64) {
+        *self.counts.entry(key.to_string()).or_insert(0) += n;
+    }
+
+    fn send(mut ref self, frame: Slice[u8]) {
+        let _ = self.conn.write_all(frame);
+        self.frames_out += 1;
+    }
+
+    fn send_raw(mut ref self, frame: Slice[u8]) {
+        self.send(frame);
+    }
+
+    // Opens a stream of ours: SYN rides on the first data frame, or goes
+    // out now on a window update that offers `extra` bytes past the 256 KiB.
+    fn open(mut ref self, label: Str, by_data: bool, extra: u32) -> u32 {
+        let id = self.next_id;
+        self.next_id += 2;
+        let mut s = Stream.new(id, WINDOW, WINDOW + extra);
+        s.label = label.to_string();
+        if by_data {
+            s.syn_on_data = true;
+        } else {
+            self.control.push_back(header(TYPE_WINDOW, SYN, id, extra));
+        }
+        self.streams.insert(id, s);
+        self.count("streams opened", 1);
+        id
+    }
+
+    fn label(mut ref self, id: u32, label: Str) {
+        if let Some(s) = self.streams.get_mut(id) {
+            s.label = label.to_string();
+        }
+    }
+
+    fn write(mut ref self, id: u32, data: Slice[u8]) {
+        if let Some(s) = self.streams.get_mut(id) {
+            s.out.extend_from_slice(data);
+        }
+    }
+
+    fn close(mut ref self, id: u32) {
+        if let Some(s) = self.streams.get_mut(id) {
+            s.fin_wanted = true;
+        }
+    }
+
+    fn reset(mut ref self, id: u32) {
+        if let Some(s) = self.streams.remove(id) {
+            self.control.push_back(header(TYPE_WINDOW, RST, id, 0));
+            self.log.push(s.summary("reset"));
+            self.count("resets sent", 1);
+        }
+    }
+
+    fn ping(mut ref self, opaque: u32) {
+        self.control.push_back(header(TYPE_PING, SYN, 0, opaque));
+    }
+
+    fn go_away(mut ref self, code: u32) {
+        self.control.push_back(header(TYPE_GO_AWAY, 0, 0, code));
+        self.local_go_away = true;
+        self.log.push(f"go away {code} sent");
+        self.count(f"go away sent {code}", 1);
+    }
+
+    fn protocol_error(mut ref self, why: String) {
+        self.log.push(f"protocol error: {why}");
+        self.count("protocol errors", 1);
+        self.go_away(GO_PROTOCOL);
+        self.closing = true;
+    }
+
+    // A stream with a FIN each way is done.
+    fn finish(mut ref self, id: u32) {
+        let done = match self.streams.get(id) {
+            Some(s) => s.fin_sent and s.fin_received,
+            None => false,
+        };
+        if done {
+            let s = self.streams.remove(id).unwrap();
+            self.log.push(s.summary("closed"));
+        }
+    }
+
+    // Writes every frame the windows allow: the control frames, then one
+    // chunk per stream a round, in stream order, until a round sends nothing.
+    fn flush(mut ref self) {
+        loop {
+            let mut progress = false;
+            while let Some(frame) = self.control.pop_front() {
+                self.send(frame);
+                progress = true;
+            }
+            let ids: Vec[u32] = self.streams.keys().cloned().collect();
+            for id in ids {
+                let chunk = self.chunk;
+                let s = self.streams.get_mut(id).unwrap();
+                let left = s.out.len() - s.sent;
+                let mut frame = Vec.new();
+                let mut n = 0;
+                if left > 0 {
+                    if s.send_window == 0 {
+                        if not s.stalled {
+                            s.stalled = true;
+                            s.stalls += 1;
+                        }
+                        continue;
+                    }
+                    n = left.min(chunk).min(s.send_window as i64);
+                    let mut flags: u16 = 0;
+                    if s.syn_on_data {
+                        flags |= SYN;
+                        s.syn_on_data = false;
+                    }
+                    if n == left and s.fin_wanted and s.fin_on_data {
+                        flags |= FIN;
+                        s.fin_sent = true;
+                    }
+                    frame = header(TYPE_DATA, flags, id, n as u32);
+                    frame.extend_from_slice(s.out[s.sent..s.sent + n]);
+                    s.sent += n;
+                    s.send_window -= n as u32;
+                    s.bytes_out += n;
+                    s.frames_out += 1;
+                } else if s.fin_wanted and not s.fin_sent {
+                    frame = header(TYPE_WINDOW, FIN, id, 0);
+                    s.fin_sent = true;
+                }
+                if not frame.is_empty() {
+                    self.send(frame);
+                    self.bytes_out += n as u64;
+                    progress = true;
+                    self.finish(id);
+                }
+            }
+            if not progress {
+                break;
+            }
+        }
+    }
+
+    // Reads one frame: the events it brings, or None at the end of the stream.
+    fn next(mut ref self) -> Option[Vec[Event]] {
+        let mut head = [0u8; 12];
+        if not read_full(mut self.conn, mut head) {
+            if not self.remote_go_away {
+                self.log.push("peer closed without go away".to_string());
+            }
+            return None;
+        }
+        self.frames_in += 1;
+        let h = parse_header(head);
+        let mut events = Vec.new();
+        if h.version != VERSION {
+            self.protocol_error(f"version {h.version}");
+            return Some(events);
+        }
+        match h.kind {
+            TYPE_DATA | TYPE_WINDOW => self.stream_frame(h, mut events),
+            TYPE_PING => {
+                if h.flags & SYN != 0 {
+                    self.control.push_back(header(TYPE_PING, ACK, 0, h.length));
+                    self.log.push(f"ping {h.length} answered");
+                    self.count("pings answered", 1);
+                } else {
+                    events.push(Event.Pong(h.length));
+                }
+            }
+            TYPE_GO_AWAY => {
+                self.remote_go_away = true;
+                self.count(f"go away received {h.length}", 1);
+                events.push(Event.GoAway(h.length));
+            }
+            k => self.protocol_error(f"frame type {k}"),
+        }
+        Some(events)
+    }
+
+    fn stream_frame(mut ref self, h: ref Header, events: mut ref Vec[Event]) {
+        let id = h.stream;
+        if h.flags & SYN != 0 {
+            if self.streams.contains_key(id) {
+                return self.protocol_error(f"stream {id} opened twice");
+            }
+            if id == 0 or id % 2 != self.peer_parity {
+                return self.protocol_error(f"stream {id} has the wrong parity");
+            }
+            let extra = if h.kind == TYPE_WINDOW { h.length } else { 0 };
+            self.streams.insert(id, Stream.new(id, WINDOW + extra, WINDOW));
+            self.control.push_back(header(TYPE_WINDOW, ACK, id, 0));
+            self.count("streams accepted", 1);
+            events.push(Event.Opened(id));
+        }
+        if not self.streams.contains_key(id) {
+            if h.kind == TYPE_DATA and h.length > 0 {
+                let mut body = Vec.filled(h.length, 0u8);
+                read_full(mut self.conn, mut body);
+            }
+            self.dropped += 1;
+            return;
+        }
+        if h.kind == TYPE_DATA {
+            let s = self.streams.get_mut(id).unwrap();
+            if h.length > s.recv_window {
+                let why = f"stream {id} sent {h.length} bytes on a {s.recv_window}-byte window";
+                return self.protocol_error(why);
+            }
+            let mut body = Vec.filled(h.length, 0u8);
+            if not read_full(mut self.conn, mut body) {
+                return;
+            }
+            s.recv_window -= h.length;
+            s.bytes_in += body.len();
+            s.frames_in += 1;
+            self.bytes_in += body.len() as u64;
+            if h.flags & (FIN | RST) == 0 {
+                let delta = s.recv_max - s.recv_window;
+                if delta >= s.recv_max / 2 {
+                    s.recv_window = s.recv_max;
+                    s.updates += 1;
+                    self.control.push_back(header(TYPE_WINDOW, 0, id, delta));
+                }
+            }
+            events.push(Event.Data(id, body));
+        } else if h.flags & SYN == 0 and h.length > 0 {
+            let s = self.streams.get_mut(id).unwrap();
+            s.send_window += h.length;
+            s.stalled = false;
+        }
+        if h.flags & RST != 0 {
+            let s = self.streams.remove(id).unwrap();
+            self.log.push(s.summary("reset by peer"));
+            self.count("resets received", 1);
+            events.push(Event.Reset(id));
+            return;
+        }
+        if h.flags & FIN != 0 {
+            self.streams.get_mut(id).unwrap().fin_received = true;
+            events.push(Event.Fin(id));
+            self.finish(id);
+        }
+    }
+
+    fn wrap_up(mut ref self) {
+        let open: Vec[String] = self.streams.values().map(|s| s.summary("open at the end")).collect();
+        self.log.extend(open);
+        self.log.push(f"frames in {self.frames_in} out {self.frames_out}, bytes in {self.bytes_in} out {self.bytes_out}, dropped {self.dropped}");
+        let (fi, fo, bi, bo, d) = (self.frames_in, self.frames_out, self.bytes_in, self.bytes_out, self.dropped);
+        self.count("frames in", fi);
+        self.count("frames out", fo);
+        self.count("bytes in", bi);
+        self.count("bytes out", bo);
+        self.count("dropped frames", d);
+    }
+}
+
+trait App {
+    fn on_event(mut ref self, sess: mut ref Session, ev: Event);
+    fn step(mut ref self, sess: mut ref Session) -> bool;
+}
+
+fn run[A: App](sess: mut ref Session, app: mut ref A) {
+    loop {
+        sess.flush();
+        if sess.closing {
+            break;
+        }
+        if app.step(sess) {
+            continue;
+        }
+        match sess.next() {
+            None => break,
+            Some(events) => {
+                for ev in events {
+                    app.on_event(sess, ev);
+                }
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------ the server
+
+struct Shared {
+    counts: SortedMap[String, u64],
+    logs: SortedMap[String, Vec[String]],
+    unnamed: u32,
+}
+
+enum Service {
+    Request(Vec[u8]),
+    Echo,
+    Put(i64, u32),
+    Done,
+}
+
+struct Server {
+    name: Option[String],
+    services: SortedMap[u32, Service],
+    shared: ref Mutex[Shared],
+}
+
+impl Server {
+    fn data(mut ref self, sess: mut ref Session, id: u32, data: Vec[u8]) {
+        let service = match self.services.remove(id) {
+            Some(s) => s,
+            None => return,
+        };
+        let next = match service {
+            Service.Request(buf) => {
+                let mut buf = buf;
+                buf.extend_from_slice(data);
+                match buf.iter().position(|b| b == b'\n') {
+                    Some(at) => {
+                        let line = String.from_utf8_lossy(buf[..at]).to_string();
+                        let rest = buf[at + 1..].to_vec();
+                        self.dispatch(sess, id, line, rest)
+                    }
+                    None => Service.Request(buf),
+                }
+            }
+            Service.Echo => {
+                sess.write(id, data);
+                Service.Echo
+            }
+            Service.Put(n, hash) => Service.Put(n + data.len(), fnv1a(hash, data)),
+            Service.Done => Service.Done,
+        };
+        self.services.insert(id, next);
+    }
+
+    fn dispatch(mut ref self, sess: mut ref Session, id: u32, line: Str, rest: Vec[u8]) -> Service {
+        let mut words = line.split(" ");
+        let verb = words.next().unwrap_or("");
+        let arg = words.next().unwrap_or("");
+        sess.label(id, line);
+        match verb {
+            "hello" => {
+                self.name = Some(arg.to_string());
+                sess.count("service hello", 1);
+                sess.write(id, f"welcome {arg}\n".bytes());
+                sess.close(id);
+                sess.ping(1);
+                Service.Done
+            }
+            "echo" => {
+                sess.count("service echo", 1);
+                sess.write(id, rest);
+                Service.Echo
+            }
+            "cat" => {
+                sess.count("service cat", 1);
+                let n: i64 = usize.parse(arg).unwrap_or(0) as i64;
+                sess.write(id, cat_bytes(n));
+                sess.close(id);
+                Service.Done
+            }
+            "put" => {
+                sess.count("service put", 1);
+                Service.Put(rest.len(), fnv1a(FNV_START, rest))
+            }
+            "push" => {
+                sess.count("service push", 1);
+                let n: u32 = u32.parse(arg).unwrap_or(0);
+                let p = sess.open("push", false, 0);
+                let mut text = String.new();
+                for k in 1..=n {
+                    text.push_str(f"note {k}\n");
+                }
+                sess.write(p, text.bytes());
+                sess.close(p);
+                sess.write(id, f"pushed {n} notes on stream {p}\n".bytes());
+                sess.close(id);
+                Service.Done
+            }
+            "stats" => {
+                sess.count("service stats", 1);
+                let st = self.shared.lock();
+                let mut text = String.new();
+                for (k, v) in ref st.value.counts {
+                    text.push_str(f"{k} {v}\n");
+                }
+                sess.write(id, text.bytes());
+                sess.close(id);
+                Service.Done
+            }
+            _ => {
+                sess.count("service unknown", 1);
+                sess.log.push(f"stream {id}: unknown service '{line}'");
+                sess.reset(id);
+                Service.Done
+            }
+        }
+    }
+
+    fn fin(mut ref self, sess: mut ref Session, id: u32) {
+        match self.services.get(id) {
+            Some(Service.Echo) => sess.close(id),
+            Some(Service.Put(n, hash)) => {
+                let reply = f"stored {n} bytes, fnv {hash:08x}\n";
+                sess.write(id, reply.bytes());
+                sess.close(id);
+            }
+            Some(Service.Request(_)) => {
+                sess.log.push(f"stream {id}: closed before its request");
+                sess.reset(id);
+            }
+            _ => {}
+        }
+    }
+}
+
+impl App for Server {
+    fn on_event(mut ref self, sess: mut ref Session, ev: Event) {
+        match ev {
+            Event.Opened(id) => {
+                self.services.insert(id, Service.Request(Vec.new()));
+            }
+            Event.Data(id, data) => self.data(sess, id, data),
+            Event.Fin(id) => self.fin(sess, id),
+            Event.Reset(id) => {
+                self.services.remove(id);
+            }
+            Event.Pong(n) => sess.log.push(f"pong {n}"),
+            Event.GoAway(code) => sess.log.push(f"go away {code} received"),
+        }
+    }
+
+    fn step(mut ref self, sess: mut ref Session) -> bool {
+        if sess.remote_go_away and not sess.local_go_away and sess.streams.is_empty() {
+            sess.go_away(GO_NORMAL);
+            sess.closing = true;
+            return true;
+        }
+        false
+    }
+}
+
+fn serve(conn: own TcpStream, shared: Mutex[Shared]) {
+    let mut sess = Session.new(conn, true);
+    let mut app = Server { name: None, services: SortedMap.new(), shared: ref shared };
+    run(mut sess, mut app);
+    sess.wrap_up();
+    sess.count("sessions", 1);
+    let mut st = shared.lock();
+    for (k, v) in ref sess.counts {
+        *st.value.counts.entry(k.clone()).or_insert(0) += v;
+    }
+    let name = match ref app.name {
+        Some(n) => n.clone(),
+        None => {
+            st.value.unnamed += 1;
+            f"unnamed-{st.value.unnamed}"
+        }
+    };
+    st.value.logs.insert(name, sess.log.clone());
+}
+
+fn serve_all(listener: TcpListener, shared: Mutex[Shared]) {
+    let mut tasks = Vec.new();
+    let group = TaskGroup.new();
+    for _ in 0..SESSIONS {
+        let conn = listener.accept().unwrap();
+        let shared = ref shared;
+        tasks.push(group.spawn(|| serve(conn, shared)));
+    }
+    for t in tasks.into_iter() {
+        t.join();
+    }
+}
+
+// ------------------------------------------------------------ the clients
+
+#[derive(Clone)]
+struct Job {
+    request: String,
+    upload: Vec[u8],
+    by_data: bool,
+    extra: u32,
+    fin_on_data: bool,
+    reset_after: i64,
+    show: bool,
+    echo: bool,
+}
+
+fn job(request: Str) -> Job {
+    Job {
+        request: request.to_string(),
+        upload: Vec.new(),
+        by_data: true,
+        extra: 0,
+        fin_on_data: false,
+        reset_after: 0,
+        show: true,
+        echo: false,
+    }
+}
+
+struct Pending {
+    job: Job,
+    got: i64,
+    hash: u32,
+    text: Vec[u8],
+}
+
+struct Client {
+    phases: Vec[Vec[Job]],
+    phase: i64,
+    stray: bool,
+    pending: SortedMap[u32, Pending],
+}
+
+impl Client {
+    fn report(mut ref self, sess: mut ref Session, id: u32) {
+        let p = match self.pending.remove(id) {
+            Some(p) => p,
+            None => return,
+        };
+        let line = if p.job.show {
+            let text = String.from_utf8_lossy(p.text).to_string();
+            let parts: Vec[Str] = text.lines().collect();
+            parts.join(" | ")
+        } else {
+            let mut line = f"{p.got} bytes, fnv {p.hash:08x}";
+            if p.job.echo {
+                let same = p.hash == fnv1a(FNV_START, p.job.upload) and p.got == p.job.upload.len();
+                line.push_str(if same { ", same as sent" } else { ", NOT what was sent" });
+            }
+            line
+        };
+        sess.log.push(f"stream {id} {p.job.request}: {line}");
+    }
+}
+
+impl App for Client {
+    fn on_event(mut ref self, sess: mut ref Session, ev: Event) {
+        match ev {
+            Event.Opened(id) => {
+                let mut j = job("from server");
+                j.by_data = false;
+                sess.label(id, "from server");
+                self.pending.insert(id, Pending { job: j, got: 0, hash: FNV_START, text: Vec.new() });
+            }
+            Event.Data(id, data) => {
+                let mut cut = false;
+                if let Some(p) = self.pending.get_mut(id) {
+                    p.got += data.len();
+                    p.hash = fnv1a(p.hash, data);
+                    if p.job.show {
+                        p.text.extend_from_slice(data);
+                    }
+                    cut = p.job.reset_after > 0 and p.got >= p.job.reset_after;
+                }
+                if cut {
+                    let p = self.pending.remove(id).unwrap();
+                    sess.log.push(f"stream {id} {p.job.request}: reset after {p.got} bytes");
+                    sess.reset(id);
+                }
+            }
+            Event.Fin(id) => {
+                sess.close(id);
+                self.report(sess, id);
+            }
+            Event.Reset(id) => {
+                if let Some(p) = self.pending.remove(id) {
+                    sess.log.push(f"stream {id} {p.job.request}: reset by the server");
+                }
+            }
+            Event.Pong(n) => sess.log.push(f"pong {n:x}"),
+            Event.GoAway(code) => sess.log.push(f"go away {code} received"),
+        }
+    }
+
+    fn step(mut ref self, sess: mut ref Session) -> bool {
+        if not sess.streams.is_empty() {
+            return false;
+        }
+        if self.phase < self.phases.len() {
+            if self.phase == 0 {
+                sess.ping(0xC0FFEE);
+            }
+            let jobs = take(mut self.phases[self.phase]);
+            self.phase += 1;
+            if self.stray and self.phase == 2 {
+                let mut frame = header(TYPE_DATA, 0, 99, 5);
+                frame.extend_from_slice(b"stray");
+                sess.send_raw(frame);
+            }
+            for j in jobs.into_iter() {
+                let id = sess.open(j.request, j.by_data, j.extra);
+                let mut out = f"{j.request}\n".bytes().to_vec();
+                out.extend_from_slice(j.upload.clone());
+                sess.write(id, out);
+                if j.fin_on_data {
+                    sess.streams.get_mut(id).unwrap().fin_on_data = true;
+                }
+                sess.close(id);
+                self.pending.insert(id, Pending { job: j, got: 0, hash: FNV_START, text: Vec.new() });
+            }
+            return true;
+        }
+        if not sess.local_go_away {
+            sess.go_away(GO_NORMAL);
+            return true;
+        }
+        false
+    }
+}
+
+fn client(addr: Str, phases: own Vec[Vec[Job]], stray: bool) -> Vec[String] {
+    let conn = TcpStream.connect(addr).unwrap();
+    let mut sess = Session.new(conn, false);
+    let mut app = Client { phases, phase: 0, stray, pending: SortedMap.new() };
+    run(mut sess, mut app);
+    sess.wrap_up();
+    sess.log
+}
+
+fn alice(addr: Str) -> Vec[String] {
+    let mut echo = job("echo");
+    echo.by_data = false;
+    echo.upload = b"first line\nsecond line\nthird\n".to_vec();
+    let phases = [
+        [job("hello alice")],
+        [echo, job("push 3"), job("nope")],
+    ];
+    client(addr, phases, false)
+}
+
+fn bob(addr: Str) -> Vec[String] {
+    let mut cat = job("cat 700000");
+    cat.by_data = false;
+    cat.show = false;
+    let mut wide = job("cat 300000");
+    wide.by_data = false;
+    wide.extra = WINDOW;
+    wide.show = false;
+    let mut put = job("put");
+    put.upload = put_bytes(600000);
+    put.fin_on_data = true;
+    put.show = true;
+    let phases = [[job("hello bob")], [cat, wide], [put]];
+    client(addr, phases, false)
+}
+
+fn carol(addr: Str) -> Vec[String] {
+    let mut echo = job("echo");
+    echo.upload = put_bytes(40000);
+    echo.show = false;
+    echo.echo = true;
+    let mut cut = job("cat 500000");
+    cut.show = false;
+    cut.reset_after = 16384;
+    let mut put = job("put");
+    put.by_data = false;
+    put.upload = put_bytes(25000);
+    let phases = [[job("hello carol")], [echo, cut], [put]];
+    client(addr, phases, true)
+}
+
+fn admin(addr: Str) -> Vec[String] {
+    let phases = [[job("hello admin")], [job("stats")]];
+    client(addr, phases, false)
+}
+
+// Writes `frames` as they are, then prints what comes back until the
+// server closes.
+fn raw(addr: Str, label: Str, frames: Slice[Vec[u8]], half_close: bool) {
+    let mut conn = TcpStream.connect(addr).unwrap();
+    conn.set_read_timeout(Some(WAIT_MS)).unwrap();
+    for f in frames {
+        conn.write_all(f).unwrap();
+    }
+    if half_close {
+        conn.shutdown_write().unwrap();
+    }
+    println(f"{label}");
+    let mut head = [0u8; 12];
+    while read_full(mut conn, mut head) {
+        let h = parse_header(head);
+        println(f"  got {kind_name(h.kind)} stream {h.stream} flags {flag_names(h.flags)} length {h.length}");
+        if h.kind == TYPE_DATA and h.length > 0 {
+            let mut body = Vec.filled(h.length, 0u8);
+            read_full(mut conn, mut body);
+        }
+    }
+    println("  closed");
+}
+
+fn main() {
+    let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let shared = Mutex.new(Shared { counts: SortedMap.new(), logs: SortedMap.new(), unnamed: 0 });
+    let for_server = ref shared;
+    let group = TaskGroup.new();
+    let server = group.spawn(|| serve_all(listener, for_server));
+
+    println("== three sessions at once");
+    let (a1, a2, a3) = (addr.clone(), addr.clone(), addr.clone());
+    let ta = group.spawn(|| alice(a1));
+    let tb = group.spawn(|| bob(a2));
+    let tc = group.spawn(|| carol(a3));
+    let logs = [("alice", ta.join()), ("bob", tb.join()), ("carol", tc.join())];
+    for (name, log) in ref logs {
+        println(f"-- {name}");
+        for line in log {
+            println(f"{line}");
+        }
+    }
+
+    println("== protocol errors");
+    raw(addr, "version 1", [[1, TYPE_WINDOW, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0]], false);
+    let mut over = header(TYPE_WINDOW, SYN, 1, 0);
+    over.extend_from_slice(header(TYPE_DATA, 0, 1, 300000));
+    raw(addr, "300000 bytes announced on a fresh window", [over], false);
+    raw(addr, "a client stream with an even id", [header(TYPE_WINDOW, SYN, 2, 0)], false);
+    raw(addr, "stream 1 opened twice", [header(TYPE_WINDOW, SYN, 1, 0), header(TYPE_DATA, SYN, 1, 0)], false);
+    raw(addr, "frame type 7", [header(7, 0, 0, 0)], false);
+    raw(addr, "a ping, then a half close", [header(TYPE_PING, SYN, 0, 42)], true);
+
+    println("== admin");
+    for line in admin(addr) {
+        println(f"{line}");
+    }
+
+    server.join();
+    let st = shared.lock();
+    println("== server logs");
+    for (name, log) in ref st.value.logs {
+        println(f"-- {name}");
+        for line in log {
+            println(f"{line}");
+        }
+    }
+    println("== totals");
+    for (k, v) in ref st.value.counts {
+        println(f"{k} {v}");
+    }
+}

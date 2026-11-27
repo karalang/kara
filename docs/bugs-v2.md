@@ -60,7 +60,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | diagnostics | 802 |
 | false-positive | 409 |
-| missing-feature | 270 |
+| missing-feature | 271 |
 | perf | 206 |
 | other | 165 |
 | soundness | 145 |
@@ -80,7 +80,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | mir | 355 |
 | mir-llvm | 341 |
 | cli | 326 |
-| parser | 169 |
+| parser | 170 |
 | ownership | 148 |
 | runtime | 121 |
 | interp | 119 |
@@ -126,6 +126,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-27-50 | 2026-11-27 | typecheck | low | A `mut ref` binding declared without `let mut` can be rebound: `let up = mut ref a; up = mut ref b;` is accepted, where core-semantics §5.1 says only `let mut` lets it be rebound | — |
 | B-2026-11-27-51 | 2026-11-27 | typecheck | low | A function returning a view with no parameter it could borrow from is accepted (`fn mk(n: i64) -> Vec[ref String] { Vec.new() }`), where the core-semantics §5.4 signature rule makes it an error | — |
 | B-2026-11-27-52 | 2026-11-27 | typecheck | low | E0509 for a generic instance that stores a view where a view may not go is reported at the generic body's line only; core-semantics §5.8 puts it at the instantiation site with a note at the body | — |
+| B-2026-11-27-60 | 2026-11-27 | parser | low | `karac fix` had no group for a Rust `thread::spawn` inside a loop: `handles.push(thread::spawn(move || serve(conn, shared)))` in an accept loop kept its E0001 with no fix | — |
 
 ### Relocated
 

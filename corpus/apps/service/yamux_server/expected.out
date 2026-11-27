@@ -1,0 +1,166 @@
+== three sessions at once
+-- alice
+pong c0ffee
+ping 1 answered
+stream 1 hello alice: in 14/1, out 12/1, stalls 0, updates 0, closed
+stream 1 hello alice: welcome alice
+stream 2 from server: note 1 | note 2 | note 3
+stream 2 from server: in 21/1, out 0/0, stalls 0, updates 0, closed
+stream 5 push 3: in 27/1, out 7/1, stalls 0, updates 0, closed
+stream 5 push 3: pushed 3 notes on stream 2
+stream 7 nope: in 0/0, out 5/1, stalls 0, updates 0, reset by peer
+stream 7 nope: reset by the server
+stream 3 echo: in 29/1, out 34/1, stalls 0, updates 0, closed
+stream 3 echo: first line | second line | third
+go away 0 sent
+go away 0 received
+frames in 17 out 14, bytes in 91 out 58, dropped 0
+-- bob
+pong c0ffee
+ping 1 answered
+stream 1 hello bob: in 12/1, out 10/1, stalls 0, updates 0, closed
+stream 1 hello bob: welcome bob
+stream 5 cat 300000: in 300000/19, out 11/1, stalls 0, updates 1, closed
+stream 5 cat 300000: 300000 bytes, fnv e93fc6a5
+stream 3 cat 700000: in 700000/43, out 11/1, stalls 0, updates 5, closed
+stream 3 cat 700000: 700000 bytes, fnv 8f77bc1d
+stream 7 put: in 34/1, out 600004/62, stalls 3, updates 0, closed
+stream 7 put: stored 600000 bytes, fnv 183678c5
+go away 0 sent
+go away 0 received
+frames in 79 out 79, bytes in 1000046 out 600036, dropped 0
+-- carol
+pong c0ffee
+ping 1 answered
+stream 1 hello carol: in 14/1, out 12/1, stalls 0, updates 0, closed
+stream 1 hello carol: welcome carol
+stream 5 cat 500000: reset after 16384 bytes
+stream 5 cat 500000: in 16384/1, out 11/1, stalls 0, updates 0, reset
+stream 3 echo: in 40000/5, out 40005/5, stalls 0, updates 0, closed
+stream 3 echo: 40000 bytes, fnv cb22edc5, same as sent
+stream 7 put: in 33/1, out 25004/3, stalls 0, updates 0, closed
+stream 7 put: stored 25000 bytes, fnv 0f76b675
+go away 0 sent
+go away 0 received
+frames in 33 out 20, bytes in 56431 out 65032, dropped 15
+== protocol errors
+version 1
+  got go away stream 0 flags - length 1
+  closed
+300000 bytes announced on a fresh window
+  got window update stream 1 flags ACK length 0
+  got go away stream 0 flags - length 1
+  closed
+a client stream with an even id
+  got go away stream 0 flags - length 1
+  closed
+stream 1 opened twice
+  got window update stream 1 flags ACK length 0
+  got go away stream 0 flags - length 1
+  closed
+frame type 7
+  got go away stream 0 flags - length 1
+  closed
+a ping, then a half close
+  got ping stream 0 flags ACK length 42
+  closed
+== admin
+pong c0ffee
+ping 1 answered
+stream 1 hello admin: in 14/1, out 12/1, stalls 0, updates 0, closed
+stream 1 hello admin: welcome admin
+stream 3 stats: in 342/1, out 6/1, stalls 0, updates 0, closed
+stream 3 stats: bytes in 665126 | bytes out 1302328 | dropped frames 4 | frames in 121 | frames out 137 | go away received 0 3 | go away sent 0 3 | go away sent 1 5 | pings answered 4 | protocol errors 5 | resets received 1 | resets sent 1 | service cat 3 | service echo 2 | service hello 3 | service push 1 | service put 2 | service unknown 1 | sessions 9 | streams accepted 14 | streams opened 1
+go away 0 sent
+go away 0 received
+frames in 9 out 7, bytes in 356 out 18, dropped 0
+== server logs
+-- admin
+ping 12648430 answered
+stream 1 hello admin: in 12/1, out 14/1, stalls 0, updates 0, closed
+pong 1
+stream 3 stats: in 6/1, out 342/1, stalls 0, updates 0, closed
+go away 0 received
+go away 0 sent
+frames in 7 out 9, bytes in 18 out 356, dropped 0
+-- alice
+ping 12648430 answered
+stream 1 hello alice: in 12/1, out 14/1, stalls 0, updates 0, closed
+pong 1
+stream 7: unknown service 'nope'
+stream 7 nope: in 5/1, out 0/0, stalls 0, updates 0, reset
+stream 3 echo: in 34/1, out 29/1, stalls 0, updates 0, closed
+stream 5 push 3: in 7/1, out 27/1, stalls 0, updates 0, closed
+stream 2 push: in 0/0, out 21/1, stalls 0, updates 0, closed
+go away 0 received
+go away 0 sent
+frames in 14 out 17, bytes in 58 out 91, dropped 1
+-- bob
+ping 12648430 answered
+stream 1 hello bob: in 10/1, out 12/1, stalls 0, updates 0, closed
+pong 1
+stream 5 cat 300000: in 11/1, out 300000/19, stalls 0, updates 0, closed
+stream 3 cat 700000: in 11/1, out 700000/43, stalls 4, updates 0, closed
+stream 7 put: in 600004/62, out 34/1, stalls 0, updates 4, closed
+go away 0 received
+go away 0 sent
+frames in 79 out 79, bytes in 600036 out 1000046, dropped 2
+-- carol
+ping 12648430 answered
+stream 1 hello carol: in 12/1, out 14/1, stalls 0, updates 0, closed
+pong 1
+stream 3 echo: in 40005/5, out 40000/5, stalls 0, updates 0, closed
+stream 5 cat 500000: in 11/1, out 262144/16, stalls 1, updates 0, reset by peer
+stream 7 put: in 25004/3, out 33/1, stalls 0, updates 0, closed
+go away 0 received
+go away 0 sent
+frames in 20 out 33, bytes in 65032 out 302191, dropped 1
+-- unnamed-1
+protocol error: version 1
+go away 1 sent
+frames in 1 out 1, bytes in 0 out 0, dropped 0
+-- unnamed-2
+protocol error: stream 1 sent 300000 bytes on a 262144-byte window
+go away 1 sent
+stream 1 -: in 0/0, out 0/0, stalls 0, updates 0, open at the end
+frames in 2 out 2, bytes in 0 out 0, dropped 0
+-- unnamed-3
+protocol error: stream 2 has the wrong parity
+go away 1 sent
+frames in 1 out 1, bytes in 0 out 0, dropped 0
+-- unnamed-4
+protocol error: stream 1 opened twice
+go away 1 sent
+stream 1 -: in 0/0, out 0/0, stalls 0, updates 0, open at the end
+frames in 2 out 2, bytes in 0 out 0, dropped 0
+-- unnamed-5
+protocol error: frame type 7
+go away 1 sent
+frames in 1 out 1, bytes in 0 out 0, dropped 0
+-- unnamed-6
+ping 42 answered
+peer closed without go away
+frames in 1 out 1, bytes in 0 out 0, dropped 0
+== totals
+bytes in 665144
+bytes out 1302684
+dropped frames 4
+frames in 128
+frames out 146
+go away received 0 4
+go away sent 0 4
+go away sent 1 5
+pings answered 5
+protocol errors 5
+resets received 1
+resets sent 1
+service cat 3
+service echo 2
+service hello 4
+service push 1
+service put 2
+service stats 1
+service unknown 1
+sessions 10
+streams accepted 16
+streams opened 1

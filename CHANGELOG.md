@@ -664,6 +664,13 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `set_read_timeout(Some(ms))` once `Duration::from_millis(ms)` is mended
   away gets `as i64` (B-2026-11-27-42).
 
+- `karac fix` makes a group for a Rust `thread::spawn` anywhere in a
+  function, not only in a statement of its body: a spawn in a loop
+  (`handles.push(thread::spawn(..))` in an accept loop) gets
+  `let group = TaskGroup.new();` before the loop, so the group outlives it,
+  and later spawns in the same body share that group rather than each
+  opening one (B-2026-11-27-60).
+
 - `..mut ref rest` over a `mut ref Array[T, N]` binds `rest` as a
   `mut ref Array[T, K]` into the array itself (design.md § Slice and array
   patterns): writes through it, element by element, through `iter_mut`,
