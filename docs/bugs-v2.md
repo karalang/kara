@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 793 |
+| diagnostics | 795 |
 | false-positive | 404 |
 | missing-feature | 268 |
 | perf | 206 |
@@ -79,7 +79,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 973 |
 | mir | 350 |
 | mir-llvm | 341 |
-| cli | 324 |
+| cli | 325 |
 | parser | 166 |
 | ownership | 147 |
 | runtime | 120 |
@@ -90,6 +90,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | codegen | 22 |
 | autopar | 7 |
 | lexer | 2 |
+| repl | 1 |
 ## Current state
 
 _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-11-27). Do not edit this block by hand; edit the ledger and regenerate._
@@ -2415,6 +2416,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-27-14 | interp+mir-llvm | medium | `text_backend` wrote a record's message as it was, so a message holding a line end split one record over two lines (and a crafted one could forge a s… | 59c73d71d5 |
 | B-2026-11-27-15 | typecheck | medium | The compiler's prelude held library names README keeps in modules: Server, Request, Response, Client, Channel, Sender, TaskGroup, Mutex, File, Durati… | 9172fa1572 |
 | B-2026-11-27-17 | typecheck | high | `if c { (r, steps) } else { (r, r) }` with `steps: i32` and `r: i64` checks clean as an `(i64, i32)` and narrows the second branch's `r` silently (30… | 0c8496bc2e |
+| B-2026-11-27-18 | repl | low | A REPL cell that mixes a top-level import with statements (a snippet pasted with its imports) is refused as an import inside the synthetic `fn main()… | 1f3ee9141d |
+| B-2026-11-27-19 | cli | low | The OnceCell -> OnceLock fix (E_ONCE_CELL_IN_PAR_TYPE, E_ONCE_CELL_AT_MODULE_SCOPE) renames the type but leaves `import std.sync.{OnceCell}`, which n… | 1f3ee9141d |
 
 </details>
 
