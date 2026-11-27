@@ -64,7 +64,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | perf | 206 |
 | other | 165 |
 | soundness | 145 |
-| miscompile | 113 |
+| miscompile | 114 |
 | run-vs-build | 80 |
 | crash | 73 |
 | codegen-gap | 49 |
@@ -78,7 +78,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 984 |
 | mir | 356 |
-| mir-llvm | 341 |
+| mir-llvm | 342 |
 | cli | 326 |
 | parser | 170 |
 | ownership | 148 |
@@ -2443,6 +2443,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-27-56 | other | low | Go-to-definition on a library type went to the `import` line (or nowhere on the import itself, or for a prelude type), and hover on an imported name… | 0ba7490af3 |
 | B-2026-11-27-57 | parser | medium | `for P { x, y } in ps { . | 49e265ce46 |
 | B-2026-11-27-60 | parser | low | `karac fix` had no group for a Rust `thread::spawn` inside a loop: `handles.push(thread::spawn(move \|\| serve(conn, shared)))` in an accept loop kept… | 57bea61001 |
+| B-2026-11-27-62 | mir-llvm | high | A compiled extern "C" call passes zeros for a struct that goes on the stack after the registers (skb6(1, 2, 3, 4, 5, 6, B { a: 1, b: 2, c: 3 }) gives… | 7d6d3c0bb9 |
 
 </details>
 
