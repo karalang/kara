@@ -1568,6 +1568,7 @@ impl<'a> super::TypeChecker<'a> {
                 // diagnostic, and `karac check` printed MIR's "a type that
                 // failed to check is not lowered yet".
                 if self.local_scope.lookup(name).is_none()
+                    && !self.type_param_in_scope(name)
                     && self.env.traits.contains_key(name.as_str())
                     && !self.env.structs.contains_key(name.as_str())
                     && !self.env.enums.contains_key(name.as_str())
@@ -1618,11 +1619,15 @@ impl<'a> super::TypeChecker<'a> {
                     self.record_expr_type(span, &Type::Error);
                     return Type::Error;
                 }
+                // A type parameter in scope (`[C: FromIterator[T]]`, the
+                // library's `C.from_iter(..)`) names the type even where the
+                // program declares a trait of that name (B-2026-11-27-20).
                 // `Ord.max(a, b)`: a trait named with a method neither it nor
                 // a supertrait declares. It was typed as an error with no
                 // diagnostic, and `karac check` printed MIR's "a type that
                 // failed to check is not lowered yet" (B-2026-11-26-4).
                 if self.local_scope.lookup(name).is_none()
+                    && !self.type_param_in_scope(name)
                     && self.env.traits.contains_key(name.as_str())
                     && !self.env.structs.contains_key(name.as_str())
                     && !self.env.enums.contains_key(name.as_str())
