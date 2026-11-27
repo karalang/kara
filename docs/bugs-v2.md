@@ -63,7 +63,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | missing-feature | 268 |
 | perf | 206 |
 | other | 164 |
-| soundness | 141 |
+| soundness | 142 |
 | miscompile | 113 |
 | run-vs-build | 80 |
 | crash | 71 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 974 |
+| typecheck | 975 |
 | mir | 350 |
 | mir-llvm | 341 |
 | cli | 326 |
@@ -123,6 +123,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-27-16 | 2026-11-27 | cli | low | In a package, the E0520 import fix-it for a library name used only in a test file (src/main_test.kara) is labelled src/main.kara at offset 0, so `karac fix` applies nothing and the error stays | — |
 | B-2026-11-27-21 | 2026-11-27 | effect | low | cs.951 says a call through an escaping function value with no effect clause has every effect, but a direct call through an `escaping Fn` PARAMETER is charged its argument's effects at the call site (as cs.948 does for a non-escaping one): sound, but not the sentence; needs a ruling on which is meant | — |
 | B-2026-11-27-22 | 2026-11-27 | ownership | medium | A closure returned over a local closure that captures an owned value (`fn mk(pre: own String) -> Fn(String) -> String { let c = || pre.clone(); |s| f"{c()}{s}" }`, or a Copy local `let n = 1; let c = || n + 1; || c()`) is refused E0509 "the result borrows `pre`, which this function owns": the local closure captures by reference though it moves into the escaping one | — |
+| B-2026-11-27-24 | 2026-11-27 | typecheck | high | A closure that moves a captured FIELD or tuple path out (`|| take(o.a)`, `|| take(t.0)`, `|| o.a`) is typed as a repeatable `Fn`, not `OnceFn`, so `karac check` accepts it in a `Vec[Fn() -> i64]`; called twice there, the compiled program reads freed memory (ASan heap-use-after-free), where moving the whole capture (`|| take(s)`) is refused with E0235 | — |
 
 ### Relocated
 
