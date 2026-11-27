@@ -311,9 +311,18 @@ pub fn completion_in(
             return Vec::new();
         }
     };
+    let index = LineIndex::new(text);
     entries
         .into_iter()
         .map(|e| CompletionItem {
+            // A library name the document has not imported brings its
+            // import with it.
+            additional_text_edits: e.import.map(|(at, text)| {
+                vec![TextEdit {
+                    range: index.range(at, 0),
+                    new_text: text,
+                }]
+            }),
             label: e.label,
             kind: Some(match e.kind {
                 karac::CompletionKind::Method => CompletionItemKind::METHOD,

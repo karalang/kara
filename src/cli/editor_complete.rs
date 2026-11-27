@@ -39,6 +39,9 @@ pub struct CompletionEntry {
     pub label: String,
     pub kind: CompletionKind,
     pub detail: Option<String>,
+    /// A library name the program has not imported: the `(offset, text)`
+    /// of the import accepting it adds, as rust-analyzer's auto-import does.
+    pub import: Option<(usize, String)>,
 }
 
 /// Stands in for the member being typed, so a buffer that ends in `x.`
@@ -69,7 +72,9 @@ pub(crate) fn complete(source: &str, at: usize) -> Vec<CompletionEntry> {
             None => members(before, rest),
         }
     } else {
-        names(before, rest, start)
+        let mut names = names(before, rest, start);
+        names.extend(library_names(source));
+        names
     };
     out.retain(|e| e.label.starts_with(prefix) && e.label != HOLE && !e.label.starts_with("__"));
     out.sort_by(|a, b| a.label.cmp(&b.label));
@@ -140,6 +145,7 @@ fn std_members(path: &[String]) -> Vec<CompletionEntry> {
                 .all(|(a, b)| *a == b.as_str())
         {
             out.push(CompletionEntry {
+                import: None,
                 label: segs[depth].to_string(),
                 kind: CompletionKind::Module,
                 detail: Some(segs[..=depth].join(".")),
@@ -149,6 +155,7 @@ fn std_members(path: &[String]) -> Vec<CompletionEntry> {
     if let Some((have, _)) = crate::prelude::library_global_module(path) {
         for name in have {
             out.push(CompletionEntry {
+                import: None,
                 label: name.to_string(),
                 kind: if name.starts_with(|c: char| c.is_uppercase()) {
                     CompletionKind::Struct
@@ -168,6 +175,7 @@ fn std_members(path: &[String]) -> Vec<CompletionEntry> {
         for item in &parsed.program.items {
             if let Some((name, kind, true)) = item_name(item) {
                 out.push(CompletionEntry {
+                    import: None,
                     label: name.to_string(),
                     kind,
                     detail: None,
@@ -212,6 +220,7 @@ fn members(before: &str, rest: &str) -> Vec<CompletionEntry> {
         for (name, fty, is_pub) in &info.fields {
             if own || *is_pub {
                 out.push(CompletionEntry {
+                    import: None,
                     label: name.clone(),
                     kind: CompletionKind::Field,
                     detail: Some(type_display(fty)),
@@ -244,6 +253,7 @@ fn members(before: &str, rest: &str) -> Vec<CompletionEntry> {
             t => format!(" -> {}", type_display(t)),
         };
         CompletionEntry {
+            import: None,
             label: name.clone(),
             kind: CompletionKind::Method,
             detail: Some(format!("fn {name}({}){ret}", params.join(", "))),
@@ -309,6 +319,7 @@ fn members(before: &str, rest: &str) -> Vec<CompletionEntry> {
                     continue;
                 }
                 out.push(CompletionEntry {
+                    import: None,
                     label: m.name.clone(),
                     kind: CompletionKind::Method,
                     detail: signature_text(text, m),
@@ -351,6 +362,7 @@ fn members(before: &str, rest: &str) -> Vec<CompletionEntry> {
     }
     for name in builtin {
         out.push(CompletionEntry {
+            import: None,
             label: name.to_string(),
             kind: CompletionKind::Method,
             detail: None,
@@ -610,6 +622,7 @@ fn names(before: &str, rest: &str, at: usize) -> Vec<CompletionEntry> {
                                 .extend(f.params.iter().map(|p| p.pattern.span));
                             if f.self_param.is_some() {
                                 out.push(CompletionEntry {
+                                    import: None,
                                     label: "self".to_string(),
                                     kind: CompletionKind::Variable,
                                     detail: None,
@@ -637,6 +650,7 @@ fn names(before: &str, rest: &str, at: usize) -> Vec<CompletionEntry> {
             continue;
         }
         out.push(CompletionEntry {
+            import: None,
             label: name,
             kind: CompletionKind::Variable,
             detail: typed.node_types.get(&id).map(|(t, _)| type_display(t)),
@@ -661,6 +675,7 @@ fn names(before: &str, rest: &str, at: usize) -> Vec<CompletionEntry> {
                 _ => None,
             };
             out.push(CompletionEntry {
+                import: None,
                 label: name.to_string(),
                 kind,
                 detail,
@@ -668,6 +683,46 @@ fn names(before: &str, rest: &str, at: usize) -> Vec<CompletionEntry> {
         }
     }
     out
+}
+
+/// The library's types: the prelude's as they are, and each name only an
+/// import brings in with the edit adding that import (B-2026-11-27-55).
+fn library_names(source: &str) -> Vec<CompletionEntry> {
+    let importable = crate::library_imports::importable_names(source);
+    let needs_import = |n: &str| importable.iter().any(|i| i.name == n);
+    let mut out: Vec<CompletionEntry> = crate::prelude::PRELUDE_TYPES
+        .iter()
+        .filter(|n| !needs_import(n))
+        .map(|n| CompletionEntry {
+            label: n.to_string(),
+            kind: library_kind(n),
+            detail: None,
+            import: None,
+        })
+        .collect();
+    out.extend(importable.into_iter().map(|i| CompletionEntry {
+        label: i.name.to_string(),
+        kind: library_kind(i.name),
+        detail: Some(format!("{}.{}", i.module, i.name)),
+        import: i.import,
+    }));
+    out
+}
+
+/// What the library source declares `name` as: a struct unless it says
+/// otherwise.
+fn library_kind(name: &str) -> CompletionKind {
+    for (_, program) in crate::prelude::STDLIB_PROGRAMS.iter() {
+        for item in &program.items {
+            match item {
+                Item::EnumDef(d) if d.name == name => return CompletionKind::Enum,
+                Item::TraitDef(d) if d.name == name => return CompletionKind::Trait,
+                Item::TypeAlias(d) if d.name == name => return CompletionKind::TypeAlias,
+                _ => {}
+            }
+        }
+    }
+    CompletionKind::Struct
 }
 
 /// Which bindings are in scope at `at`: every binding pattern, and the

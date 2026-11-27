@@ -2180,6 +2180,18 @@ pub(super) fn package_check_with_tests(
     lint_overrides: &crate::lints::CliLintOverrides,
     platform: walker::Platform,
 ) -> Result<PackageCheck, String> {
+    package_check_with_tests_and_buffer(root, lint_overrides, platform, None)
+}
+
+/// [`package_check_with_tests`] with one file's text, a module's or a test
+/// companion's, taken from an editor buffer: how the editor checks a
+/// `_test.kara` file.
+pub(super) fn package_check_with_tests_and_buffer(
+    root: &std::path::Path,
+    lint_overrides: &crate::lints::CliLintOverrides,
+    platform: walker::Platform,
+    buffer: Option<(&std::path::Path, &str)>,
+) -> Result<PackageCheck, String> {
     let lint_overrides = &crate::lints::CliLintOverrides {
         core_places: true,
         strict_core: true,
@@ -2190,7 +2202,7 @@ pub(super) fn package_check_with_tests(
         include_tests: true,
     };
     let walked = walker::walk_project(root, walk_opts).map_err(|e| format!("{e}"))?;
-    package_check_of_walk(root, lint_overrides, &walked, None, true)
+    package_check_of_walk(root, lint_overrides, &walked, buffer, true)
 }
 
 /// [`package_check_with_buffer`] past the walk: `walked` is the package's

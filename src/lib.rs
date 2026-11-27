@@ -1656,6 +1656,40 @@ pub struct HoverInfo {
 /// that type-checked even if other parts error — `run_static_checks` collects
 /// typecheck errors but keeps going, so `expr_types` is populated regardless.
 pub fn hover_at(source: &str, byte_offset: usize) -> Option<HoverInfo> {
+    hover_at_here(source, byte_offset).or_else(|| library_import_hover(source, byte_offset))
+}
+
+/// A library type's name in an `import` (`Mutex` in `import
+/// std.sync.Mutex;`), which no expression's type describes: its declaration
+/// header in the library source.
+fn library_import_hover(source: &str, byte_offset: usize) -> Option<HoverInfo> {
+    let at = byte_offset.min(source.len());
+    let line_start = source[..at].rfind('\n').map_or(0, |i| i + 1);
+    if !source[line_start..].trim_start().starts_with("import ") {
+        return None;
+    }
+    let word = ident_around(source, byte_offset)?;
+    let Some(DefSite::Library {
+        text, span_offset, ..
+    }) = library_type_decl(word)
+    else {
+        return None;
+    };
+    let start = text[..span_offset].rfind('\n').map_or(0, |i| i + 1);
+    let end = text[span_offset..]
+        .find(['{', '\n'])
+        .map_or(text.len(), |i| span_offset + i);
+    let word_start = word.as_ptr() as usize - source.as_ptr() as usize;
+    Some(HoverInfo {
+        type_display: text[start..end].trim().to_string(),
+        effect_signature: None,
+        effect_signature_grouped: None,
+        span_offset: word_start,
+        span_length: word.len(),
+    })
+}
+
+fn hover_at_here(source: &str, byte_offset: usize) -> Option<HoverInfo> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let nav = cli::editor_nav::analyze(source)?;
@@ -2028,11 +2062,14 @@ pub fn goto_definition_site_in(
 ) -> Option<DefSite> {
     let nav = cli::editor_nav::analyze_at(source, Some(path));
     match nav {
-        Some(nav) if nav.in_package() => nav
-            .member_at(byte_offset)
-            .and_then(|m| m.def)
-            .or_else(|| nav.resolved_def(byte_offset))
-            .map(def_site_of),
+        Some(nav) if nav.in_package() => {
+            let found = nav
+                .member_at(byte_offset)
+                .and_then(|m| m.def)
+                .or_else(|| nav.resolved_def(byte_offset))
+                .map(def_site_of);
+            library_type_fallback(source, byte_offset, found)
+        }
         // Under the path, so its check is the one just made (B-2026-11-21-90).
         _ => cli::editor_nav::with_path(path, || goto_definition_site(source, byte_offset)),
     }
@@ -2081,6 +2118,91 @@ pub fn signature_help_at_in(
 /// which the typechecker resolves, including a library method's, whose
 /// definition is in the library source (B-2026-11-07-45).
 pub fn goto_definition_site(source: &str, byte_offset: usize) -> Option<DefSite> {
+    let found = goto_definition_site_here(source, byte_offset);
+    library_type_fallback(source, byte_offset, found)
+}
+
+/// A library type's name, `Mutex` in `Mutex.new(1)` or in `import
+/// std.sync.Mutex;`, goes to its declaration in the baked library source,
+/// as rust-analyzer goes through an import to the item: the resolver
+/// answers the import's own line for the one and nothing for the other,
+/// and for a prelude type nothing at all. A name the buffer declares
+/// itself keeps its own definition (B-2026-11-27-56).
+fn library_type_fallback(
+    source: &str,
+    byte_offset: usize,
+    found: Option<DefSite>,
+) -> Option<DefSite> {
+    let on_import = |offset: usize| {
+        let start = source[..offset.min(source.len())]
+            .rfind('\n')
+            .map_or(0, |i| i + 1);
+        source[start..].trim_start().starts_with("import ")
+    };
+    match &found {
+        None => {}
+        Some(DefSite::Buffer(loc)) if on_import(loc.span_offset) => {}
+        Some(_) => return found,
+    }
+    let word = ident_around(source, byte_offset)?;
+    if !word.starts_with(|c: char| c.is_ascii_uppercase()) {
+        return found;
+    }
+    library_type_decl(word).or(found)
+}
+
+/// The identifier around `byte_offset`.
+fn ident_around(source: &str, byte_offset: usize) -> Option<&str> {
+    let is_ident = |c: char| c.is_alphanumeric() || c == '_';
+    let at = byte_offset.min(source.len());
+    let start = source[..at]
+        .rfind(|c: char| !is_ident(c))
+        .map_or(0, |i| i + 1);
+    let end = source[at..]
+        .find(|c: char| !is_ident(c))
+        .map_or(source.len(), |i| at + i);
+    (start < end).then(|| &source[start..end])
+}
+
+/// Where the baked library source declares type or trait `name`: the name
+/// in its `struct` / `enum` / `trait` / `type` header.
+fn library_type_decl(name: &str) -> Option<DefSite> {
+    use crate::ast::Item;
+    for (i, ((file, text), (_, program))) in prelude::STDLIB_SOURCES
+        .iter()
+        .zip(prelude::STDLIB_PROGRAMS.iter())
+        .enumerate()
+    {
+        let base = prelude::stdlib_span_base(i);
+        for item in &program.items {
+            let span = match item {
+                Item::StructDef(d) if d.name == name => d.span,
+                Item::EnumDef(d) if d.name == name => d.span,
+                Item::TraitDef(d) if d.name == name => d.span,
+                Item::TypeAlias(d) if d.name == name => d.span,
+                _ => continue,
+            };
+            let start = span.offset.checked_sub(base)?;
+            let decl = text.get(start..(start + span.length).min(text.len()))?;
+            // The name after the keyword, as a whole word.
+            let at = decl.match_indices(name).find_map(|(k, _)| {
+                let before = decl[..k].chars().next_back();
+                let after = decl[k + name.len()..].chars().next();
+                let edge = |c: Option<char>| !c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+                (edge(before) && edge(after)).then_some(k)
+            })?;
+            return Some(DefSite::Library {
+                file,
+                text,
+                span_offset: start + at,
+                span_length: name.len(),
+            });
+        }
+    }
+    None
+}
+
+fn goto_definition_site_here(source: &str, byte_offset: usize) -> Option<DefSite> {
     if let Some(loc) = resolver_definition(source, byte_offset) {
         return Some(DefSite::Buffer(loc));
     }

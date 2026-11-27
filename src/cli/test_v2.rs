@@ -270,21 +270,7 @@ fn combine(tree: &ProgramTree, tests: &[DiscoveredTest]) -> Result<Amalgam, Stri
                     ));
                 }
                 Item::TestCase(tc) if f.module.test_file.is_some() => {
-                    let name = ident(&mangled_test_function_name(
-                        &module_label(&f.module.path),
-                        tc.name_span.line,
-                        &tc.name,
-                    ));
-                    for a in &tc.attributes {
-                        e.push(blank(&f.text, a.span.offset, a.span.offset + a.span.length));
-                    }
-                    let header = &f.text[tc.span.offset..tc.body.span.offset];
-                    let newlines = "\n".repeat(header.matches('\n').count());
-                    e.push(Edit {
-                        start: tc.span.offset,
-                        end: tc.body.span.offset,
-                        text: format!("fn {name}() {newlines}"),
-                    });
+                    let name = test_case_header_edits(f, tc, &mut e);
                     let texts = tc
                         .attributes
                         .iter()
@@ -662,6 +648,48 @@ pub(super) fn check_package_tests(
         }
     }
     errors
+}
+
+/// The edits that make test case `tc` of `f` a function: its attributes
+/// blanked and its header `fn <mangled name>()`, keeping the header's line
+/// breaks. Returns the function's name.
+fn test_case_header_edits(
+    f: &super::project_v2::SourceFile<'_>,
+    tc: &crate::ast::TestCase,
+    e: &mut Vec<Edit>,
+) -> String {
+    let name = ident(&mangled_test_function_name(
+        &module_label(&f.module.path),
+        tc.name_span.line,
+        &tc.name,
+    ));
+    for a in &tc.attributes {
+        e.push(blank(&f.text, a.span.offset, a.span.offset + a.span.length));
+    }
+    let header = &f.text[tc.span.offset..tc.body.span.offset];
+    let newlines = "\n".repeat(header.matches('\n').count());
+    e.push(Edit {
+        start: tc.span.offset,
+        end: tc.body.span.offset,
+        text: format!("fn {name}() {newlines}"),
+    });
+    name
+}
+
+/// The edits that make every test case of `f` a function, for a check of
+/// the package with its test files merged in that type-checks the cases'
+/// bodies as `karac test` does: the editor's check of a `_test.kara` file.
+pub(super) fn test_cases_as_functions(f: &super::project_v2::SourceFile<'_>) -> Vec<Edit> {
+    let mut e = Vec::new();
+    if f.module.test_file.is_none() {
+        return e;
+    }
+    for item in &f.items {
+        if let Item::TestCase(tc) = item {
+            test_case_header_edits(f, tc, &mut e);
+        }
+    }
+    e
 }
 
 fn has_test_file(dir: &std::path::Path) -> bool {

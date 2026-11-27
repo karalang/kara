@@ -185,15 +185,23 @@ pub fn check_source_at(source: &str, path: &std::path::Path) -> Vec<PlaygroundDi
         lints.apply_manifest_lints(&mf.lints);
     }
     let platform = super::build_cmds::walk_platform_for_target(crate::target::active_target());
-    let Ok(mut pc) =
-        super::build_cmds::package_check_with_buffer(&root, &lints, platform, Some((path, source)))
-    else {
+    // A test companion is checked with the companions merged in, as `karac
+    // test` builds them: the check without them has no file to report in
+    // (B-2026-11-27-54).
+    let tests = path.to_string_lossy().ends_with("_test.kara");
+    let buffer = Some((path, source));
+    let checked = if tests {
+        super::build_cmds::package_check_with_tests_and_buffer(&root, &lints, platform, buffer)
+    } else {
+        super::build_cmds::package_check_with_buffer(&root, &lints, platform, buffer)
+    };
+    let Ok(mut pc) = checked else {
         return check_source(source);
     };
     // A lone `src/main.kara` is checked as a file (B-2026-10-24-39), under
     // its package's `public_effects`: a package that infers its public
     // effects owes no declaration in the editor either.
-    if pc.lone_entry(&root).is_some() {
+    if !tests && pc.lone_entry(&root).is_some() {
         let mut pipeline = Pipeline::new(BUFFER, source).strict_core().with_library();
         if let Some(mf) = &mf {
             pipeline.profile_config.public_effects = mf.profile_config.public_effects;
@@ -207,7 +215,7 @@ pub fn check_source_at(source: &str, path: &std::path::Path) -> Vec<PlaygroundDi
     // file's own offsets (B-2026-11-25-53).
     let mut v2 = Vec::new();
     if pc.refuses_only_by_type() {
-        if let Some(found) = v2_diagnostics_in(&pc, path, source, mf.as_ref(), &lints) {
+        if let Some(found) = v2_diagnostics_in(&pc, path, source, mf.as_ref(), &lints, tests) {
             v2 = found;
             pc.past_the_v2_check();
             pc.type_warnings.clear();
@@ -215,8 +223,28 @@ pub fn check_source_at(source: &str, path: &std::path::Path) -> Vec<PlaygroundDi
     }
     pc.restrict_to_file(path);
     let mut out = pc.editor_diagnostics(path);
+    // The package check's spans are offsets into the package tree, past the
+    // modules before this one (and a test companion's past its sibling's);
+    // their line and byte column are the file's own (B-2026-11-27-54).
+    for d in &mut out {
+        if let Some(at) = offset_of_line_column(source, d.line, d.column) {
+            d.offset = at;
+        }
+    }
     out.extend(v2);
     out
+}
+
+/// The byte offset in `text` of 1-based `line` and byte `column`; `None`
+/// past the text.
+fn offset_of_line_column(text: &str, line: usize, column: usize) -> Option<usize> {
+    let start = match line {
+        0 => return None,
+        1 => 0,
+        _ => text.match_indices('\n').nth(line - 2)?.0 + 1,
+    };
+    let at = start + column.checked_sub(1)?;
+    (at <= text.len()).then_some(at)
 }
 
 /// The v2 check of the package's combined source with `source` as the file
@@ -228,11 +256,24 @@ fn v2_diagnostics_in(
     source: &str,
     mf: Option<&manifest::Manifest>,
     lints: &crate::lints::CliLintOverrides,
+    tests: bool,
 ) -> Option<Vec<PlaygroundDiagnostic>> {
     let files =
-        super::project_v2::source_files_with_buffer(&pc.tree, false, Some((path, source))).ok()?;
-    let a = super::project_v2::amalgamate(&pc.tree, &files, |_, _| Vec::new(), "").ok()?;
-    let entry_name = super::project_v2::shown(&pc.tree.modules[pc.tree.root].file);
+        super::project_v2::source_files_with_buffer(&pc.tree, tests, Some((path, source))).ok()?;
+    // A case's body is checked as `karac test` checks it: as a function.
+    let cases = |_: usize, f: &super::project_v2::SourceFile<'_>| match tests {
+        true => super::test_v2::test_cases_as_functions(f),
+        false => Vec::new(),
+    };
+    let a = super::project_v2::amalgamate(&pc.tree, &files, cases, "").ok()?;
+    // With the companions in, the check is named as the test file, so its
+    // `test` blocks are where `karac test` reads them (as `karac fix` names
+    // it, B-2026-11-27-16).
+    let entry_name = if tests {
+        super::project_v2::shown(path)
+    } else {
+        super::project_v2::shown(&pc.tree.modules[pc.tree.root].file)
+    };
     let pipeline =
         super::run_v2::check_v2_unreported(&entry_name, &a.text, Some(&a), mf, lints.clone());
     let here = |f: &str| match (std::fs::canonicalize(f), std::fs::canonicalize(path)) {

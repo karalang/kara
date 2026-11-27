@@ -236,6 +236,77 @@ pub fn import_point(src: &str) -> (usize, bool) {
     }
 }
 
+/// A library item a program names only through its import, offered by
+/// completion: its name, its module, and the edit adding its import
+/// (`None` when the program imports it already). A name the program
+/// declares itself is left out.
+pub struct ImportableName {
+    pub name: &'static str,
+    pub module: &'static str,
+    /// `(offset, text)`: the import to insert, placed as the E0520 fix-it
+    /// places it.
+    pub import: Option<(usize, String)>,
+}
+
+/// Every [`IMPORT_REQUIRED_MODULES`] item `src` can name.
+pub fn importable_names(src: &str) -> Vec<ImportableName> {
+    let parsed = crate::parse_shared(src);
+    let mut imported: HashSet<(String, String)> = HashSet::new();
+    let mut declared: HashSet<&str> = HashSet::new();
+    for item in &parsed.program.items {
+        match item {
+            Item::Import(imp) => {
+                let module = imp.path.join(".");
+                for ii in &imp.items {
+                    imported.insert((module.clone(), ii.name.clone()));
+                }
+                if imp.is_wildcard {
+                    imported.insert((module, "*".to_string()));
+                }
+            }
+            Item::StructDef(d) => {
+                declared.insert(&d.name);
+            }
+            Item::EnumDef(d) => {
+                declared.insert(&d.name);
+            }
+            Item::TraitDef(d) => {
+                declared.insert(&d.name);
+            }
+            Item::TypeAlias(d) => {
+                declared.insert(&d.name);
+            }
+            _ => {}
+        }
+    }
+    let (at, has_imports) = import_point(src);
+    let mut out = Vec::new();
+    for (module, names) in IMPORT_REQUIRED_MODULES {
+        let all = imported.contains(&(module.to_string(), "*".to_string()));
+        for name in *names {
+            if declared.contains(name) {
+                continue;
+            }
+            let here = all || imported.contains(&(module.to_string(), name.to_string()));
+            let import = (!here).then(|| {
+                let line = format!("import {module}.{{{name}}};");
+                let text = if has_imports {
+                    format!("{line}\n")
+                } else {
+                    format!("{line}\n\n")
+                };
+                (at, text)
+            });
+            out.push(ImportableName {
+                name,
+                module,
+                import,
+            });
+        }
+    }
+    out
+}
+
 /// A module a program's uses lack: the file of the uses (an index into
 /// [`missing_library_imports_in`]'s `files`), the module, its first name,
 /// that name's span, and every name used.
