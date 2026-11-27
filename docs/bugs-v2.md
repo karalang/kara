@@ -58,17 +58,17 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 799 |
-| false-positive | 407 |
+| diagnostics | 801 |
+| false-positive | 408 |
 | missing-feature | 268 |
 | perf | 206 |
 | other | 165 |
-| soundness | 142 |
+| soundness | 145 |
 | miscompile | 113 |
 | run-vs-build | 80 |
 | crash | 72 |
 | codegen-gap | 49 |
-| use-after-free | 13 |
+| use-after-free | 14 |
 | leak | 5 |
 | double-free | 2 |
 
@@ -76,8 +76,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 977 |
-| mir | 353 |
+| typecheck | 984 |
+| mir | 355 |
 | mir-llvm | 341 |
 | cli | 326 |
 | parser | 168 |
@@ -114,7 +114,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-19-39 | 2026-11-19 | typecheck | low | Tracker for the next minor release: a plain enum that holds itself inline through `Option`, `Result` or `Array` (`enum L { Nil, Cons(i64, Option[L]) }`) becomes a compile error; in 0.8.x it is a `deprecated` warning whose fix is `shared enum` (design.md § Recursive enums require `shared enum`) | — |
 | B-2026-11-26-6 | 2026-11-26 | typecheck | low | `v.push([1, 2].to_vec())` with `v: Vec[Vec[i32]]` is refused as a `Vec[i64]`, with no fix, though the same literal through `.to_vec()` takes `i32` from a `let` annotation or a function's parameter | — |
 | B-2026-11-26-9 | 2026-11-26 | typecheck | low | `v.push(((0..3).map(|_| 1).collect(), 5))` with `v: Vec[(Vec[i32], i32)]` is refused, "expected '(Vec[i32], i32)', found '(C, i64)'", with no fix: the element type does not reach a `collect` inside a tuple argument, though it reaches a bare `v.push(it.collect())` and a `let p: (Vec[i32], i32) = (it.collect(), 5)` | — |
-| B-2026-11-26-79 | 2026-11-26 | mir-llvm | low | A hand-written element shift down a slice (`while i > 0 { p[i] = p[i - 1]; i -= 1; }`) compiles to a scalar copy with a bounds check per element, where rustc and clang turn the same loop into one `memmove` | — |
 | B-2026-11-27-2 | 2026-11-27 | typecheck | medium | `f([][..])`, with `f` taking a `Slice[T]` of a concrete `T`, is refused: a range of an empty list literal does not take the slot's element type (E0516 "a type that failed to check is not lowered yet" at 83c1fcea2c; at e723cc81b8 E_EMPTY_PREFIX_LITERAL_NEEDS_ANNOTATION, which says nothing gives the type), where a bare `[]` into a `Vec[T]` slot passes | — |
 | B-2026-11-27-4 | 2026-11-27 | typecheck | low | `a.min(b)` / `a.max(b)` on a tuple is refused E0236 "no method 'min' on type '(i64, i64)'" with no hint and no fix, where a tuple compares and takes the free `min(a, b)` / `max(a, b)` | — |
 | B-2026-11-27-6 | 2026-11-27 | typecheck | medium | a `fold` closure with its accumulator pattern annotated, `|(prev, total): (i64, i64), x| (x, total + x.max(prev))` over `nums.iter()`, is refused "expected 'i64', found 'ref i64'" at the tuple's `x`, where the same closure unannotated and `let p: (i64, i64) = (x, 1)` pass | — |
@@ -123,6 +122,13 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-27-22 | 2026-11-27 | ownership | medium | A closure returned over a local closure that captures an owned value (`fn mk(pre: own String) -> Fn(String) -> String { let c = || pre.clone(); |s| f"{c()}{s}" }`, or a Copy local `let n = 1; let c = || n + 1; || c()`) is refused E0509 "the result borrows `pre`, which this function owns": the local closure captures by reference though it moves into the escaping one | — |
 | B-2026-11-27-24 | 2026-11-27 | typecheck | high | A closure that moves a captured FIELD or tuple path out (`|| take(o.a)`, `|| take(t.0)`, `|| o.a`) is typed as a repeatable `Fn`, not `OnceFn`, so `karac check` accepts it in a `Vec[Fn() -> i64]`; called twice there, the compiled program reads freed memory (ASan heap-use-after-free), where moving the whole capture (`|| take(s)`) is refused with E0235 | — |
 | B-2026-11-27-23 | 2026-11-27 | runtime | low | Over HTTP/2 the HTTP client refused any response whose header list was over 16 KiB (hyper's default SETTINGS_MAX_HEADER_LIST_SIZE), with the unnamed Err 'request failed: http2 error', where the same response over HTTP/1.1 is read up to 408 KiB; and it had no field-count limit there, where HTTP/1.1 refuses a 101st field | — |
+| B-2026-11-27-46 | 2026-11-27 | typecheck+mir | high | A task spawned from inside another task's closure captures that task's local by `ref`, not by move (core-semantics §9.5): returning the inner handle unjoined reads the freed local (ASan heap-use-after-free), and reading the local after the inner spawn is accepted | — |
+| B-2026-11-27-47 | 2026-11-27 | typecheck | medium | A closure assigned to an outer binding that captures a `Copy` local of an inner block (the place dies first, core-semantics §9.1) leaves the place writable and usable: `f = || tally * 10; tally = 2;` is accepted and `f()` reads the stale copy | — |
+| B-2026-11-27-48 | 2026-11-27 | typecheck+mir | medium | A non-`Copy` place moved into an escaping closure (assigned to an outer binding, or sent through a channel) and used afterwards passes `karac check`; run and build then stop with the internal `error[mir]: move check main: bb11[term]: use of _4.0, which may have been moved`, no E0500 and no span | — |
+| B-2026-11-27-49 | 2026-11-27 | typecheck | medium | Reassigning a `ref`/`mut ref` local `r` while a borrow through it (`let x = ref r.f`) is live is refused E0516 "cannot assign `r` while `ref x` borrows `r.f`", where core-semantics §5.3 allows it (only the pattern-binding cursor form is accepted) | — |
+| B-2026-11-27-50 | 2026-11-27 | typecheck | low | A `mut ref` binding declared without `let mut` can be rebound: `let up = mut ref a; up = mut ref b;` is accepted, where core-semantics §5.1 says only `let mut` lets it be rebound | — |
+| B-2026-11-27-51 | 2026-11-27 | typecheck | low | A function returning a view with no parameter it could borrow from is accepted (`fn mk(n: i64) -> Vec[ref String] { Vec.new() }`), where the core-semantics §5.4 signature rule makes it an error | — |
+| B-2026-11-27-52 | 2026-11-27 | typecheck | low | E0509 for a generic instance that stores a view where a view may not go is reported at the generic body's line only; core-semantics §5.8 puts it at the instantiation site with a note at the body | — |
 
 ### Relocated
 
@@ -2388,6 +2394,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-76 | ownership | medium | A `match` whose moving arm reassigns the scrutinee, beside an arm that leaves it untouched, makes a later use E0500 "may have been moved", though the… | b1c327f77c |
 | B-2026-11-26-77 | typecheck+mir | low | Three programs printed an internal E0516 instead of a user diagnostic: a `ref` binding of a `Vec[Vector[..]]` element as a receiver and a let-bound c… | 41639e5e46 |
 | B-2026-11-26-78 | typecheck | low | `let w: (Vec[i32], i64) = ([1, 2].to_vec(), 3)` is refused as a `(Vec[i64], i64)`, with advice to annotate the binding that already is and no fix, th… | a648c7a471 |
+| B-2026-11-26-79 | mir-llvm | low | A hand-written element shift down a slice (`while i > 0 { p[i] = p[i - 1]; i -= 1; }`) compiles to a scalar copy with a bounds check per element, whe… | a13f82faa3 |
 | B-2026-11-26-80 | ownership+cli | low | E0516 on a temporary argument that a view result borrows (`let f = make("abc".to_string(), 1);` with `make` returning a closure over its bare paramet… | cab05d25c8 |
 | B-2026-11-26-81 | typecheck | low | After "no method 'fold' on type 'Slice'" (`s.bytes().fold(0, \|c, b\| c * 31 + b as i64)`, the `.iter()` left out), the closure's parameter stays an op… | 3dffe7197a |
 | B-2026-11-26-82 | typecheck | low | The fix for `a + b.as_str()` (a `String` plus a `Str`, as Rust writes it) appends `.to_string()`, giving `a + b.as_str().to_string()`, a view copied… | 64a1cb858c |
