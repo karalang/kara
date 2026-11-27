@@ -44,6 +44,7 @@ REFUSALS = {400, 408, 413, 414, 431, 501, 505}
 
 SERVER = r'''import std.process.{exit};
 import std.encoding.{hex_encode};
+import std.net.{Request, Server};
 
 struct Response { status: i64, body: String, headers: Vec[(String, String)] }
 
@@ -94,6 +95,10 @@ def reference(data: bytes):
                 conn = h11.Connection(h11.SERVER)
                 conn.receive_data(rest)
                 continue
+            # A lone CR may be the start of an empty line's CRLF; h11 refuses
+            # it as an illegal request line before the LF can come.
+            if cur is None and rest == b"\r":
+                return reqs, "partial"
             return reqs, ("refuse", e.error_status_hint)
         if ev is h11.NEED_DATA:
             if cur is None and not conn.trailing_data[0]:
@@ -341,6 +346,13 @@ def fixed_cases():
     c.append(("pipelined then garbage", req(target="/1") + b"NOT HTTP\r\n\r\n"))
     c.append(("expect continue", req("POST", headers=(H, ("Expect", "100-continue"), ("Content-Length", "2")), body=b"hi")))
     c.append(("leading CRLF", b"\r\n" + req()))
+    c.append(("leading bare LFs", b"\n\n" + req()))
+    c.append(("leading space line", b" \r\n" + req()))
+    c.append(("leading tab line", b"\t\r\n" + req()))
+    c.append(("trailing lone CR", req() + b"\r"))
+    c.append(("leading CR space line", b"\r \n" + req()))
+    c.append(("chunked colon ext", req("POST", headers=(H, ("Transfer-Encoding", "chunked")),
+                                       body=chunked([b"ab"], ext=b";nam: e=value"))))
     c.append(("long header line", req(headers=(H, ("X", "v" * 70000)))))
     c.append(("long target", req(target="/" + "a" * 70000)))
     return c
@@ -370,6 +382,20 @@ def mutate(rng, data: bytes) -> bytes:
 
 # --- the verdict ----------------------------------------------------------
 
+TCHAR = rb"[!#$%&'*+.^_`|~0-9A-Za-z-]"
+CHUNK_EXT = re.compile(rb"(?:[ \t]*;[ \t]*" + TCHAR + rb"+(?:[ \t]*=[ \t]*(?:" + TCHAR
+                       + rb'+|"(?:[\t !#-\[\]-~\x80-\xff]|\\[\t -~\x80-\xff])*"))?)*')
+
+
+def bad_chunk_ext(body: bytes) -> bool:
+    """Whether a chunk-size line in `body` has extensions outside RFC 9112
+    §7.1.1: `chunk-ext = *( BWS ";" BWS name [ BWS "=" BWS value ] )`."""
+    for m in re.finditer(rb"(?m)^([0-9a-fA-F]+)([^\r\n]*)\r?$", body):
+        if m.group(2) and not CHUNK_EXT.fullmatch(m.group(2)):
+            return True
+    return False
+
+
 def allowed(label, data, ref, got_status):
     """Why a difference is a choice the page or RFC 9112 leaves the server,
     or None. `ref` is h11's verdict, `got_status` the server's status for
@@ -383,9 +409,10 @@ def allowed(label, data, ref, got_status):
         if re.search(rb"(?i)\r\ncontent-length:.*\r\ntransfer-encoding:|\r\ntransfer-encoding:.*\r\ncontent-length:",
                      head, re.S):
             return "Content-Length with Transfer-Encoding refused (io.md; RFC 9112 §6.3 allows)"
-        if b"chunked" in head.lower() and re.search(rb"\r\n\r\n[0-9a-fA-F]+;(?![!#$%&'*+.^_`|~0-9A-Za-z-])",
-                                                   data):
-            return "a chunk extension with no name refused (RFC 9112 §7.1.1 grammar)"
+        if b"chunked" in head.lower() and bad_chunk_ext(data.split(b"\r\n\r\n", 1)[-1]):
+            return "a chunk extension outside RFC 9112 §7.1.1's grammar refused (`;=`, `;nam: e=value`)"
+        if re.match(rb"(?:\r?\n)*[ \t\r]+\r?\n", data):
+            return "a line of whitespace before the request line refused (io.md; RFC 9112 §2.2 skips only empty lines)"
         if re.search(rb"\n[ \t]", head.split(b"\n", 1)[-1] if b"\n" in head else b""):
             return "obs-fold refused with 400 (RFC 9112 §5.2: reject or unfold)"
         if got_status == 505:

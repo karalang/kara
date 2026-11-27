@@ -1,6 +1,6 @@
 # concurrency.md sentence map
 
-Each normative sentence of the page, split into units, and the cell or script that checks it. Cells run with `python3 conformance/cases.py <this dir>` on the interpreter and the compiled build. conformance/channel_model.py is the channel model check.
+Each normative sentence of the page, split into units, and the cell or script that checks it. Cells run with `python3 conformance/cases.py <this dir>` on the interpreter and the compiled build. conformance/channel_model.py is the channel model check. conformance/atomics_model.py checks § Atomics' operations against a model (every `T`, operands at the limits), and conformance/select_model.py checks `select`, `try_send`, `try_recv` and closing against a model (con.41 to con.47 included).
 
 | # | Section | Sentence | Cell(s) |
 |---|---|---|---|

@@ -1,6 +1,6 @@
 # pool.md sentence map
 
-Each normative sentence of the page, split into units, and the cell or script that checks it. Cells run with `python3 conformance/cases.py <this dir>` on the interpreter and the compiled build.
+Each normative sentence of the page, split into units, and the cell or script that checks it. Cells run with `python3 conformance/cases.py <this dir>` on the interpreter and the compiled build. conformance/pool_model.py checks the page's acquire, release, close and drop rules against a model, over random single-task scripts.
 
 | # | Section | Sentence | Cell(s) |
 |---|---|---|---|

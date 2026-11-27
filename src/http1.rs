@@ -483,10 +483,14 @@ impl Parser {
                         );
                     }
                     Some(Err(e)) => return Parse::Bad(400, e),
+                    // Only an empty line is skipped: a line of spaces or tabs
+                    // (or a bare CR) is not one, and a peer that reads it as
+                    // a malformed request line frames the connection
+                    // differently, a request-smuggling shape (review-thread
+                    // ruling 2026-11-27, B-2026-11-27-8).
+                    Some(Ok("")) => {}
                     Some(Ok(l)) if l.trim().is_empty() => {
-                        if l.bytes().any(|b| !b.is_ascii_whitespace()) {
-                            self.started = true;
-                        }
+                        return Parse::Bad(400, "a request line of whitespace only");
                     }
                     Some(Ok(l)) => {
                         self.started = true;
@@ -1189,6 +1193,20 @@ mod tests {
             refused(b"GET / HTTP/1.1\r\nHost: h\r\nX: a\x7f\r\n\r\n"),
             400
         );
+    }
+
+    /// Empty lines before a request line are skipped, a line of whitespace
+    /// is refused (review-thread ruling 2026-11-27, B-2026-11-27-8).
+    #[test]
+    fn only_empty_lines_are_skipped_before_a_request_line() {
+        let get = b"GET / HTTP/1.1\r\nHost: h\r\n\r\n";
+        let with = |lead: &[u8]| [lead, &get[..]].concat();
+        assert_eq!(refused(&with(b"\r\n")), 0);
+        assert_eq!(refused(&with(b"\r\n\r\n\n")), 0);
+        assert_eq!(refused(&with(b" \r\n")), 400);
+        assert_eq!(refused(&with(b"\t\r\n")), 400);
+        assert_eq!(refused(&with(b"\r \n")), 400);
+        assert_eq!(refused(&with(b"\r\n  \r\n")), 400);
     }
 
     /// The 2026-11-21 conformance pass's cells (B-2026-11-21-22): a control

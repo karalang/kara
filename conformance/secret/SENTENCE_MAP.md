@@ -1,6 +1,6 @@
 # secret.md sentence map
 
-Each normative sentence of the page, split into units, and the cell or script that checks it. Cells run with `python3 conformance/cases.py <this dir>` on the interpreter and the compiled build. conformance/ct_timing.py also measures Secret.ct_eq.
+Each normative sentence of the page, split into units, and the cell or script that checks it. Cells run with `python3 conformance/cases.py <this dir>` on the interpreter and the compiled build. conformance/secret_model.py checks `ct_eq`, `expose` and `expose_mut` against Python's `==` on random pairs; conformance/ct_timing.py measures `ct_eq`'s timing. conformance/ct_timing.py also measures Secret.ct_eq.
 
 | # | Section | Sentence | Cell(s) |
 |---|---|---|---|
