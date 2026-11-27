@@ -1656,6 +1656,42 @@ pub fn library_method_self_param(ty: &str, method: &str) -> Option<crate::ast::S
     MODES.get(&format!("{ty}.{method}")).cloned()
 }
 
+/// Whether library method `ty.method` takes `own self` as its source
+/// declares it (`Option.unwrap`, `Vec.into_iter`), or `None` for a name no
+/// library impl declares with a receiver. The capture walk reads it to see
+/// that a closure calling one on a capture moves the capture
+/// (B-2026-11-27-24).
+pub fn library_method_self_is_own(ty: &str, method: &str) -> Option<bool> {
+    static OWN: LazyLock<HashMap<String, bool>> = LazyLock::new(|| {
+        let mut out = HashMap::new();
+        let programs = STDLIB_PROGRAMS
+            .iter()
+            .map(|(_, p)| p)
+            .chain(GATED_STDLIB_PROGRAMS.iter().map(|(_, p)| *p));
+        for program in programs {
+            for item in &program.items {
+                let Item::ImplBlock(imp) = item else { continue };
+                let TypeKind::Path(path) = &imp.target_type.kind else {
+                    continue;
+                };
+                let Some(head) = path.segments.last() else {
+                    continue;
+                };
+                for it in &imp.items {
+                    if let crate::ast::ImplItem::Method(m) = it {
+                        if m.self_param.is_some() {
+                            out.entry(format!("{head}.{}", m.name))
+                                .or_insert(m.self_is_own);
+                        }
+                    }
+                }
+            }
+        }
+        out
+    });
+    OWN.get(&format!("{ty}.{method}")).copied()
+}
+
 /// Where the spans of the [`GATED_STDLIB_SOURCES`] entry at `index` start: a
 /// quarter of the address range up, with room for a 16 MiB module each.
 pub fn gated_span_base(index: usize) -> usize {

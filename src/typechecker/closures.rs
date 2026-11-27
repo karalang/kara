@@ -348,6 +348,139 @@ impl<'a> super::TypeChecker<'a> {
         ty.is_some_and(|t| crate::core_escape::eager_receiver_ty(&t))
     }
 
+    /// The `OnceReason` for a consuming use of the field path `expr`
+    /// (`o.a.b`, `t.0`) when its root is an owned capture and the path's
+    /// value is not `Copy`. A path through a `ref` capture, or one whose
+    /// value is `Copy` or a `shared` handle, moves nothing out of the
+    /// closure's environment.
+    fn consumed_capture_path(
+        &self,
+        expr: &Expr,
+        outer: &HashMap<String, Type>,
+        shadows: &[HashSet<String>],
+    ) -> Option<OnceReason> {
+        let mut parts: Vec<String> = Vec::new();
+        let mut root = expr;
+        loop {
+            match &root.kind {
+                ExprKind::FieldAccess { object, field } => {
+                    parts.push(field.clone());
+                    root = object;
+                }
+                ExprKind::TupleIndex { object, index } => {
+                    parts.push(index.to_string());
+                    root = object;
+                }
+                _ => break,
+            }
+        }
+        let name = match &root.kind {
+            ExprKind::Identifier(n) => n.as_str(),
+            ExprKind::SelfValue => "self",
+            _ => return None,
+        };
+        if Self::name_is_shadowed(name, shadows) {
+            return None;
+        }
+        let root_ty = outer.get(name)?;
+        let root_ty = resolve_type_var_top(root_ty, &self.env.substitutions);
+        if matches!(root_ty, Type::Ref(_) | Type::MutRef(_))
+            || self.copy_is_only_an_rc_retain(&root_ty)
+        {
+            return None;
+        }
+        let ty = self
+            .node_types
+            .get(&expr.id)
+            .map(|(t, _)| resolve_type_var_top(t, &self.env.substitutions))?;
+        if matches!(ty, Type::TypeVar(_))
+            || self.is_copy_type_during_check(&ty)
+            || self.copy_is_only_an_rc_retain(&ty)
+        {
+            return None;
+        }
+        parts.push(name.to_string());
+        parts.reverse();
+        Some(OnceReason {
+            consumed_binding: parts.join("."),
+            consumed_span: expr.span,
+            into_returned: false,
+        })
+    }
+
+    /// Whether `for _ in iterable` borrows `iterable`: a place (a name or a
+    /// field path) whose type is a standard collection, which a `for`
+    /// walks through `Iterable` without consuming it.
+    fn for_iterable_borrows(&self, iterable: &Expr, outer: &HashMap<String, Type>) -> bool {
+        let ty = match &iterable.kind {
+            ExprKind::Identifier(n) => outer
+                .get(n.as_str())
+                .cloned()
+                .or_else(|| self.node_types.get(&iterable.id).map(|(t, _)| t.clone())),
+            ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. } => {
+                self.node_types.get(&iterable.id).map(|(t, _)| t.clone())
+            }
+            _ => None,
+        };
+        let Some(ty) = ty else {
+            return false;
+        };
+        let mut ty = resolve_type_var_top(&ty, &self.env.substitutions);
+        while let Type::Ref(inner) | Type::MutRef(inner) = ty {
+            ty = *inner;
+        }
+        match &ty {
+            Type::Array { .. } => true,
+            Type::Named { name, .. } => matches!(
+                name.as_str(),
+                "Vec" | "VecDeque" | "Map" | "SortedMap" | "Set" | "SortedSet" | "Array"
+            ),
+            _ => false,
+        }
+    }
+
+    /// Whether `object.method(..)` takes `own self`: a method of the
+    /// program's own impls, or of the library's, declared with an `own self`
+    /// receiver. A receiver whose type is unknown answers false.
+    fn method_takes_own_self(
+        &self,
+        object: &Expr,
+        method: &str,
+        outer: &HashMap<String, Type>,
+    ) -> bool {
+        let ty = match &object.kind {
+            ExprKind::Identifier(n) => outer.get(n.as_str()).cloned(),
+            ExprKind::SelfValue => outer.get("self").cloned(),
+            _ => None,
+        }
+        .or_else(|| self.node_types.get(&object.id).map(|(t, _)| t.clone()));
+        let Some(ty) = ty else {
+            return false;
+        };
+        let ty = resolve_type_var_top(&ty, &self.env.substitutions);
+        let name = match &ty {
+            Type::Named { name, .. } | Type::Shared(name) => name.as_str(),
+            _ => return false,
+        };
+        for item in &self.program.items {
+            let Item::ImplBlock(imp) = item else { continue };
+            let TypeKind::Path(p) = &imp.target_type.kind else {
+                continue;
+            };
+            if p.segments.last().map(String::as_str) != Some(name) {
+                continue;
+            }
+            for it in &imp.items {
+                if let ImplItem::Method(m) = it {
+                    if m.name == method && m.self_param.is_some() {
+                        return m.self_is_own;
+                    }
+                }
+            }
+        }
+        crate::prelude::library_method_self_is_own(name, method).unwrap_or(false)
+    }
+
     fn name_is_shadowed(name: &str, shadow_stack: &[HashSet<String>]) -> bool {
         shadow_stack.iter().any(|s| s.contains(name))
     }
@@ -656,7 +789,15 @@ impl<'a> super::TypeChecker<'a> {
                 args,
                 ..
             } => {
-                self.walk_capture_consume(object, CaptureWalkMode::Reading, outer, shadows, reason);
+                // An `own self` method (`w.eat()`, `o.opt.unwrap()`,
+                // `xs.into_iter()`) moves its receiver: a capture there is
+                // consumed (B-2026-11-27-24).
+                let recv_mode = if self.method_takes_own_self(object, method, outer) {
+                    CaptureWalkMode::Consuming
+                } else {
+                    CaptureWalkMode::Reading
+                };
+                self.walk_capture_consume(object, recv_mode, outer, shadows, reason);
                 // B-2026-08-15-22: the `Call` arm above decides an argument's
                 // mode from the CALLEE'S SIGNATURE; this one had no signature to
                 // consult and called every non-`mut` argument Consuming. For a
@@ -705,6 +846,16 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
             ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                // Each field path of a capture is its own capture (core §9.3),
+                // so moving one out (`take(o.a)`, `|| t.0`) makes the closure
+                // once-callable as moving the whole binding does
+                // (B-2026-11-27-24).
+                if mode == CaptureWalkMode::Consuming {
+                    if let Some(r) = self.consumed_capture_path(expr, outer, shadows) {
+                        *reason = Some(r);
+                        return;
+                    }
+                }
                 self.walk_capture_consume(object, CaptureWalkMode::Reading, outer, shadows, reason);
             }
             ExprKind::Index { object, index } => {
@@ -834,13 +985,15 @@ impl<'a> super::TypeChecker<'a> {
                 if let Some(n) = par.as_ref().and_then(|p| p.limit.as_ref()) {
                     self.walk_capture_consume(n, CaptureWalkMode::Reading, outer, shadows, reason);
                 }
-                self.walk_capture_consume(
-                    iterable,
-                    CaptureWalkMode::Consuming,
-                    outer,
-                    shadows,
-                    reason,
-                );
+                // A `for` over a collection borrows it through `Iterable`;
+                // only an `Iterator` is consumed (design.md § for,
+                // B-2026-11-27-24).
+                let iterable_mode = if self.for_iterable_borrows(iterable, outer) {
+                    CaptureWalkMode::Reading
+                } else {
+                    CaptureWalkMode::Consuming
+                };
+                self.walk_capture_consume(iterable, iterable_mode, outer, shadows, reason);
                 let mut arm_scope: HashSet<String> = HashSet::new();
                 for n in pattern.binding_names() {
                     arm_scope.insert(n);
