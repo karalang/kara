@@ -1,0 +1,9 @@
+// cs.994: plain data computed from R leaves freely.
+trait G { fn name(self) -> String; }
+effect resource Db: G;
+struct P { }
+impl G for P { fn name(self) -> String { "mem".to_string() } }
+fn main() {
+    let s = with_provider[Db](P {}, || Db.name() + "!");
+    println(s);
+}

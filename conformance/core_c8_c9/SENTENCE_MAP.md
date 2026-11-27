@@ -17,6 +17,9 @@ cell's `.out`/`.err`/`.exit` matched (a `.refused` cell matched its diagnostic).
 Rows with no cell are covered by the existing pins `CORE_SENTENCE_MAP.md` names, or
 make no runnable claim (rationale, history, scheduling).
 
+The directory holds 68 cells. The commit that added it (285a9875fc) says 71
+in its message; that count is wrong.
+
 ## Findings
 
 - **A. §11.8 cs.843 vs the effect checker.** The sentence says `send`, `recv`, a
@@ -24,13 +27,13 @@ make no runnable claim (rationale, history, scheduling).
   `blocks` for them (only `sleep` carries both), and `docs/library/concurrency.md`
   declares `blocks`. So cs.851's promise is unwritable: a public
   `fn take(rx) -> Option[i64] with suspends receives(rx) { rx.recv() }` is refused
-  E0400 "performs blocks" (`t_suspends_alone_admits_recv`, which PREDICTS the row).
+  E0400 "performs blocks" (`t_suspends_alone_admits_recv`, which PREDICTS the row). Review ruled the
+  spec wins: the library moves to `suspends` (Thread B).
 - **B. A `Never`-typed block in arithmetic.** `let a = { return 7; }; a + 1` is
   refused E0208 "type 'Never' does not implement trait Add" (met writing the
-  §11.7 cells; low severity, row filed).
-- **C. §11.1 cs.769 is stale.** "v1 has no automatic parallelisation of
-  statements; it returns in M4": statement auto-par exists. Text fix, reported to
-  the review thread.
+  §11.7 cells). Fixed under B-2026-11-27-11: a `Never` operand coerces.
+- **C. §11.1 cs.769 was stale** ("v1 has no automatic parallelisation of
+  statements"); review rewrote it at 59758d2a86.
 
 ## Map
 
@@ -67,7 +70,7 @@ make no runnable claim (rationale, history, scheduling).
 | cs.766 | §11.1 | It may take a limit on the number of branches in flight (`design.md`). | — | existing pin (CORE_SENTENCE_MAP.md) |
 | cs.767 | §11.1 | - `TaskGroup` runs tasks that join when the group drops (§9.5). | `t_taskgroup_joins_on_drop` | interp ✓ jit ✓ build ✓ asan ✓ tsan ✓ |
 | cs.768 | §11.1 | - There is no free `spawn`. | `t_no_free_spawn` | interp ✓ jit ✓ build ✓ asan ✓ tsan ✓ |
-| cs.769 | §11.1 | - v1 has no automatic parallelisation of statements; it returns in M4 under §11.5's rule (redesign amendment, 2026-10-07). | — | stale: statement auto-par exists (reported to review) |
+| cs.769 | §11.1 | - v1 has no automatic parallelisation of statements; it returns in M4 under §11.5's rule (redesign amendment, 2026-10-07). | — | was stale; rewritten at 59758d2a86 (old text shown) |
 | cs.770 | §11.1 | - **Progress between tasks.** "Concurrently" means interleaved, not necessarily in parallel. | `t_progress_at_suspension_one_worker` | interp ✓ jit ✓ build ✓ asan ✓ tsan ✓ |
 | cs.771 | §11.1 | A task is guaranteed to let its siblings run only at a suspension point: a channel `send` or `recv`, a `Mutex` lock that waits, a join, I… | `t_progress_at_suspension_one_worker` | interp ✓ jit ✓ build ✓ asan ✓ tsan ✓ |
 | cs.772 | §11.1 | A target may also run tasks on separate workers, and native does by default, one per core (`KARAC_THREADS=1` runs one; wasm has one); no … | — | not a runnable claim |

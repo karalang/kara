@@ -1,0 +1,7 @@
+// cs.950: storing a value whose effects exceed the declared type's is an
+// error: this closure prints, and the slot admits only reads(Cfg).
+effect resource Cfg;
+fn run(f: escaping Fn(i64) -> i64 with reads(Cfg), x: i64) -> i64 { f(x) }
+fn main() {
+    println(f"{run(|x| { println("hi"); x }, 1)}");
+}

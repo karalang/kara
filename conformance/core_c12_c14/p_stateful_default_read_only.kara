@@ -1,0 +1,14 @@
+// cs.1062 / cs.1064: a default with fields allows only `self` methods
+// outside an override; under one, `mut ref self` methods are fine.
+trait Counter { fn next(mut ref self) -> i64; fn peek(self) -> i64; }
+struct Seq { n: i64 }
+impl Counter for Seq {
+    fn next(mut ref self) -> i64 { self.n = self.n + 1; self.n }
+    fn peek(self) -> i64 { self.n }
+}
+effect resource Ids: Counter = Seq { n: 5 };
+fn main() {
+    let p = Ids.peek();
+    let v = with_provider[Ids](Seq { n: 0 }, || Ids.next() + Ids.next());
+    println(f"{p} {v}");
+}

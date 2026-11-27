@@ -1,0 +1,12 @@
+// cs.979-cs.981: a function that reaches R only through callees takes the
+// hidden provider and passes it on; writes through it are seen afterwards.
+trait C { fn bump(mut ref self) -> i64; }
+effect resource Ctr: C;
+struct P { n: i64 }
+impl C for P { fn bump(mut ref self) -> i64 { self.n += 1; self.n } }
+fn inner() -> i64 { Ctr.bump() }
+fn middle() -> i64 { inner() + inner() }
+fn main() {
+    let v = with_provider[Ctr](P { n: 0 }, || middle() * 10 + inner());
+    println(f"{v}");
+}

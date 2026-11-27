@@ -1,0 +1,13 @@
+// cs.977 / cs.1021: bare `self` methods are reads(R); two readers share a
+// `ref P` (P is CrossTask) and run apart.
+trait G { fn get(self, k: i64) -> i64; }
+effect resource Db: G;
+struct P { n: i64 }
+impl G for P { fn get(self, k: i64) -> i64 { self.n + k } }
+fn main() {
+    let v = with_provider[Db](P { n: 10 }, || {
+        let (a, b) = par { Db.get(1), Db.get(2) };
+        a + b
+    });
+    println(f"{v}");
+}

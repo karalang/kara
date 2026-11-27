@@ -1,0 +1,10 @@
+// cs.1047: under an override of Network, UdpSocket (like TLS, WebSocket and
+// the Server.serve family) is refused by the check (E_PROVIDER_UNSUPPORTED).
+struct Fake { }
+impl NetworkProvider for Fake { }
+fn main() {
+    with_provider[Network](Fake {}, || {
+        let s = UdpSocket.bind("127.0.0.1:0");
+        println(f"{s.is_ok()}");
+    });
+}

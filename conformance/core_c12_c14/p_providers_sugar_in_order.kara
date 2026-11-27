@@ -1,0 +1,12 @@
+// cs.1014: `providers { R1 => e1, R2 => e2 } in { body }` evaluates e1, e2
+// in order, then nests the with_provider calls.
+trait G { fn get(self) -> i64; }
+effect resource A: G;
+effect resource B: G;
+struct P { n: i64 }
+impl G for P { fn get(self) -> i64 { self.n } }
+fn mk(n: i64) -> P { println(f"make {n}"); P { n: n } }
+fn main() {
+    let v = providers { A => mk(1), B => mk(2) } in { A.get() * 10 + B.get() };
+    println(f"{v}");
+}

@@ -1,0 +1,13 @@
+// §12 default 3: a drop's effects are its drop glue's, charged where §7
+// places the drop. `Loud`'s drop prints, so two branches that each drop one
+// both write Stdout and conflict.
+struct Loud { n: i64 }
+impl Drop for Loud { fn drop(mut ref self) { println(f"drop {self.n}"); } }
+fn make(n: i64) -> i64 {
+    let l = Loud { n: n };
+    l.n
+}
+fn main() {
+    let (a, b) = par { make(1), make(2) };
+    println(f"{a + b}");
+}

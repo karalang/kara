@@ -1,0 +1,30 @@
+// cs.1034 / cs.1035 / cs.1040: a file opened under an override belongs to
+// its provider; once the with_provider call has returned every operation on
+// it is Err(ProviderUnavailable), and its drop does nothing. On a fake's
+// file, seek returns Err(Unsupported).
+struct Fake { reads: i64 }
+impl FileSystemProvider for Fake {
+    fn open(mut ref self, path: Str, opts: ref OpenOptions) -> Result[i64, IoError] { Ok(7) }
+    fn read_handle(mut ref self, h: i64, buf: mut Slice[u8]) -> Result[i64, IoError] {
+        self.reads = self.reads + 1;
+        buf[0] = 65;
+        Ok(1)
+    }
+    fn close(mut ref self, h: i64) { println(f"close {h}"); }
+}
+fn first(f: ref File) -> String {
+    let mut b = [0u8; 4];
+    match f.read(mut b[..]) {
+        Ok(n) => f"ok {n} {b[0]}",
+        Err(e) => f"err {e}",
+    }
+}
+fn main() {
+    let f = with_provider[FileSystem](Fake { reads: 0 }, || {
+        let f = File.open("x").unwrap();
+        println(first(f));
+        println(f"seek {f.seek(SeekFrom.Start, 0).is_err()}");
+        f
+    });
+    println(first(f));
+}

@@ -1,0 +1,9 @@
+// cs.949: the same generic over a printing impl conflicts.
+trait Show { fn show(self) -> i64; }
+struct Loud { n: i64 }
+impl Show for Loud { fn show(self) -> i64 { println("loud"); self.n } }
+fn show_it[T: Show](t: T) -> i64 { t.show() }
+fn main() {
+    let (a, b) = par { show_it(Loud { n: 1 }), show_it(Loud { n: 2 }) };
+    println(f"{a + b}");
+}

@@ -1,0 +1,10 @@
+// cs.1004 / cs.1006: Clock has a default provider in scope everywhere; an
+// override is an ordinary provider for its extent.
+struct Fixed { t: i64 }
+impl ClockProvider for Fixed { fn now(ref self) -> i64 { self.t } }
+fn hour() -> i64 { Clock.now() / 3600 }
+fn main() {
+    let real = Clock.now() > 1_600_000_000;
+    let fake = with_provider[Clock](Fixed { t: 7200 }, || hour());
+    println(f"{real} {fake}");
+}

@@ -1,0 +1,9 @@
+// cs.973 / cs.990: a provider must implement every bound of R.
+trait A { fn a(self) -> i64; }
+trait B { fn b(self) -> i64; }
+effect resource R: A + B;
+struct OnlyA { }
+impl A for OnlyA { fn a(self) -> i64 { 1 } }
+fn main() {
+    with_provider[R](OnlyA {}, || println(f"{R.a()}"));
+}

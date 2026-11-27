@@ -1,0 +1,7 @@
+// cs.974: `effect resource R;` with no bound is annotation-only and cannot be
+// bound with `with_provider`.
+effect resource Audit;
+struct P { }
+fn main() {
+    with_provider[Audit](P {}, || println("x"));
+}

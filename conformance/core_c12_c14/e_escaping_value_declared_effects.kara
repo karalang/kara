@@ -1,0 +1,8 @@
+// cs.950: a call through an escaping function value has the effects its
+// type declares; two readers of one resource run apart.
+effect resource Cfg;
+fn run(f: escaping Fn(i64) -> i64 with reads(Cfg), x: i64) -> i64 { f(x) }
+fn main() {
+    let (a, b) = par { run(|x| x + 1, 1), run(|x| x + 2, 2) };
+    println(f"{a + b}");
+}

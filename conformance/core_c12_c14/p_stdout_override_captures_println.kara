@@ -1,0 +1,15 @@
+// cs.1028 / cs.1029 / cs.1030: under an override of Stdout, println calls
+// fake.write; a panic message still goes to the real stderr.
+struct Cap { lines: Vec[String] }
+impl StdoutProvider for Cap {
+    fn write(mut ref self, s: Str) { self.lines.push(s.to_string()); }
+    fn flush(mut ref self) { }
+}
+fn main() {
+    let n = with_provider[Stdout](Cap { lines: Vec.new() }, || {
+        println("hidden");
+        print("also");
+        3
+    });
+    println(f"real {n}");
+}

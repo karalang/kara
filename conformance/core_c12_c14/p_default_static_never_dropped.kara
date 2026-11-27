@@ -1,0 +1,8 @@
+// cs.1060 / cs.1061: the default is one static, built before main and never
+// dropped, so its Drop never runs.
+trait G { fn get(self) -> i64; }
+struct Real { n: i64 }
+impl G for Real { fn get(self) -> i64 { self.n } }
+impl Drop for Real { fn drop(mut ref self) { println("dropped"); } }
+effect resource Db: G = Real { n: 8 };
+fn main() { println(f"{Db.get()} {Db.get()}"); }

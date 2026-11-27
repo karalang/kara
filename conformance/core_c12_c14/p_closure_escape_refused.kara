@@ -1,0 +1,10 @@
+// cs.992 / cs.993: a closure that uses R captures a view of p, so returning
+// it out of the with_provider call is refused, and the diagnostic names R.
+trait G { fn get(self) -> i64; }
+effect resource Db: G;
+struct P { n: i64 }
+impl G for P { fn get(self) -> i64 { self.n } }
+fn main() {
+    let f = with_provider[Db](P { n: 1 }, || || Db.get());
+    println(f"{f()}");
+}

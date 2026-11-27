@@ -1,0 +1,13 @@
+// cs.991: an inner with_provider[R] shadows an outer one for its extent.
+trait G { fn get(self) -> i64; }
+effect resource Db: G;
+struct P { n: i64 }
+impl G for P { fn get(self) -> i64 { self.n } }
+fn main() {
+    with_provider[Db](P { n: 1 }, || {
+        let a = Db.get();
+        let b = with_provider[Db](P { n: 2 }, || Db.get());
+        let c = Db.get();
+        println(f"{a} {b} {c}");
+    });
+}

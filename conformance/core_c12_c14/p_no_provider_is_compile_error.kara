@@ -1,0 +1,6 @@
+// cs.1000 / cs.1002: a call that needs a provider-rooted R where nothing
+// supplies it is E_NO_PROVIDER at that call, naming R; main supplies none.
+trait G { fn get(self) -> i64; }
+effect resource Db: G;
+fn read() -> i64 { Db.get() }
+fn main() { println(f"{read()}"); }

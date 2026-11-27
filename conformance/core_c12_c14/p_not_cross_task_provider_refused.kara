@@ -1,0 +1,14 @@
+// cs.1021: several readers share a `ref P`, which requires P to be
+// CrossTask (E_NOT_CROSS_TASK at the with_provider).
+shared struct Box { n: i64 }
+trait G { fn get(self) -> i64; }
+effect resource Db: G;
+struct P { b: Box }
+impl G for P { fn get(self) -> i64 { self.b.n } }
+fn main() {
+    let v = with_provider[Db](P { b: Box { n: 3 } }, || {
+        let (a, b) = par { Db.get(), Db.get() };
+        a + b
+    });
+    println(f"{v}");
+}

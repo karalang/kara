@@ -1,0 +1,10 @@
+// cs.978: a method no bound declares is an error at the call, even when the
+// bound provider type has it.
+trait T { fn a(self) -> i64; }
+effect resource R: T;
+struct P { n: i64 }
+impl T for P { fn a(self) -> i64 { self.n } }
+impl P { fn extra(self) -> i64 { 9 } }
+fn main() {
+    with_provider[R](P { n: 1 }, || println(f"{R.extra()}"));
+}

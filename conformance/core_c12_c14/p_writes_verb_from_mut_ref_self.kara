@@ -1,0 +1,12 @@
+// cs.977 / cs.1022: a `mut ref self` method is writes(R), so two branches
+// that call it conflict, with R named.
+trait C { fn bump(mut ref self) -> i64; }
+effect resource Ctr: C;
+struct P { n: i64 }
+impl C for P { fn bump(mut ref self) -> i64 { self.n += 1; self.n } }
+fn main() {
+    with_provider[Ctr](P { n: 0 }, || {
+        let (a, b) = par { Ctr.bump(), Ctr.bump() };
+        println(f"{a + b}");
+    });
+}

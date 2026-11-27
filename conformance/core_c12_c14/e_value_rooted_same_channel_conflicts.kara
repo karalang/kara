@@ -1,0 +1,7 @@
+// §12 default 5 / §11.2: two sends on one channel conflict.
+import std.sync.{channel, Sender, Receiver};
+fn main() {
+    let (ta, ra): (Sender[i64], Receiver[i64]) = channel(2);
+    let (x, y) = par { ta.send(1), ta.send(2) };
+    println(f"{x.is_ok()} {y.is_ok()} {ra.recv()}");
+}

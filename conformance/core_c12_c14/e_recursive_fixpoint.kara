@@ -1,0 +1,13 @@
+// §12 default 4: mutually recursive functions take their effects from a
+// fixpoint over the component. `even` only prints through `odd`, yet two
+// branches calling `even` conflict on Stdout.
+fn even(n: i64) -> bool {
+    if n == 0 { true } else { odd(n - 1) }
+}
+fn odd(n: i64) -> bool {
+    if n == 0 { println("bottom"); false } else { even(n - 1) }
+}
+fn main() {
+    let (a, b) = par { even(3), even(4) };
+    println(f"{a} {b}");
+}

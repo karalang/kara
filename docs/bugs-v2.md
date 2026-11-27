@@ -59,10 +59,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 795 |
-| false-positive | 404 |
+| false-positive | 405 |
 | missing-feature | 268 |
 | perf | 206 |
-| other | 163 |
+| other | 164 |
 | soundness | 141 |
 | miscompile | 113 |
 | run-vs-build | 80 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 973 |
+| typecheck | 974 |
 | mir | 350 |
 | mir-llvm | 341 |
 | cli | 326 |
@@ -84,7 +84,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | ownership | 147 |
 | runtime | 120 |
 | interp | 118 |
-| effect | 72 |
+| effect | 73 |
 | resolver | 59 |
 | other | 56 |
 | codegen | 22 |
@@ -125,8 +125,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-27-6 | 2026-11-27 | typecheck | medium | a `fold` closure with its accumulator pattern annotated, `|(prev, total): (i64, i64), x| (x, total + x.max(prev))` over `nums.iter()`, is refused "expected 'i64', found 'ref i64'" at the tuple's `x`, where the same closure unannotated and `let p: (i64, i64) = (x, 1)` pass | — |
 | B-2026-11-27-8 | 2026-11-27 | runtime | low | The HTTP server skips a whitespace-only line before the request line (` \r\n`, `\t\r\n`, `\r \n` with its bare CR) as if it were an empty line, and serves the request after it; RFC 9112 §2.2 lets a server ignore only empty lines (CRLF) there, and h11 refuses each as an illegal request line | — |
 | B-2026-11-27-10 | 2026-11-27 | effect | medium | §11.8 says `send`, `recv`, a join and a `Mutex` lock carry `suspends`, but the checker (and docs/library/concurrency.md) give them `blocks` only, so a public `fn take(rx: ref Receiver[i64]) -> Option[i64] with suspends receives(rx) { rx.recv() }` is refused E0400 "performs blocks": §11.8's `suspends`-alone promise (cs.843, cs.851) cannot be written | — |
-| B-2026-11-27-11 | 2026-11-27 | typecheck | low | A binding of a diverging block, `let a = { return 7; }; a + 1`, is refused E0208 "type 'Never' does not implement trait Add": code after a diverging `let` is unreachable, and `Never` should coerce to any operand type (or the diagnostic should say the code is unreachable) | — |
 | B-2026-11-27-16 | 2026-11-27 | cli | low | In a package, the E0520 import fix-it for a library name used only in a test file (src/main_test.kara) is labelled src/main.kara at offset 0, so `karac fix` applies nothing and the error stays | — |
+| B-2026-11-27-21 | 2026-11-27 | effect | low | cs.951 says a call through an escaping function value with no effect clause has every effect, but a direct call through an `escaping Fn` PARAMETER is charged its argument's effects at the call site (as cs.948 does for a non-escaping one): sound, but not the sentence; needs a ruling on which is meant | — |
 
 ### Relocated
 
@@ -2410,6 +2410,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-27-1 | typecheck | medium | Regression from the B-2026-11-26-1 fix (293934a062): a literal left open past an `as` cast is refused as a tensor index (`t[i, j] = (i * 3 + j) as f3… | 1a7d6a29e6 |
 | B-2026-11-27-7 | typecheck | medium | A collection's `.clone()` and `to_vec` of an unbounded type parameter pass `karac check`: `fn f[T](v: Vec[T]) -> Vec[T] { v.clone() }` clones a `Vec[… | b7e16eae6c |
 | B-2026-11-27-9 | typecheck | medium | A type-qualified call on a type with `const` parameters drops the const argument: `Buf[i64, 3].fill(7)` over `impl[T, const N: i64] Buf[T, N] { fn fi… | afb988da49 |
+| B-2026-11-27-11 | typecheck | low | A binding of a diverging block, `let a = { return 7; }; a + 1`, is refused E0208 "type 'Never' does not implement trait Add": code after a diverging… | 18a413f5ec |
 | B-2026-11-27-12 | runtime | low | The HTTP client refuses a response whose header block uses obs-fold (a header line continued on the next line that starts with a space or tab): `Clie… | 96773caece |
 | B-2026-11-27-13 | runtime | low | The HTTP client refused any response with more than 100 header fields, or a head over about 400 KiB, with an Err that named neither limit ('request f… | 96773caece |
 | B-2026-11-27-14 | interp+mir-llvm | medium | `text_backend` wrote a record's message as it was, so a message holding a line end split one record over two lines (and a crafted one could forge a s… | 59c73d71d5 |
@@ -2417,6 +2418,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-27-17 | typecheck | high | `if c { (r, steps) } else { (r, r) }` with `steps: i32` and `r: i64` checks clean as an `(i64, i32)` and narrows the second branch's `r` silently (30… | 0c8496bc2e |
 | B-2026-11-27-18 | cli | low | A REPL cell that mixes a top-level import with statements (a snippet pasted with its imports) is refused as an import inside the synthetic `fn main()… | 1f3ee9141d |
 | B-2026-11-27-19 | cli | low | The OnceCell -> OnceLock fix (E_ONCE_CELL_IN_PAR_TYPE, E_ONCE_CELL_AT_MODULE_SCOPE) renames the type but leaves `import std.sync.{OnceCell}`, which n… | 1f3ee9141d |
+| B-2026-11-27-20 | typecheck | high | A program that declares `trait C` fails before it runs, on every lane: the library's `C.from_iter(..)` under `impl[T, C: FromIterator[T]]` is read as… | 6d41149489 |
 
 </details>
 

@@ -1,0 +1,8 @@
+// cs.977: an `own self` method cannot be called through a resource.
+trait T { fn take(own self) -> i64; }
+effect resource R: T;
+struct P { n: i64 }
+impl T for P { fn take(own self) -> i64 { self.n } }
+fn main() {
+    with_provider[R](P { n: 1 }, || println(f"{R.take()}"));
+}

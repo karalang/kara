@@ -1,0 +1,11 @@
+// §12 default 5: when the compiler cannot tell whether two values are the
+// same, they conflict. Two senders picked from one Vec at run-time indices.
+import std.sync.{channel, Sender, Receiver};
+fn main() {
+    let (ta, ra): (Sender[i64], Receiver[i64]) = channel(2);
+    let (tb, rb): (Sender[i64], Receiver[i64]) = channel(2);
+    let v = vec![ta, tb];
+    let i = env.args().len() as i64 - 1;
+    let (x, y) = par { v[i].send(1), v[1 - i].send(2) };
+    println(f"{x.is_ok()} {y.is_ok()} {ra.recv()} {rb.recv()}");
+}

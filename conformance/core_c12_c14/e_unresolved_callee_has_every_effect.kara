@@ -1,0 +1,12 @@
+// §12 default 1 / cs.951: a call through an escaping function value whose
+// type declares no effects has every effect. A call through a field does
+// (E0400 on a public caller), but a direct call through an `escaping`
+// PARAMETER is charged its argument's effects at the call site, as a
+// non-escaping one is (cs.948), so these two pure branches run apart. That is
+// sound (a printing argument conflicts) but not what cs.951 says: filed for a
+// ruling as B-2026-11-27-21; this cell pins today's behaviour.
+fn run(f: escaping Fn(i64) -> i64, x: i64) -> i64 { f(x) }
+fn main() {
+    let (a, b) = par { run(|x| x + 1, 1), run(|x| x + 2, 2) };
+    println(f"{a + b}");
+}

@@ -1,0 +1,8 @@
+// cs.987: inside f, the call supplies the hidden argument, so R is not among
+// the enclosing (public) function's effects.
+trait G { fn get(self) -> i64; }
+effect resource Db: G;
+struct P { n: i64 }
+impl G for P { fn get(self) -> i64 { self.n } }
+pub fn read() -> i64 { with_provider[Db](P { n: 6 }, || Db.get()) }
+fn main() { println(f"{read()}"); }

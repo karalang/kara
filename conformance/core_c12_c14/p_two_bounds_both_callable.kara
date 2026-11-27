@@ -1,0 +1,12 @@
+// cs.973 / cs.976: `R.m(args)` calls the bound method on the provider bound
+// to R, through either bound.
+trait A { fn a(self) -> i64; }
+trait B { fn b(self, k: i64) -> i64; }
+effect resource R: A + B;
+struct Both { n: i64 }
+impl A for Both { fn a(self) -> i64 { self.n } }
+impl B for Both { fn b(self, k: i64) -> i64 { self.n * k } }
+fn main() {
+    let v = with_provider[R](Both { n: 3 }, || R.a() + R.b(10));
+    println(f"{v}");
+}

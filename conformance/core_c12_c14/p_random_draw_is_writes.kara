@@ -1,0 +1,7 @@
+// cs.1012: a draw advances the source: `writes(RandomSource)`, so two draws
+// in two branches conflict.
+import std.random;
+fn main() {
+    let (a, b) = par { random.next_u64(), random.next_u64() };
+    println(f"{a != b}");
+}

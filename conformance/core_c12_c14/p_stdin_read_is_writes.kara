@@ -1,0 +1,6 @@
+// cs.1027: reading standard input is writes(Stdin): two reads never run in
+// parallel.
+fn main() {
+    let (a, b) = par { stdin.read_line(), stdin.read_line() };
+    println(f"{a.is_ok()} {b.is_ok()}");
+}

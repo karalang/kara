@@ -1,0 +1,13 @@
+// cs.983: each function is specialised per provider type bound to R.
+trait G { fn get(self) -> i64; }
+effect resource Db: G;
+struct A { }
+impl G for A { fn get(self) -> i64 { 1 } }
+struct B { n: i64 }
+impl G for B { fn get(self) -> i64 { self.n } }
+fn twice() -> i64 { Db.get() * 2 }
+fn main() {
+    let x = with_provider[Db](A {}, || twice());
+    let y = with_provider[Db](B { n: 50 }, || twice());
+    println(f"{x} {y}");
+}

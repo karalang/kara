@@ -1,0 +1,9 @@
+// §12 default 5: a resource rooted at a value is keyed by that value, so
+// sends on two channels do not conflict.
+import std.sync.{channel, Sender, Receiver};
+fn main() {
+    let (ta, ra): (Sender[i64], Receiver[i64]) = channel(1);
+    let (tb, rb): (Sender[i64], Receiver[i64]) = channel(1);
+    let (x, y) = par { ta.send(1), tb.send(2) };
+    println(f"{x.is_ok()} {y.is_ok()} {ra.recv()} {rb.recv()}");
+}

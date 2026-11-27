@@ -1,0 +1,12 @@
+// cs.985 / cs.988 / cs.989: `p` moves into the call, the call's value is
+// f's, and p drops when the call returns, after f's value is computed.
+trait G { fn get(self) -> i64; }
+effect resource Db: G;
+struct P { n: i64 }
+impl G for P { fn get(self) -> i64 { println("get"); self.n } }
+impl Drop for P { fn drop(mut ref self) { println(f"drop {self.n}"); } }
+fn main() {
+    let p = P { n: 4 };
+    let v = with_provider[Db](p, || Db.get() + 1);
+    println(f"value {v}");
+}

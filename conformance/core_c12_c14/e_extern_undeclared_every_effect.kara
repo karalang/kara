@@ -1,0 +1,10 @@
+// §12 default 2: an `extern` function that declares no effects has every
+// effect, so two branches calling it conflict.
+/// # Safety
+/// `abs` is total on every i32 but MIN, which the test never passes.
+unsafe extern "C" { fn abs(x: i32) -> i32; }
+fn main() {
+    // Safety: abs is total.
+    let (a, b) = par { unsafe { abs(-1) }, unsafe { abs(-2) } };
+    println(f"{a + b}");
+}

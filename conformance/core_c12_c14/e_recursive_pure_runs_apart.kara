@@ -1,0 +1,12 @@
+// §12 default 4: the fixpoint starts empty, so a pure recursion stays pure
+// and two branches run apart.
+fn even(n: i64) -> bool {
+    if n == 0 { true } else { odd(n - 1) }
+}
+fn odd(n: i64) -> bool {
+    if n == 0 { false } else { even(n - 1) }
+}
+fn main() {
+    let (a, b) = par { even(3), even(4) };
+    println(f"{a} {b}");
+}

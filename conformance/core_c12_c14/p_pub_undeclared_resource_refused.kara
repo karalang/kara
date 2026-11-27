@@ -1,0 +1,6 @@
+// cs.982: a public function's declared effects are its calling convention,
+// so an undeclared R in a public function is an error.
+trait G { fn get(self) -> i64; }
+pub effect resource Db: G;
+pub fn read() -> i64 { Db.get() }
+fn main() { println("x"); }

@@ -1,0 +1,10 @@
+// cs.949: a generic call's effects are computed on the instance. `show[T]`
+// over a pure `Show` impl runs apart; over a printing one it conflicts.
+trait Show { fn show(self) -> i64; }
+struct Quiet { n: i64 }
+impl Show for Quiet { fn show(self) -> i64 { self.n } }
+fn show_it[T: Show](t: T) -> i64 { t.show() }
+fn main() {
+    let (a, b) = par { show_it(Quiet { n: 1 }), show_it(Quiet { n: 2 }) };
+    println(f"{a + b}");
+}

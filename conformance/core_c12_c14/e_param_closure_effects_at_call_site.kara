@@ -1,0 +1,8 @@
+// cs.948: a call through a non-escaping function parameter has the effects
+// of the argument at each call site. `apply` with a pure closure runs apart
+// in two branches; with a printing one it would conflict.
+fn apply(f: Fn(i64) -> i64, x: i64) -> i64 { f(x) }
+fn main() {
+    let (a, b) = par { apply(|x| x * 2, 1), apply(|x| x * 3, 2) };
+    println(f"{a + b}");
+}
