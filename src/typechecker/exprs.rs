@@ -16019,9 +16019,12 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     /// The seed of `<receiver>.scan(seed, f)` reduced to one item (`max`,
-    /// `min`, `last`, `sum` or `product`, then any `unwrap`), when `f`
-    /// yields its new state as the item, `Some((s, s))`: the result then
-    /// has the seed's type.
+    /// `min`, `last`, `sum` or `product`, then any `unwrap` or
+    /// `unwrap_or(..)`), when `f` yields its new state as the item,
+    /// `Some((s, s))`, on every branch that yields one: the result then
+    /// has the seed's type. The state may be an expression written twice,
+    /// `Some((r + c, r + c))`, and a branch may stop the scan with `None`
+    /// (kata 1798, B-2026-11-27-25).
     fn scan_seed(value: &Expr) -> Option<&Expr> {
         let mut at = value;
         let mut reduced = false;
@@ -16037,35 +16040,62 @@ impl<'a> super::TypeChecker<'a> {
             };
             match method.as_str() {
                 "unwrap" if args.is_empty() => {}
+                "unwrap_or" if args.len() == 1 => {}
                 "max" | "min" | "last" | "sum" | "product" if args.is_empty() => reduced = true,
                 "scan" if reduced && args.len() == 2 => {
                     let ExprKind::Closure { body, .. } = &args[1].value.kind else {
                         return None;
                     };
-                    let mut tail = body.as_ref();
-                    while let ExprKind::Block(b) = &tail.kind {
-                        tail = b.final_expr.as_deref()?;
-                    }
-                    let ExprKind::Call { callee, args: some } = &tail.kind else {
-                        return None;
-                    };
-                    if !matches!(&callee.kind, ExprKind::Identifier(n) if n == "Some")
-                        || some.len() != 1
-                    {
-                        return None;
-                    }
-                    let ExprKind::Tuple(pair) = &some[0].value.kind else {
-                        return None;
-                    };
-                    let same = matches!(
-                        (&pair.first()?.kind, &pair.get(1)?.kind),
-                        (ExprKind::Identifier(a), ExprKind::Identifier(b)) if a == b
-                    );
-                    return (pair.len() == 2 && same).then_some(&args[0].value);
+                    let mut yields = 0;
+                    return (Self::scan_yields_state(body, &mut yields) && yields > 0)
+                        .then_some(&args[0].value);
                 }
                 _ => return None,
             }
             at = object;
+        }
+    }
+
+    /// Whether every way `e` ends yields the scan's new state as its item,
+    /// `Some((s, s))`, or stops it with `None`; `yields` counts the `Some`s.
+    fn scan_yields_state(e: &Expr, yields: &mut usize) -> bool {
+        match &e.kind {
+            ExprKind::Block(b) => b
+                .final_expr
+                .as_deref()
+                .is_some_and(|f| Self::scan_yields_state(f, yields)),
+            ExprKind::If {
+                then_block,
+                else_branch: Some(other),
+                ..
+            } => {
+                then_block
+                    .final_expr
+                    .as_deref()
+                    .is_some_and(|f| Self::scan_yields_state(f, yields))
+                    && Self::scan_yields_state(other, yields)
+            }
+            ExprKind::Identifier(n) if n == "None" => true,
+            ExprKind::Call { callee, args } => {
+                if !matches!(&callee.kind, ExprKind::Identifier(n) if n == "Some")
+                    || args.len() != 1
+                {
+                    return false;
+                }
+                let ExprKind::Tuple(pair) = &args[0].value.kind else {
+                    return false;
+                };
+                let same = match (pair.first(), pair.get(1)) {
+                    (Some(a), Some(b)) if pair.len() == 2 => match (&a.kind, &b.kind) {
+                        (ExprKind::Identifier(x), ExprKind::Identifier(y)) => x == y,
+                        _ => crate::formatter::render_expr(a) == crate::formatter::render_expr(b),
+                    },
+                    _ => false,
+                };
+                *yields += usize::from(same);
+                same
+            }
+            _ => false,
         }
     }
 
