@@ -62,7 +62,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | false-positive | 404 |
 | missing-feature | 268 |
 | perf | 206 |
-| other | 160 |
+| other | 162 |
 | soundness | 140 |
 | miscompile | 112 |
 | run-vs-build | 80 |
@@ -82,7 +82,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | cli | 323 |
 | parser | 166 |
 | ownership | 147 |
-| runtime | 118 |
+| runtime | 120 |
 | interp | 117 |
 | effect | 72 |
 | resolver | 59 |
@@ -132,6 +132,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-27-8 | 2026-11-27 | runtime | low | The HTTP server skips a whitespace-only line before the request line (` \r\n`, `\t\r\n`, `\r \n` with its bare CR) as if it were an empty line, and serves the request after it; RFC 9112 §2.2 lets a server ignore only empty lines (CRLF) there, and h11 refuses each as an illegal request line | — |
 | B-2026-11-27-10 | 2026-11-27 | effect | medium | §11.8 says `send`, `recv`, a join and a `Mutex` lock carry `suspends`, but the checker (and docs/library/concurrency.md) give them `blocks` only, so a public `fn take(rx: ref Receiver[i64]) -> Option[i64] with suspends receives(rx) { rx.recv() }` is refused E0400 "performs blocks": §11.8's `suspends`-alone promise (cs.843, cs.851) cannot be written | — |
 | B-2026-11-27-11 | 2026-11-27 | typecheck | low | A binding of a diverging block, `let a = { return 7; }; a + 1`, is refused E0208 "type 'Never' does not implement trait Add": code after a diverging `let` is unreachable, and `Never` should coerce to any operand type (or the diagnostic should say the code is unreachable) | — |
+| B-2026-11-27-12 | 2026-11-27 | runtime | low | The HTTP client refuses a response whose header block uses obs-fold (a header line continued on the next line that starts with a space or tab): `Client.get` returns Err 'request failed: invalid HTTP header parsed', where RFC 9112 §5.2 requires a user agent that receives obs-fold in a response to replace each fold with SP and read the value | — |
+| B-2026-11-27-13 | 2026-11-27 | runtime | low | The HTTP client refuses any response with more than 100 header fields, or a head over about 400 KiB, with Err 'request failed: message head is too large'; neither limit is documented, and 100 fields is low for real responses (many Set-Cookie, CDN and tracing headers) | — |
 
 ### Relocated
 
