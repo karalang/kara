@@ -104,7 +104,8 @@ fn main() {
 fn default_and_fx_tables_reach_the_same_library_methods() {
     run_both(
         "default",
-        r#"fn main() {
+        r#"import std.hash.{FxBuildHasher};
+fn main() {
     let d: Map[i64, i64] = Map.from([(1, 2)].to_vec());
     let q = Map.from([(3, 4)].to_vec());
     let x: Map[i64, i64, FxBuildHasher] = Map.from([(5, 6)].to_vec());

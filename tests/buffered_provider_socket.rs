@@ -82,7 +82,7 @@ fn assert_both(name: &str, src: &str, want: &str) {
     }
 }
 
-const SRC: &str = r#"import std.io.{BufReader, BufWriter};
+const SRC: &str = r#"import std.io.{BufReader, BufWriter}; import std.net.{TcpListener, TcpStream};
 
 struct Fake { n: i64, pos: i64, half: bool }
 

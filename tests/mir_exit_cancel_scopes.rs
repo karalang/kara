@@ -34,6 +34,7 @@ fn mir_early_return_in_a_served_function_passes_borrow_checking() {
 /// isolating task: the inner scope's `Noisy` dropped once, the outer one
 /// still dropped by the panic's exit.
 const PANIC_IN_EXIT: &str = r#"
+import std.sync.{TaskFailed, TaskGroup};
 struct Noisy { name: String }
 
 impl Drop for Noisy {

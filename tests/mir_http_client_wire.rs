@@ -51,7 +51,7 @@ fn fetch_program(urls: &[String]) -> String {
         .map(|u| format!("    fetch(\"{u}\");\n"))
         .collect();
     format!(
-        r#"
+        r#"import std.net.{{Client}};
 fn fetch(url: own String) {{
     match Client.new().get(url) {{
         Ok(r) => println(f"{{r.status()}} {{r.body()}}"),

@@ -31,6 +31,7 @@ fn assert_runs(src: &str, want: &str) {
 #[test]
 fn a_struct_round_trips_with_its_field_attributes() {
     let src = r#"
+import std.json.{Json};
 #[derive(Serialize, Deserialize)]
 struct Config {
     #[serde(rename: "server_name")]
@@ -89,6 +90,7 @@ fn main() {
 #[test]
 fn an_enum_is_externally_tagged() {
     let src = r#"
+import std.json.{Json};
 #[derive(Serialize, Deserialize)]
 enum Shape {
     Dot,
@@ -137,6 +139,7 @@ fn main() {
 #[test]
 fn internal_and_untagged_enums() {
     let src = r#"
+import std.json.{Json};
 #[derive(Serialize, Deserialize)]
 #[serde(tag: "type")]
 enum Event {
@@ -218,6 +221,7 @@ fn main() {
 #[test]
 fn collections_and_scalars() {
     let src = r#"
+import std.json.{Json};
 #[derive(Serialize, Deserialize)]
 struct Bag {
     q: VecDeque[i64],
@@ -277,6 +281,7 @@ fn main() {
 #[test]
 fn the_annotation_selects_the_type_through_question_mark() {
     let src = r#"
+import std.json.{Json};
 #[derive(Serialize, Deserialize)]
 struct User { name: String, age: i64, active: bool }
 
@@ -356,6 +361,7 @@ fn main() {
 #[test]
 fn an_internally_tagged_tuple_variant_is_a_compile_error() {
     let src = r#"
+import std.json.{Json};
 #[derive(Serialize)]
 #[serde(tag: "type")]
 enum Bad { A(i64) }
@@ -373,6 +379,7 @@ fn main() { println(Json.serialize(Bad.A(1))); }
 #[test]
 fn a_generic_type_derives() {
     let src = r#"
+import std.json.{Json};
 #[derive(Serialize, Deserialize)]
 struct Pair[A, B] {
     first: A,
@@ -420,6 +427,7 @@ fn main() {
 #[test]
 fn a_generic_derive_needs_its_arguments_serializable() {
     let src = r#"
+import std.json.{Json};
 #[derive(Serialize)]
 struct Wrap[T] { v: T }
 struct Plain { n: i64 }

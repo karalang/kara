@@ -20,7 +20,7 @@ mod common;
 
 use std::process::Command;
 
-const PROG: &str = r#"enum Dir { North, East, South, West }
+const PROG: &str = r#"import std.cmp.{F64}; enum Dir { North, East, South, West }
 
 fn name(o: Ordering) -> String {
     (match o { Ordering.Less => "lt", Ordering.Equal => "eq", Ordering.Greater => "gt" }).to_string()

@@ -61,7 +61,7 @@ fn an_impl_cross_task_bound_still_refuses_a_shared_type() {
 
 #[test]
 fn a_generic_sync_queue_of_strings_runs_across_tasks() {
-    let src = "import std.sync.{Mutex, TaskGroup};\n\n\
+    let src = "import std.sync.{Semaphore};\nimport std.sync.{Mutex, TaskGroup};\n\n\
         sync struct Queue[T: CrossTask] {\n    slots: Semaphore,\n    items: Semaphore,\n    \
         values: Mutex[VecDeque[T]],\n}\n\n\
         impl[T: CrossTask] Queue[T] {\n    fn new(capacity: i64) -> Queue[T] {\n        \

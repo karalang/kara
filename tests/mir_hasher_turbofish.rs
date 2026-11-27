@@ -10,7 +10,8 @@ mod common;
 
 use std::process::Command;
 
-const SRC: &str = r#"fn main() {
+const SRC: &str = r#"import std.hash.{FxBuildHasher};
+fn main() {
     let mut fx = Map[i64, i64, FxBuildHasher].new();
     let mut set = Set[i64, FxBuildHasher].new();
     let mut sip = Map[i64, i64].new();

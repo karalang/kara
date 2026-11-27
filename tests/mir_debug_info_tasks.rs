@@ -46,7 +46,7 @@ fn built_with_debug_info(name: &str, src: &str, opt: &str) -> Option<String> {
 /// The row's program: a spawned closure that suspends.
 #[test]
 fn mir_debug_info_builds_a_spawned_task() {
-    let src = "fn work(k: i64) -> i64 {\n    sleep_ms(1);\n    k * 2\n}\n\n\
+    let src = "import std.sync.{TaskGroup};\nfn work(k: i64) -> i64 {\n    sleep_ms(1);\n    k * 2\n}\n\n\
                fn main() {\n    let g = TaskGroup.new();\n    let h = g.spawn(|| work(21));\n    println(h.join());\n}\n";
     for opt in ["0", "2"] {
         if let Some(out) = built_with_debug_info("spawn", src, opt) {

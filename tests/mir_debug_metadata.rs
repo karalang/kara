@@ -42,7 +42,7 @@ fn main() {
 /// Three spawned tasks suspended while `main` lists them: one on a
 /// channel, one joining a task it spawned (`PeerTask` names it), and that
 /// task asleep.
-const TASKS: &str = r#"import std.runtime;
+const TASKS: &str = r#"import std.runtime.{WaitTarget}; import std.sync.{TaskGroup}; import std.runtime;
 
 fn wait_name(w: WaitTarget) -> String {
     match w {

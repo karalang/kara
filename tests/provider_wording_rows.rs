@@ -30,7 +30,7 @@ fn karac(dir: &PathBuf, args: &[&str]) -> Output {
 fn an_overridden_program_rooted_resource_is_named_as_overridden() {
     let (dir, _) = scratch(
         "env",
-        "struct Fe {}\n\
+        "import std.env.{EnvProvider}; struct Fe {}\n\
          impl EnvProvider for Fe {\n\
          \x20   fn var(ref self, key: Str) -> Result[String, VarError] { Ok(\"v\") }\n\
          }\n\

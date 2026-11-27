@@ -188,6 +188,7 @@ fn tls_stream(
 }
 
 const TLS_SRC: &str = r#"
+import std.net.{TlsListener};
 fn show(e: NetError) -> String {
     match e {
         NetError.Tls(TlsFailure.Handshake) => "tls handshake".to_string(),
@@ -295,6 +296,7 @@ fn mir_tls_server_serves_a_rustls_client() {
 }
 
 const WS_SRC: &str = r#"
+import std.net.{TcpListener, TlsListener, WebSocket}; import std.sync.{TaskGroup};
 fn code(c: Option[u16]) -> String {
     match c {
         Some(n) => f"{n}",
@@ -521,6 +523,7 @@ fn mir_websocket_server_over_tcp_and_tls() {
 /// server never returns, so each program ends itself with `exit`, which
 /// flushes what it printed.
 const SERVE_TLS_SRC: &str = r#"
+import std.net.{Request, Server};
 import std.process.{exit};
 
 struct Response { status: i64, body: String, headers: Vec[(String, String)] }
@@ -659,6 +662,7 @@ fn mir_serve_tls_answers_https_requests() {
 }
 
 const SERVE_WS_SRC: &str = r#"
+import std.net.{Request, Response, Server, WebSocket};
 import std.process.{exit};
 
 fn route(req: Request) -> Response {
@@ -805,6 +809,7 @@ fn mir_serve_ws_tls_upgrades_while_serving() {
 /// only its own connection, and a connection is kept until the client asks
 /// it closed.
 const SERVE_SRC: &str = r#"
+import std.net.{Request, Response, Server};
 import std.process.{exit};
 
 fn route(req: Request) -> Response {

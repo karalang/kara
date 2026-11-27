@@ -10,7 +10,7 @@ mod common;
 
 use std::process::Command;
 
-const SRC: &str = r#"
+const SRC: &str = r#"import std.process.{Command, Stdio};
 fn main() {
     let child = Command.new("true").stdin(Stdio.piped()).spawn().unwrap();
     let w = child.stdin().unwrap();

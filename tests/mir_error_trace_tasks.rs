@@ -65,7 +65,7 @@ fn reports_everywhere(name: &str, src: &str, code: i32, stderr: &str) {
 
 /// A task's `?` returns the error out of the task, and `main` returns it
 /// on with a `?` of the join.
-const SPLIT: &str = r#"fn inner() -> Result[i64, i64] { Err(7) }
+const SPLIT: &str = r#"import std.sync.{TaskGroup}; fn inner() -> Result[i64, i64] { Err(7) }
 fn work() -> Result[i64, i64] {
     let v = inner()?;
     Ok(v + 1)
@@ -91,7 +91,7 @@ fn mir_error_trace_split_across_tasks_is_unavailable() {
 /// succeeds in a task does not clear `main`'s frames.
 #[test]
 fn mir_error_trace_within_one_task_keeps_its_frames() {
-    let src = r#"fn inner(x: i64) -> Result[i64, i64] {
+    let src = r#"import std.sync.{TaskGroup}; fn inner(x: i64) -> Result[i64, i64] {
     if x > 1 { return Err(x); }
     Ok(x)
 }

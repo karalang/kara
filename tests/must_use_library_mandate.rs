@@ -30,7 +30,7 @@ fn check(tag: &str, src: &str) -> String {
 fn library_guard_adapter_and_trim_discards_warn() {
     let out = check(
         "warn",
-        "fn main() {
+        "import std.sync.{Mutex}; fn main() {
     let m = Mutex.new(1);
     m.lock();
     let v = [1, 2];

@@ -60,7 +60,8 @@ fn main() {{
 /// Drop bodies over a tree whose handles sit in each cell, with a node a
 /// handle outside keeps. (Run natively only: the wasm lane's hash seed is
 /// not pinned, and a `Set`'s order follows it.)
-const ORDER: &str = r#"shared struct C { name: String, mut lock: Option[Mutex[C]], once: OnceLock[C], mut set: Set[C] }
+const ORDER: &str = r#"import std.sync.{Mutex, OnceLock};
+shared struct C { name: String, mut lock: Option[Mutex[C]], once: OnceLock[C], mut set: Set[C] }
 
 impl Drop for C {
     fn drop(mut ref self) {

@@ -1358,7 +1358,7 @@ fn phase2_send_closure_promotes_capture_to_arc() {
     // trigger 2 — capture + outer use), then the closure binding is
     // sent via `tx.send(h)` against a Channel-destructured Sender.
     // Theme 2 lifts cfg to Arc via the channel-send boundary.
-    let src = "struct Config { name: i64 }\n\
+    let src = "import std.sync.{Channel};\nstruct Config { name: i64 }\n\
                fn apply(c: Config) { }\n\
                fn log(c: Config) { }\n\
                fn make_handler(cfg: Config) {\n\
@@ -1393,7 +1393,7 @@ fn phase2_clone_send_closure_promotes_capture_to_arc() {
     // level back to `tx` — itself a Sender — so the boundary still
     // fires. Mirrors the round-8 channel-send escape detection's
     // existing handling of cloned senders.
-    let src = "struct Config { name: i64 }\n\
+    let src = "import std.sync.{Channel};\nstruct Config { name: i64 }\n\
                fn apply(c: Config) { }\n\
                fn log(c: Config) { }\n\
                fn make_handler(cfg: Config) {\n\
@@ -1428,7 +1428,7 @@ fn phase2_send_param_typed_sender_promotes_capture() {
     // resolves through the parameter annotation rather than a local
     // Channel.new() destructure. Verifies sub-step (d) of the slice
     // plan (function-parameter Sender[T] annotations).
-    let src = "struct Config { name: i64 }\n\
+    let src = "import std.sync.{Sender};\nstruct Config { name: i64 }\n\
                fn apply(c: Config) { }\n\
                fn log(c: Config) { }\n\
                fn make_handler(tx: Sender[Fn() -> ()], cfg: Config) {\n\
@@ -1489,7 +1489,7 @@ fn phase2_send_and_par_invocation_consistent_decision() {
     // monotonic property: any single parallel-region sighting is
     // sufficient to promote cfg to Arc; multiple sightings produce
     // one consistent decision (cfg in arc_values, exactly once).
-    let src = "struct Config { name: i64 }\n\
+    let src = "import std.sync.{Channel};\nstruct Config { name: i64 }\n\
                fn apply(c: Config) { }\n\
                fn log(c: Config) { }\n\
                fn make_handler(cfg: Config) {\n\
@@ -1673,7 +1673,7 @@ fn phase2_spawn_and_send_consistent_decision() {
     // to Arc; multiple sightings (including spawn alongside the
     // pre-existing channel-send boundary) produce one consistent
     // decision (cfg in arc_values, exactly once).
-    let src = "struct Config { name: i64 }\n\
+    let src = "import std.sync.{Channel};\nstruct Config { name: i64 }\n\
                fn spawn(c: Fn() -> ()) { }\n\
                fn apply(c: Config) { }\n\
                fn log(c: Config) { }\n\

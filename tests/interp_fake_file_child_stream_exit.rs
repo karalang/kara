@@ -67,7 +67,8 @@ fn a_fake_file_as_a_child_stream_stops_with_101_on_every_lane() {
     }
 }
 
-const PROGRAM: &str = r#"import std.process.{Command, Stdio};
+const PROGRAM: &str = r#"import std.io.{File, FileSystemProvider, OpenOptions};
+import std.process.{Command, Stdio};
 struct MemFs {}
 impl FileSystemProvider for MemFs {
     fn open(mut ref self, path: Str, opts: ref OpenOptions) -> Result[i64, IoError] { Ok(7) }

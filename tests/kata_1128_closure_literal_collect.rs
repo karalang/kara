@@ -150,7 +150,7 @@ impl ClkP for F { fn now(ref self) -> i64 { self.t[0] } }
 #[test]
 fn a_with_provider_closure_number_takes_its_default() {
     let src = format!(
-        "{CLK}
+        "import std.sync.{{TaskGroup}};\n{CLK}
 fn main() {{
     let tg = TaskGroup.new();
     let h = with_provider[Clk](F {{ t: [1] }}, || tg.spawn(|| 7));

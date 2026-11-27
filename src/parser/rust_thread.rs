@@ -14,8 +14,8 @@ impl super::Parser {
     /// `::{sleep}`, and the `import std.thread;` an earlier fix made), with
     /// the cursor at the keyword: the diagnostic, its fix to
     /// `import std.time.sleep;` (or to nothing when the program does not
-    /// sleep: `thread::spawn` has its own diagnostic, and a `TaskGroup`
-    /// needs no import), and the statement skipped. Returns `false`,
+    /// sleep: `thread::spawn` has its own diagnostic, and a `TaskGroup`'s
+    /// import is the missing-import fix's), and the statement skipped. Returns `false`,
     /// consuming nothing, for any other statement, and for `std::thread`
     /// when the program reaches through it for anything but `sleep` and
     /// `spawn`.
@@ -76,12 +76,12 @@ impl super::Parser {
             .unwrap_or("std::thread")
             .to_string();
         // `thread::spawn`, or nothing at all once a hand edit moved the
-        // spawn into a group: `TaskGroup` is in the prelude, so the line
-        // goes, or keeps only the pause (B-2026-11-15-152).
+        // spawn into a group: `TaskGroup` is `std.sync`'s, whose import the
+        // missing-import fix adds, so the line goes, or keeps only the pause (B-2026-11-15-152).
         if !sleeps {
             let message = format!(
                 "`{written}` is Rust's standard library -- Kāra starts a task in a \
-                 `TaskGroup`, which needs no import, and has no `std.thread` module: \
+                 `TaskGroup` (`import std.sync.{{TaskGroup}};`) and has no `std.thread` module: \
                  delete the line"
             );
             self.error_at(&message, whole);

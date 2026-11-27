@@ -37,7 +37,7 @@ fn expect(tag: &str, src: &str, wants: &[&str], not: &[&str]) {
 fn a_sync_method_taking_own_self_is_refused() {
     expect(
         "sync-own-self",
-        "sync struct C { n: Atomic[i64] }
+        "import std.sync.{Atomic}; sync struct C { n: Atomic[i64] }
 impl C { fn done(own self) -> i64 { self.n.load() } }
 fn main() { let c = C { n: Atomic.new(1) }; println(c.done()); }
 ",
@@ -54,7 +54,7 @@ fn main() { let c = C { n: Atomic.new(1) }; println(c.done()); }
 fn a_sync_mut_ref_self_names_the_sync_type() {
     expect(
         "sync-mut-ref-self",
-        "sync struct Counter { n: Atomic[i64] }
+        "import std.sync.{Atomic}; sync struct Counter { n: Atomic[i64] }
 impl Counter { fn clear(mut ref self) { self.n.store(0); } }
 fn main() { let c = Counter { n: Atomic.new(1) }; c.clear(); println(c.n.load()); }
 ",

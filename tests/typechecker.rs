@@ -42114,7 +42114,7 @@ fn value_enum_payload_still_trips_the_nesting_rule() {
 
 #[test]
 fn module_binding_heap_type_annotated_carries_string_slice_fix_it() {
-    // `let X: String = "lit";` — the diagnostic names 'StringSlice' as the
+    // `let X: String = "lit";` — the diagnostic names 'Str' as the
     // replacement, so it now ships the edit: rewrite the annotation span.
     let src = "let ALPHA: String = \"abc\";\nfn main() { println(ALPHA); }";
     let errors = typecheck_errors(src);
@@ -42131,7 +42131,7 @@ fn module_binding_heap_type_annotated_carries_string_slice_fix_it() {
         "String",
         "fix should target the annotation, not the whole binding"
     );
-    assert_eq!(fix.replacement, "StringSlice");
+    assert_eq!(fix.replacement, "Str");
     // Applying it must actually clear the error — the fix's whole claim.
     let mut fixed = src.to_string();
     fixed.replace_range(
@@ -42145,7 +42145,7 @@ fn module_binding_heap_type_annotated_carries_string_slice_fix_it() {
 #[test]
 fn module_binding_heap_type_inferred_carries_annotation_insertion_fix_it() {
     // `let X = "lit";` has no annotation span to rewrite, so the edit is an
-    // INSERTION of `: StringSlice` after the name. The fix-it span therefore
+    // INSERTION of `: Str` after the name. The fix-it span therefore
     // sits at a different offset than the diagnostic (which points at the
     // initializer) — the two are deliberately decoupled.
     let src = "let BETA = \"xyz\";\nfn main() { println(BETA); }";
@@ -42159,11 +42159,11 @@ fn module_binding_heap_type_inferred_carries_annotation_insertion_fix_it() {
         .as_ref()
         .expect("inferred heap-type binding must carry a machine-applicable fix-it");
     assert_eq!(fix.span.length, 0, "fix-it must be an insertion");
-    assert_eq!(fix.replacement, ": StringSlice");
+    assert_eq!(fix.replacement, ": Str");
     let mut fixed = src.to_string();
     fixed.insert_str(fix.span.offset, &fix.replacement);
     assert!(
-        fixed.starts_with("let BETA: StringSlice = \"xyz\";"),
+        fixed.starts_with("let BETA: Str = \"xyz\";"),
         "insertion landed wrong: {fixed}"
     );
     typecheck_ok(&fixed);

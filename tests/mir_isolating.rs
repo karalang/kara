@@ -25,7 +25,7 @@ fn assert_runs(src: &str, want: &str) {
 #[test]
 fn mir_isolating_a_panic_ends_its_task_alone() {
     assert_runs(
-        r#"
+        r#"import std.sync.{TaskFailed, TaskGroup};
 struct Noisy { name: String }
 
 impl Drop for Noisy {
@@ -79,7 +79,7 @@ fn main() {
 #[test]
 fn mir_isolating_every_kind_of_panic_is_contained() {
     assert_runs(
-        r#"
+        r#"import std.sync.{TaskFailed, TaskGroup};
 struct Noisy { name: String }
 
 impl Drop for Noisy {
@@ -181,7 +181,7 @@ fn main() {
 #[test]
 fn mir_isolating_teardown_and_cancellation() {
     assert_runs(
-        r#"
+        r#"import std.sync.{Receiver, Sender, TaskFailed, TaskGroup};
 import std.time.{Duration};
 
 fn step(n: i64) -> Result[i64, String] {
@@ -235,7 +235,7 @@ fn main() {
         "defer 1\nerrdefer 1\ndefer 2\np panicked: step one\ns 2\nw 42\nk cancelled\ndone\n",
     );
     assert_runs(
-        r#"
+        r#"import std.sync.{Receiver, Sender, TaskFailed, TaskGroup};
 fn main() {
     let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1);
     let g = TaskGroup.isolating();
@@ -263,7 +263,7 @@ fn main() {
 #[test]
 fn mir_isolating_a_dropped_handle_takes_the_panic_with_it() {
     assert_runs(
-        r#"
+        r#"import std.sync.{TaskGroup};
 fn main() {
     let g = TaskGroup.isolating();
     g.spawn(|| {
@@ -285,7 +285,7 @@ fn main() {
 fn mir_isolating_a_panic_elsewhere_still_ends_the_process() {
     let cases = [
         (
-            r#"
+            r#"import std.sync.{TaskGroup};
 fn main() {
     let g = TaskGroup.isolating();
     let h = g.spawn(|| 1);
@@ -298,7 +298,7 @@ fn main() {
             "runtime error: index out of bounds\n  at <unknown>:7:16\n",
         ),
         (
-            r#"
+            r#"import std.sync.{TaskGroup};
 fn main() {
     let g = TaskGroup.isolating();
     let h = g.spawn(|| {
@@ -316,7 +316,7 @@ fn main() {
             "runtime error: index out of bounds\n  at <unknown>:8:13\n",
         ),
         (
-            r#"
+            r#"import std.sync.{TaskGroup};
 fn main() {
     let g = TaskGroup.isolating();
     let h = g.spawn(|| {

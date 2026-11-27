@@ -63,7 +63,7 @@ fn run(exe: &PathBuf, threads: &str) -> Output {
     }
 }
 
-const WAKES: &str = r#"
+const WAKES: &str = r#"import std.sync.{TaskFailed, TaskGroup};
 import std.time.{Duration, sleep};
 
 fn slow(n: i64) -> i64 {
@@ -144,7 +144,7 @@ fn a_parked_join_wakes_on_every_way_its_task_ends() {
     }
 }
 
-const STUCK: &str = r#"
+const STUCK: &str = r#"import std.sync.{Receiver, Sender, TaskGroup};
 fn wait_on(rx: Receiver[i64]) -> i64 {
     match rx.recv() {
         Some(v) => v,

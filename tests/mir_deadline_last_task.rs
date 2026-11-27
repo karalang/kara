@@ -9,6 +9,7 @@ use karac::mir::interp::Outcome;
 #[test]
 fn mir_deadline_tears_down_the_task_that_ran_last() {
     let src = r#"
+import std.sync.{Receiver, Sender, TaskFailed, TaskGroup};
 import std.time.{Duration};
 
 fn main() {

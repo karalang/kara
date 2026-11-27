@@ -18,7 +18,8 @@ fn tcp_read_to_end_appends_everything_up_to_the_close() {
     let file = dir.join("main.kara");
     std::fs::write(
         &file,
-        r#"fn main() {
+        r#"import std.net.{TcpListener, TcpStream};
+fn main() {
     let l = TcpListener.bind("127.0.0.1:0").unwrap();
     let c = TcpStream.connect(l.local_addr().unwrap()).unwrap();
     let s = l.accept().unwrap();

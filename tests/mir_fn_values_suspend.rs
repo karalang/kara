@@ -113,6 +113,7 @@ fn stdout_on_both(name: &str, src: &str) -> String {
 #[test]
 fn mir_fn_value_item_suspends_its_task() {
     let src = r#"
+import std.sync.{TaskGroup};
 struct Handler {
     f: Fn(i64) -> i64 + CrossTask with suspends,
 }
@@ -159,6 +160,7 @@ fn main() {
 #[test]
 fn mir_fn_value_closure_in_an_adapter_suspends() {
     let src = r#"
+import std.sync.{TaskGroup};
 fn slow(n: i64) -> i64 {
     sleep_ms(60);
     n * 2
@@ -193,6 +195,7 @@ fn main() {
 #[test]
 fn mir_fn_value_closure_frame_drops_locals_and_keeps_its_environment() {
     let src = r#"
+import std.sync.{TaskGroup};
 struct Noisy {
     name: String,
 }
@@ -246,6 +249,7 @@ fn main() {
 #[test]
 fn mir_fn_value_cancelled_inside_the_called_frame() {
     let src = r#"
+import std.sync.{Receiver, Sender, TaskGroup};
 struct Noisy {
     name: String,
 }
@@ -297,6 +301,7 @@ fn main() {
 #[test]
 fn mir_fn_value_panics_in_an_isolating_task() {
     let src = r#"
+import std.sync.{TaskFailed, TaskGroup};
 struct Noisy {
     name: String,
 }

@@ -138,7 +138,7 @@ fn stdout_on_both_unordered(name: &str, src: &str) -> String {
 /// pauses: both start before either ends.
 #[test]
 fn mir_tasks_interleave_at_their_pauses() {
-    let src = r#"
+    let src = r#"import std.sync.{TaskGroup};
 fn work(name: Str, n: i64) -> i64 { println(f"{name} start"); sleep_ms(50); println(f"{name} end"); n }
 fn main() {
     let group = TaskGroup.new();
@@ -156,7 +156,7 @@ fn main() {
 /// the executor sleeps once until the nearest deadline.
 #[test]
 fn mir_tasks_pause_concurrently() {
-    let src = r#"
+    let src = r#"import std.sync.{TaskGroup};
 fn work(n: i64) -> i64 { sleep_ms(500); n }
 fn main() {
     let group = TaskGroup.new();
@@ -191,7 +191,7 @@ fn main() {
 /// finding the channel empty.
 #[test]
 fn mir_tasks_recv_waits_for_a_later_producer() {
-    let src = r#"
+    let src = r#"import std.sync.{Channel, Sender, TaskGroup};
 fn produce(tx: Sender[i64], n: i64) { let mut i = 0; while i < n { tx.send(i).unwrap(); println(f"sent {i}"); i += 1; } }
 fn main() {
     let (tx, rx) = Channel.new();
@@ -219,7 +219,7 @@ fn main() {
 /// (what Thread B's `par` lowering of B-2026-10-21-68 needs).
 #[test]
 fn mir_tasks_spawn_a_closure_that_mutates_a_capture() {
-    let src = r#"
+    let src = r#"import std.sync.{Receiver, Sender, TaskGroup};
 fn main() {
     let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1);
     let mut log: Vec[i64] = Vec.new();
@@ -250,7 +250,7 @@ fn main() {
 /// task runs leaves the task to drop the result and free the handle.
 #[test]
 fn mir_tasks_move_owned_results_and_detach_dropped_handles() {
-    let src = r#"
+    let src = r#"import std.sync.{TaskGroup};
 struct Noisy { id: i64 }
 impl Drop for Noisy {
     fn drop(mut ref self) { println(f"drop {self.id}"); }
@@ -276,7 +276,7 @@ fn main() {
 /// deadlock, reported as the interpreter reports it.
 #[test]
 fn mir_tasks_report_a_deadlock() {
-    let src = r#"
+    let src = r#"import std.sync.{Channel, TaskGroup};
 fn main() {
     let (tx, rx) = Channel.new();
     let group = TaskGroup.new();
@@ -303,7 +303,7 @@ fn main() {
 /// copied out of the frame (B-2026-10-15-75).
 #[test]
 fn mir_tasks_serve_clients_spawned_after_the_server() {
-    let src = r#"
+    let src = r#"import std.net.{TcpListener, TcpStream}; import std.sync.{TaskGroup};
 fn serve(listener: TcpListener, n: i64) -> i64 {
     let mut total = 0;
     let mut k = 0;
@@ -367,7 +367,7 @@ fn main() {
 /// two tasks still interleave at their pauses.
 #[test]
 fn mir_tasks_run_a_recursive_coroutine() {
-    let src = r#"
+    let src = r#"import std.sync.{TaskGroup};
 struct R { id: i64 }
 impl Drop for R { fn drop(mut ref self) { println(f"drop {self.id}"); } }
 fn count(n: i64, label: Str) -> i64 {
@@ -400,7 +400,7 @@ fn main() {
 /// before it, so the pauses run one after another.
 #[test]
 fn mir_task_group_limit_bounds_running_tasks() {
-    let src = r#"
+    let src = r#"import std.sync.{TaskGroup};
 fn work(name: Str) -> i64 { println(f"{name} start"); sleep_ms(150); println(f"{name} end"); 1 }
 fn main() {
     let group = TaskGroup.new(limit: 1);
@@ -439,7 +439,7 @@ fn main() {
 /// pause and less than four.
 #[test]
 fn mir_task_group_limit_two_runs_two_at_once() {
-    let src = r#"
+    let src = r#"import std.sync.{TaskGroup, TaskHandle};
 fn main() {
     let group = TaskGroup.new(limit: 2);
     let mut hs: Vec[TaskHandle[i64]] = Vec.new();
@@ -479,7 +479,7 @@ fn main() {
 /// scope that owns it goes on (docs/library/concurrency.md § TaskGroup).
 #[test]
 fn mir_task_group_drop_waits_for_its_tasks() {
-    let src = r#"
+    let src = r#"import std.sync.{TaskGroup};
 fn main() {
     {
         let group = TaskGroup.new();
@@ -502,7 +502,7 @@ fn main() {
 /// channel closes when it returns and `into_iter` ends.
 #[test]
 fn mir_task_that_moves_its_sender_closes_the_channel() {
-    let src = r#"
+    let src = r#"import std.sync.{TaskGroup};
 fn main() {
     let (tx, rx) = channel(1);
     let group = TaskGroup.new();
@@ -530,7 +530,7 @@ fn main() {
 /// came before (B-2026-10-19-56). The interpreter exited 3 with a run error.
 #[test]
 fn mir_a_deadlock_is_a_panic_on_both_backends() {
-    let recv = r#"
+    let recv = r#"import std.sync.{Receiver, Sender};
 fn main() {
     let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1);
     println("start");
@@ -580,7 +580,7 @@ fn main() {
 /// capture that drops after the call, both go through.
 #[test]
 fn mir_tasks_with_span_runs_a_suspending_closure() {
-    let src = r#"
+    let src = r#"import std.tracing.{Log, Span};
 struct Noisy { id: i64 }
 impl Drop for Noisy { fn drop(mut ref self) { println(f"drop {self.id}"); } }
 fn take(n: own Noisy) -> i64 { n.id + 1 }
@@ -612,7 +612,7 @@ fn main() {
 /// task spawned inside one inherits it.
 #[test]
 fn mir_tasks_span_context_is_per_task() {
-    let src = r#"
+    let src = r#"import std.tracing.{Log, Span}; import std.sync.{TaskGroup};
 fn a() -> i64 {
     let s = Span.root("a", 7);
     with_span(s, || { sleep_ms(50); Log.info("a-after"); 1 })
@@ -657,7 +657,7 @@ fn main() {
 /// the producer moves its `Sender` in and closes the channel as it ends.
 #[test]
 fn mir_tasks_par_branches_wait_on_each_other() {
-    let src = r#"
+    let src = r#"import std.sync.{Receiver, Sender};
 fn produce(tx: own Sender[i64]) { for i in 1..4 { tx.send(i).unwrap(); } }
 fn consume(rx: own Receiver[i64]) -> i64 {
     let mut s = 0;
@@ -679,7 +679,7 @@ fn main() {
 /// other results drop, a `Drop` body included (core semantics §11.7).
 #[test]
 fn mir_tasks_par_branches_fail_after_every_task_is_joined() {
-    let src = r#"
+    let src = r#"import std.sync.{Receiver, Sender};
 struct Loud { n: i64 }
 impl Drop for Loud { fn drop(mut ref self) { println(f"drop {self.n}"); } }
 fn loud(n: i64) -> Result[Loud, String] { Ok(Loud { n: n }) }
@@ -725,7 +725,7 @@ fn main() {
 /// tasks overlap, so this check is the one that refuses it.
 #[test]
 fn mir_tasks_par_conflicts_are_seen_through_the_tasks() {
-    let two = r#"
+    let two = r#"import std.sync.{Receiver, SendError, Sender};
 fn produce(tx: Sender[i64], from: i64, to: i64) -> Result[(), SendError[i64]] {
     for i in from..to { tx.send(i)?; }
     Ok(())

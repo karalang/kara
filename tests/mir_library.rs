@@ -314,6 +314,7 @@ fn main() {
 #[test]
 fn the_float_wrappers_compare_by_total_order() {
     let src = r#"
+import std.cmp.{F32, F64};
 fn main() {
     let z = 0.0;
     let a = F64.from(-z);
@@ -1170,7 +1171,9 @@ fn main() {
     assert!(!cli(
         "// A MidiParser reads Args.\nstruct MidiParser { pos: i64 }\nfn main() { println(\"Parser() and Arg\"); }\n"
     ));
-    assert!(cli("fn main() { let p = Parser.new(\"t\"); }\n"));
+    assert!(cli(
+        "import std.cli.{Parser};\nfn main() { let p = Parser.new(\"t\"); }\n"
+    ));
     assert!(cli(r#"fn main() { println(f"{Parser.new("t").name}"); }"#));
 }
 
@@ -1181,6 +1184,7 @@ fn main() {
 fn runtime_introspection_is_empty_on_the_interpreter() {
     assert_runs(
         r#"
+import std.runtime.{Runtime};
 fn main() {
     println(Runtime.list_tasks().len());
     println(Runtime.list_par_blocks().len());

@@ -1329,7 +1329,7 @@ fn test_process_module_resolves() {
 
 #[test]
 fn test_f32_f64_total_order_types_resolve() {
-    resolve_ok("fn main() { let x: F32 = F32 { value: 1.0 }; let y: F64 = F64 { value: 2.0 }; }");
+    resolve_ok("import std.cmp.{F32, F64};\nfn main() { let x: F32 = F32 { value: 1.0 }; let y: F64 = F64 { value: 2.0 }; }");
 }
 
 #[test]
@@ -1340,12 +1340,12 @@ fn test_ordering_variants_resolve() {
 
 #[test]
 fn test_memory_ordering_variants_resolve() {
-    resolve_ok("fn main() { let r = MemoryOrdering.Relaxed; let a = MemoryOrdering.Acquire; }");
+    resolve_ok("import std.sync.{MemoryOrdering};\nfn main() { let r = MemoryOrdering.Relaxed; let a = MemoryOrdering.Acquire; }");
 }
 
 #[test]
 fn test_atomic_resolves() {
-    resolve_ok("fn main() { let a = Atomic.new(0); }");
+    resolve_ok("import std.sync.{Atomic};\nfn main() { let a = Atomic.new(0); }");
 }
 
 /// `float_in_serialized_type` (B-2026-08-21-2). design.md § Floating point >

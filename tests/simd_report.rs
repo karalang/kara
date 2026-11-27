@@ -55,6 +55,7 @@ fn require_simd_rejects_non_power_of_two_lanes() {
     // `Vector[i32, 3]` — 3 lanes is not a power of two, so every op on it
     // (construction + the add) scalarizes. `#[require_simd]` must reject.
     let src = r#"
+import std.simd.{Vector};
         #[require_simd]
         fn add3(a: Vector[i32, 3], b: Vector[i32, 3]) -> Vector[i32, 3] {
             a + b
@@ -104,6 +105,7 @@ fn require_simd_rejects_unsupported_element() {
     // 128-bit vector could not reach the classifier at all). B-2026-08-19-8
     // stage 5 restored the type, so the spec's own example is testable again.
     let src = r#"
+import std.simd.{Vector};
         #[require_simd]
         fn wide(a: Vector[i128, 4], b: Vector[i128, 4]) -> Vector[i128, 4] {
             a + b
@@ -127,6 +129,7 @@ fn require_simd_rejects_unsupported_element() {
 fn require_simd_accepts_native_power_of_two() {
     // `Vector[i32, 4]` = 128 bits = one register → Native; no rejection.
     let src = r#"
+import std.simd.{Vector};
         #[require_simd]
         fn add4(a: Vector[i32, 4], b: Vector[i32, 4]) -> Vector[i32, 4] {
             a + b
@@ -144,6 +147,7 @@ fn require_simd_accepts_wide_power_of_two() {
     // `Vector[i32, 8]` = 256 bits → Wide (two 128-bit ops) — still vectorised,
     // never a scalar loop, so `#[require_simd]` accepts it.
     let src = r#"
+import std.simd.{Vector};
         #[require_simd]
         fn add8(a: Vector[i32, 8], b: Vector[i32, 8]) -> Vector[i32, 8] {
             a + b
@@ -170,6 +174,7 @@ fn without_require_simd_scalar_ops_are_not_errors() {
     // Same scalarizing op, but no attribute — the analysis still records
     // Scalar findings (for `--simd-report`), but they are NOT build errors.
     let src = r#"
+import std.simd.{Vector};
         fn add3(a: Vector[i32, 3], b: Vector[i32, 3]) -> Vector[i32, 3] {
             a + b
         }
@@ -191,6 +196,7 @@ fn without_require_simd_scalar_ops_are_not_errors() {
 fn require_simd_on_impl_method_is_attributed() {
     // The guarantee applies to impl methods too, attributed as `Type.method`.
     let src = r#"
+import std.simd.{Vector};
         struct V3 { x: i32 }
         impl V3 {
             #[require_simd]
@@ -216,6 +222,7 @@ fn comparison_op_classified_by_operand_type() {
     // (Scalar), not by the bool mask. The mask type is internal and cannot be
     // written as a source annotation, so it is inferred and discarded here.
     let src = r#"
+import std.simd.{Vector};
         #[require_simd]
         fn lt(a: Vector[i32, 3], b: Vector[i32, 3]) {
             let _ = a < b;
@@ -246,6 +253,7 @@ fn require_simd_rejects_scalar_reduction() {
     // `(T, N)` is recovered from the typechecker side-table (the method node
     // overwrites its own span with the scalar `i32` result type).
     let src = r#"
+import std.simd.{Vector};
         #[require_simd]
         fn total(a: Vector[i32, 3]) -> i32 {
             a.reduce_sum()
@@ -269,6 +277,7 @@ fn require_simd_rejects_scalar_reduction() {
 #[test]
 fn require_simd_rejects_scalar_dot() {
     let src = r#"
+import std.simd.{Vector};
         #[require_simd]
         fn d(a: Vector[i32, 3], b: Vector[i32, 3]) -> i32 {
             a.dot(b)
@@ -290,6 +299,7 @@ fn require_simd_rejects_scalar_dot() {
 fn require_simd_accepts_native_reduction() {
     // `reduce_sum` on a native (pow2, fits-register) vector is not a Scalar op.
     let src = r#"
+import std.simd.{Vector};
         #[require_simd]
         fn total(a: Vector[f32, 4]) -> f32 {
             a.reduce_sum()
@@ -337,7 +347,7 @@ fn karac_check_flagged(source: &str, name: &str, flags: &[&str]) -> std::process
 
 #[test]
 fn karac_check_rejects_require_simd_scalarization() {
-    let src = "#[require_simd]\n\
+    let src = "import std.simd.{Vector};\n#[require_simd]\n\
         fn add3(a: Vector[i32, 3], b: Vector[i32, 3]) -> Vector[i32, 3] { a + b }\n\
         fn main() {}\n";
     let out = karac_check(src, "reject");

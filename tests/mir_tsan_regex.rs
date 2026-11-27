@@ -61,7 +61,8 @@ fn tsan_run(dir: &Scratch, src: &str) -> Output {
         .expect("run karac")
 }
 
-const MATCHING_TASKS: &str = r#"import std.regex.{Regex};
+const MATCHING_TASKS: &str = r#"import std.sync.{TaskGroup};
+import std.regex.{Regex};
 
 fn hits(k: i64) -> i64 {
     let re = Regex.compile("a+b").unwrap();

@@ -28,7 +28,7 @@ fn karac(src: &str, args: &[&str]) -> String {
     text
 }
 
-const SRC: &str = "sync struct Counter {
+const SRC: &str = "import std.sync.{Atomic, Mutex};\nsync struct Counter {
     name: String,
     count: Atomic[i64],
     state: Mutex[String],

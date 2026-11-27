@@ -18,6 +18,7 @@ fn run(src: &str) -> (String, String, i32) {
 #[test]
 fn mir_isolating_spawn_of_a_function_value() {
     let src = r#"
+import std.sync.{TaskFailed, TaskGroup};
 struct Job { n: i64 }
 
 impl Job {

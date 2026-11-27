@@ -128,7 +128,7 @@ fn main() {
     );
     let check = karac(&["check"], &path);
     assert!(
-        text(&check).contains("which needs no import"),
+        text(&check).contains("`TaskGroup` (`import std.sync.{TaskGroup};`)"),
         "{}",
         text(&check)
     );

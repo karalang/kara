@@ -10,6 +10,7 @@ use karac::mir::interp::Outcome;
 #[test]
 fn mir_isolating_panic_after_a_wait_ends_only_its_task() {
     let src = r#"
+import std.sync.{TaskFailed, TaskGroup};
 fn boom(n: i64) -> i64 {
     let none: Option[i64] = None;
     none.unwrap() + n

@@ -62,7 +62,8 @@ fn a_byte_array_passed_by_value_reaches_io_natives_on_every_lane() {
     }
 }
 
-const PROGRAM: &str = r#"import std.net.{TcpListener, TcpStream};
+const PROGRAM: &str = r#"import std.io.{File};
+import std.net.{TcpListener, TcpStream};
 fn main() {
     let f = File.create("x.bin").unwrap();
     println(f.write(b"hello").unwrap());

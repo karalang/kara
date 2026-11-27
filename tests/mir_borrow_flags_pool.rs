@@ -10,7 +10,7 @@ mod common;
 
 use std::process::Command;
 
-const APART: &str = r#"shared struct Bag { mut items: Vec[i64] }
+const APART: &str = r#"import std.sync.{TaskGroup, TaskHandle}; shared struct Bag { mut items: Vec[i64] }
 fn add_all(src: Bag, dst: Bag) {
     for x in src.items {
         sleep_ms(1);
@@ -34,7 +34,7 @@ fn main() {
 }
 "#;
 
-const ALIAS: &str = r#"shared struct Bag { mut items: Vec[i64] }
+const ALIAS: &str = r#"import std.sync.{TaskGroup, TaskHandle}; shared struct Bag { mut items: Vec[i64] }
 fn add_all(src: Bag, dst: Bag) {
     for x in src.items {
         sleep_ms(1);

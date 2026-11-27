@@ -83,7 +83,8 @@ fn assert_both(name: &str, src: &str, want: &str) {
 /// buffer reads nothing.
 #[test]
 fn tcp_read_exact_fills_across_writes_and_reports_the_early_end() {
-    let src = r#"fn main() {
+    let src = r#"import std.net.{TcpListener, TcpStream};
+fn main() {
     let l = TcpListener.bind("127.0.0.1:0").unwrap();
     let c = TcpStream.connect(l.local_addr().unwrap()).unwrap();
     let s = l.accept().unwrap();
@@ -118,7 +119,8 @@ fn tcp_read_exact_fills_across_writes_and_reports_the_early_end() {
 /// early end.
 #[test]
 fn file_and_pipe_read_exact_end_with_unexpected_eof() {
-    let src = r#"fn main() {
+    let src = r#"import std.io.{File}; import std.process.{Command, Stdio};
+fn main() {
     fs.write("data.bin", "abcdefghij").unwrap();
     let f = File.open("data.bin").unwrap();
     let mut a = [0u8; 4];
@@ -152,7 +154,8 @@ fn file_and_pipe_read_exact_end_with_unexpected_eof() {
 /// variants keep their name, the rest are `Other` of the display.
 #[test]
 fn question_mark_converts_net_error_into_io_error() {
-    let src = r#"fn first_byte(c: ref TcpStream, path: Str) -> Result[i64, IoError] {
+    let src = r#"import std.net.{TcpListener, TcpStream};
+fn first_byte(c: ref TcpStream, path: Str) -> Result[i64, IoError] {
     let text = fs.read_to_string(path)?;
     let mut b = [0u8; 1];
     c.read_exact(mut b)?;
@@ -182,7 +185,8 @@ fn main() {
     );
 }
 
-const FAKE: &str = r#"import std.io.{BufReader};
+const FAKE: &str = r#"import std.net.{TcpStream};
+import std.io.{BufReader};
 
 struct Fake { n: i64, given: i64 }
 
@@ -252,7 +256,8 @@ fn read_exact_over_a_fake_socket() {
 /// so the reads take the buffered bytes first and then refill), over a
 /// socket on the main task and inside a spawned one, and over a child's
 /// stdout; an early end is `IoError.UnexpectedEof`.
-const BUFFERED: &str = r#"import std.io.{BufReader};
+const BUFFERED: &str = r#"import std.io.{File}; import std.net.{TcpListener, TcpStream}; import std.process.{Command, Stdio};
+import std.io.{BufReader};
 import std.sync.{TaskGroup};
 
 fn file_part() {
@@ -332,7 +337,7 @@ fn bufreader_read_exact_over_a_socket_has_the_socket_effects() {
     let file = dir.path().join("main.kara");
     std::fs::write(
         &file,
-        "import std.io.{BufReader};\n\
+        "import std.net.{TcpStream};\nimport std.io.{BufReader};\n\
          fn head(r: ref BufReader[TcpStream]) -> u8 {\n\
          \x20   let mut b = [0u8; 2];\n\
          \x20   r.read_exact(mut b).unwrap();\n\

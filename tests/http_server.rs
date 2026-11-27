@@ -262,6 +262,7 @@ mod http_server_tests {
         // demo-shaped even though the handler itself is a fixed
         // string in v1.
         let src = r#"
+import std.net.{Server};
             fn main() {
                 let addr = "127.0.0.1:0";
                 let body = "{\"profile\":{\"name\":\"Alice\"},\"latest_orders\":[],\"top_notification\":{},\"top_recommendation\":{}}";
@@ -397,6 +398,7 @@ mod http_server_tests {
         // / `Request.path()` dispatch arms are registered as compiler
         // builtins regardless.
         let src = r#"
+import std.net.{Request, Server};
             struct Response { status: i64, body: String }
 
             fn handle(req: Request) -> Response {
@@ -556,6 +558,7 @@ mod http_server_tests {
     fn test_server_serve_handler_reads_path() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = r#"
+import std.net.{Request, Server};
             struct Response { status: i64, body: String }
 
             fn handle(req: Request) -> Response {
@@ -584,6 +587,7 @@ mod http_server_tests {
     fn test_server_serve_handler_reads_method() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = r#"
+import std.net.{Request, Server};
             struct Response { status: i64, body: String }
 
             fn handle(req: Request) -> Response {
@@ -713,6 +717,7 @@ mod http_server_tests {
     fn test_server_serve_handler_reads_body() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = r#"
+import std.net.{Request, Server};
             struct Response { status: i64, body: String }
 
             fn handle(req: Request) -> Response {
@@ -743,6 +748,7 @@ mod http_server_tests {
     fn test_server_serve_handler_empty_body_for_get() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = r#"
+import std.net.{Request, Server};
             struct Response { status: i64, body: String }
 
             fn handle(req: Request) -> Response {
@@ -884,6 +890,7 @@ mod http_server_tests {
     fn test_server_serve_handler_reads_header() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = r#"
+import std.net.{Request, Server};
             struct Response { status: i64, body: String }
 
             fn handle(req: Request) -> Response {
@@ -920,6 +927,7 @@ mod http_server_tests {
     fn test_server_serve_handler_header_lookup_case_insensitive() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = r#"
+import std.net.{Request, Server};
             struct Response { status: i64, body: String }
 
             fn handle(req: Request) -> Response {
@@ -955,6 +963,7 @@ mod http_server_tests {
     fn test_server_serve_handler_header_absent_returns_none() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = r#"
+import std.net.{Request, Server};
             struct Response { status: i64, body: String }
 
             fn handle(req: Request) -> Response {
@@ -1000,6 +1009,7 @@ mod http_server_tests {
         // literal (no String concat — concat is codegen-only, not
         // typechecker-supported — and no capture of a Vec-owned String).
         let src = r#"
+import std.net.{Request, Server};
             struct Response { status: i64, body: String }
 
             fn handle(req: Request) -> Response {
@@ -1057,6 +1067,7 @@ mod http_server_tests {
         // present (proving more than one pair iterates). Body is a fixed
         // marker literal so nothing aliases the Vec's element Strings.
         let src = r#"
+import std.net.{Request, Server};
             struct Response { status: i64, body: String }
 
             fn handle(req: Request) -> Response {
@@ -1262,6 +1273,7 @@ mod http_server_tests {
 
         let src = format!(
             r#"
+import std.net.{{Request, Server}};
             struct Response {{ status: i64, body: String }}
 
             fn handle(req: Request) -> Response {{
@@ -1368,6 +1380,7 @@ mod http_server_tests {
     fn test_server_serve_handler_sets_response_headers() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = r#"
+import std.net.{Request, Server};
             struct Response { status: i64, body: String, headers: Vec[(String, String)] }
 
             fn handle(req: Request) -> Response {
@@ -1492,6 +1505,7 @@ mod http_server_tests {
     fn test_server_serve_handler_keep_alive_persistence() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = r#"
+import std.net.{Request, Server};
             struct Response { status: i64, body: String }
 
             fn handle(req: Request) -> Response {
@@ -1677,6 +1691,7 @@ mod http_server_tests {
     fn test_server_serve_handler_chunked_request_body_decode() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = r#"
+import std.net.{Request, Server};
             struct Response { status: i64, body: String }
 
             fn handle(req: Request) -> Response {
@@ -1858,6 +1873,7 @@ mod http_server_tests {
         let url = format!("http://127.0.0.1:{port}/test");
         let src = format!(
             r#"
+import std.net.{{Client}};
 fn main() with sends(Network) receives(Network) writes(Stdout) {{
     let url: String = "{url}";
     let c = Client.new();
@@ -1961,6 +1977,7 @@ fn main() with sends(Network) receives(Network) writes(Stdout) {{
         let url = format!("http://127.0.0.1:{port}/bin");
         let src = format!(
             r#"
+import std.net.{{Client}};
 fn main() with sends(Network) receives(Network) writes(Stdout) {{
     let url: String = "{url}";
     let c = Client.new();
@@ -2061,6 +2078,7 @@ fn main() with sends(Network) receives(Network) writes(Stdout) {{
         let url = format!("http://127.0.0.1:{port}/hdr");
         let src = format!(
             r#"
+import std.net.{{Client}};
 fn main() with sends(Network) receives(Network) writes(Stdout) {{
     let url: String = "{url}";
     let c = Client.new();
@@ -2171,6 +2189,7 @@ fn main() with sends(Network) receives(Network) writes(Stdout) {{
         let url = format!("http://127.0.0.1:{port}/hdrs");
         let src = format!(
             r#"
+import std.net.{{Client}};
 fn main() with sends(Network) receives(Network) writes(Stdout) {{
     let url: String = "{url}";
     let c = Client.new();
@@ -2281,6 +2300,7 @@ fn main() with sends(Network) receives(Network) writes(Stdout) {{
         // the arms' types wouldn't unify.)
         let src = format!(
             r#"
+import std.net.{{Client}};
 fn main() with sends(Network) receives(Network) writes(Stdout) {{
     let url: String = "{url}";
     let c = Client.new();
@@ -2408,6 +2428,7 @@ fn main() with sends(Network) receives(Network) writes(Stdout) {{
         let url = format!("http://127.0.0.1:{port}/test");
         let src = format!(
             r#"
+import std.net.{{Client}};
 fn main() with sends(Network) receives(Network) writes(Stdout) {{
     let url: String = "{url}";
     let c = Client.new();
@@ -2698,6 +2719,7 @@ fn main() with sends(Network) receives(Network) writes(Stdout) {{
     fn test_http2_h2c_prior_knowledge_handler() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = r#"
+import std.net.{Request, Server};
             struct Response { status: i64, body: String }
 
             fn handle(req: Request) -> Response {
@@ -2731,6 +2753,7 @@ fn main() with sends(Network) receives(Network) writes(Stdout) {{
     fn test_http2_multiplexed_streams() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = r#"
+import std.net.{Request, Server};
             struct Response { status: i64, body: String }
 
             fn handle(req: Request) -> Response {
@@ -2770,6 +2793,7 @@ fn main() with sends(Network) receives(Network) writes(Stdout) {{
     fn test_http1_still_served_under_auto_builder() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = r#"
+import std.net.{Request, Server};
             struct Response { status: i64, body: String }
 
             fn handle(req: Request) -> Response {
@@ -2827,6 +2851,7 @@ fn main() with sends(Network) receives(Network) writes(Stdout) {{
 
         let src = format!(
             r#"
+import std.net.{{Request, Server}};
             struct Response {{ status: i64, body: String }}
 
             fn handle(req: Request) -> Response {{
@@ -2895,6 +2920,7 @@ fn main() with sends(Network) receives(Network) writes(Stdout) {{
         std::env::set_var("KARAC_RUNTIME", &rt);
 
         let src = r#"
+import std.net.{Request, Response, Server, WebSocket};
             fn route(req: Request) -> Response {
                 match req.path() {
                     "/ws" => Response { status: 101, body: "" },
@@ -3120,6 +3146,7 @@ fn main() with sends(Network) receives(Network) writes(Stdout) {{
         let key_lit = kara_escape(&key_pem);
         let src = format!(
             r#"
+import std.net.{{Request, Response, Server, WebSocket}};
             fn route(req: Request) -> Response {{
                 match req.path() {{
                     "/ws" => Response {{ status: 101, body: "" }},
@@ -3510,6 +3537,7 @@ fn main() with sends(Network) receives(Network) writes(Stdout) {{
     fn run_client_get_binary(url: &str, extra_ca_pem: Option<&str>, tag: &str) -> String {
         let src = format!(
             r#"
+import std.net.{{Client}};
 fn main() with sends(Network) receives(Network) writes(Stdout) {{
     let url: String = "{url}";
     let c = Client.new();
@@ -3705,6 +3733,7 @@ fn main() with sends(Network) receives(Network) writes(Stdout) {{
     fn test_http2_sibling_streams_run_concurrently() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let src = r#"
+import std.net.{Request, Server};
             struct Response { status: i64, body: String }
 
             fn handle(req: Request) -> Response {

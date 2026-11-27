@@ -51,7 +51,8 @@ fn mir_tsan_normalizing_tasks_link_the_tsan_unicode_archive() {
     let src = dir.0.join("main.kara");
     std::fs::write(
         &src,
-        r#"fn nfc_len(k: i64) -> i64 {
+        r#"import std.sync.{TaskGroup};
+fn nfc_len(k: i64) -> i64 {
     let mut n = 0;
     for _ in 0..50 {
         let s = f"cafe\u{301}-{k}";

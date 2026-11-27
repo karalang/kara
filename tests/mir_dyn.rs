@@ -999,7 +999,8 @@ fn mir_dyn_refuses_other_trait_arguments_and_uncloned_copies() {
 #[test]
 fn mir_dyn_suspends_in_a_slot() {
     runs(
-        r#"trait Handler {
+        r#"import std.sync.{Receiver, TaskGroup};
+trait Handler {
     fn handle(ref self, req: i64) -> i64;
 }
 struct Echo {}
@@ -1059,7 +1060,8 @@ answered 2
 ",
     );
     runs(
-        r#"trait Job {
+        r#"import std.sync.{Receiver, TaskGroup};
+trait Job {
     fn step(mut ref self) -> i64;
     fn finish(own self) -> i64;
 }

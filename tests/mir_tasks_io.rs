@@ -111,6 +111,7 @@ fn stdout_on_both(name: &str, src: &str) -> String {
 #[test]
 fn mir_tasks_a_write_into_a_full_buffer_lets_the_reader_run() {
     let src = r#"
+import std.net.{TcpListener, TcpStream}; import std.sync.{TaskGroup};
 fn reader(conn: TcpStream, want: i64) -> i64 {
     let mut got = 0;
     let mut buf: Array[u8, 4096] = [0u8; 4096];
@@ -152,6 +153,7 @@ fn main() {
 #[test]
 fn mir_tasks_a_recv_waits_for_a_later_sender() {
     let src = r#"
+import std.sync.{TaskGroup};
 fn send(to: String) {
     sleep_ms(50);
     let s = UdpSocket.bind("127.0.0.1:0").unwrap();
@@ -183,6 +185,7 @@ fn main() {
 #[test]
 fn mir_tasks_a_child_wait_lets_other_tasks_run() {
     let src = r#"
+import std.process.{Command}; import std.sync.{TaskGroup};
 fn ticks(n: i64) {
     let mut i = 0;
     while i < n {
@@ -216,6 +219,7 @@ fn main() {
 #[test]
 fn mir_tasks_a_pipe_read_lets_the_writer_run() {
     let src = r#"
+import std.process.{ChildStdin, ChildStdout, Command, Stdio}; import std.sync.{TaskGroup};
 fn reader(out: own ChildStdout) {
     let mut s = String.new();
     match out.read_to_string(s) {
@@ -326,6 +330,7 @@ fn pairs_server() -> u16 {
 fn mir_tasks_an_http_request_lets_the_next_task_send_its_own() {
     let port = pairs_server();
     let src = r#"
+import std.net.{Client}; import std.sync.{TaskGroup};
 fn fetch(url: own String) {
     let c = Client.new();
     match c.get(url) {
@@ -373,6 +378,7 @@ fn silent_server() -> u16 {
 fn mir_tasks_a_cancelled_http_request_tears_its_task_down() {
     let port = silent_server();
     let src = r#"
+import std.net.{Client}; import std.sync.{TaskGroup};
 fn fetch(url: own String) -> i64 {
     let c = Client.new();
     match c.get(url) {

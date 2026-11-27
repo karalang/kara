@@ -8,7 +8,7 @@ use karac::mir::interp::Outcome;
 
 #[test]
 fn mir_isolating_panic_in_a_library_body_is_placed_at_the_call() {
-    let src = r#"
+    let src = r#"import std.sync.{TaskFailed, TaskGroup};
 fn parse_it(s: String) -> i64 {
     let n = i64.parse(s).unwrap();
     n

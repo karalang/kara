@@ -84,7 +84,7 @@ fn a_deadlock_among_lock_waits_names_the_locks_and_their_places() {
     }
 }
 
-const CHANNELS: &str = r#"fn main() {
+const CHANNELS: &str = r#"import std.sync.{Receiver, Sender, TaskGroup}; fn main() {
     let (tx1, rx1): (Sender[i64], Receiver[i64]) = channel(1);
     let (tx2, rx2): (Sender[i64], Receiver[i64]) = channel(1);
     let group = TaskGroup.new();

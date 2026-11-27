@@ -29,6 +29,7 @@ fn run(name: &str, src: &str) -> String {
 #[test]
 fn mir_for_over_a_channel_of_function_values_passes_the_borrow_check() {
     let src = r#"
+import std.sync.{Receiver, Sender};
 fn main() {
     let (tx, rx): (Sender[Fn(i64) -> i64 + CrossTask], Receiver[Fn(i64) -> i64 + CrossTask]) = channel(4);
     tx.send(|x| x * 3).unwrap();
@@ -47,6 +48,7 @@ fn main() {
 #[test]
 fn mir_an_iterator_whose_next_is_try_recv_of_function_values_passes_the_borrow_check() {
     let src = r#"
+import std.sync.{Receiver, Sender};
 struct Jobs {
     rx: Receiver[Fn(i64) -> i64 + CrossTask],
 }

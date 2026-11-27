@@ -25,6 +25,7 @@ fn scratch(tag: &str, src: &str) -> std::path::PathBuf {
 }
 
 const LINES: &str = r#"
+import std.io.{BufReader, File}; import std.net.{TcpStream};
 fn main() {
     let _ = fs.write_bytes("bad.txt", [0x6fu8, 0x6bu8, 0x0au8, 0xffu8, 0x0au8, 0x41u8, 0x0au8]);
     let r = BufReader.new(File.open("bad.txt").unwrap());
@@ -106,6 +107,7 @@ fn compiled_lines_end_at_first_error() {
 }
 
 const SERVER: &str = r#"
+import std.net.{Response, Server};
 fn main() {
     let _ = Server.serve("127.0.0.1:0".to_string(), |req| Response { status: 200, body: req.path() });
 }

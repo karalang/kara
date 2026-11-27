@@ -89,7 +89,8 @@ finish 5 253
 1 1 1 1 2 2 1 1
 "#;
 
-const OWN: &str = r#"struct Name { text: String }
+const OWN: &str = r#"import std.hash.{FxBuildHasher};
+struct Name { text: String }
 impl Hash for Name {
     fn hash[H: Hasher](ref self, hasher: mut ref H) {
         println(f"hash {self.text}");

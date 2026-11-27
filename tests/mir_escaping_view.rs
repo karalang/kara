@@ -52,7 +52,7 @@ fn main() {
 }
 "#;
 
-const INTO_CHANNEL: &str = r#"
+const INTO_CHANNEL: &str = r#"import std.sync.{Receiver, Sender};
 fn main() {
     let s = "a".to_string();
     let (tx, rx): (Sender[ref String], Receiver[ref String]) = channel(1);

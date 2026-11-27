@@ -117,6 +117,7 @@ fn stdout_on_both_env(name: &str, src: &str, env: &[(&str, &str)]) -> String {
 #[test]
 fn mir_reactor_many_parked_readers_each_wake_for_their_own_socket() {
     let src = r#"
+import std.net.{TcpListener, TcpStream}; import std.sync.{TaskGroup};
 fn serve(conn: TcpStream) -> i64 {
     let mut buf: Array[u8, 8] = [0u8; 8];
     match conn.read(mut buf) {
@@ -164,6 +165,7 @@ fn main() {
 #[test]
 fn mir_reactor_a_connect_in_a_task_waits_while_the_acceptor_runs() {
     let src = r#"
+import std.net.{TcpListener, TcpStream}; import std.sync.{TaskGroup};
 fn client(at: String) -> i64 {
     let s = TcpStream.connect(at).unwrap();
     let msg: Vec[u8] = Vec.filled(3, 1u8);
@@ -211,6 +213,7 @@ fn main() {
 #[test]
 fn mir_reactor_sleepers_wake_in_deadline_order_beside_a_parked_task() {
     let src = r#"
+import std.net.{TcpListener, TcpStream}; import std.sync.{TaskGroup};
 fn nap(ms: i64, tag: i64) -> i64 {
     sleep_ms(ms);
     println(f"{tag}");
@@ -258,6 +261,7 @@ fn main() {
 #[test]
 fn mir_reactor_pool_sleepers_wake_in_deadline_order() {
     let src = r#"
+import std.net.{TcpListener, TcpStream}; import std.sync.{TaskGroup};
 fn nap(ms: i64, tag: i64) -> i64 {
     sleep_ms(ms);
     println(f"{tag}");

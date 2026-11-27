@@ -8,7 +8,8 @@ mod common;
 
 use std::process::Command;
 
-const SRC: &str = r#"fn main() {
+const SRC: &str = r#"import std.process.{Command, Stdio};
+fn main() {
     let b = Command.new("printf").arg("x").stdout(Stdio.piped()).spawn().unwrap();
     let out = b.wait_with_output().unwrap();
     println(f"[{String.from_utf8(out.stdout).unwrap()}] {out.status.code().unwrap()}");

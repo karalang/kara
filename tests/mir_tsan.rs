@@ -154,7 +154,8 @@ fn mir_tsan_runs_a_kara_programs_tasks_on_four_workers() {
     let src = dir.path().join("main.kara");
     std::fs::write(
         &src,
-        r#"fn sq(x: i64) -> i64 {
+        r#"import std.sync.{TaskGroup};
+fn sq(x: i64) -> i64 {
     let mut v: Vec[i64] = Vec.new();
     for i in 0..1000 {
         v.push(i * x);

@@ -19293,7 +19293,7 @@ fn run_via_jit_executes_network_boundary_fn_body() {
 fn uncalled_network_boundary_fn_builds_at_o0_and_runs_on_the_jit() {
     use std::process::Command;
 
-    let handler = "import std.net.{WebSocket};\nfn handle_ws(ws: own WebSocket) {\n\
+    let handler = "import std.net.{TcpListener, WebSocket};\nfn handle_ws(ws: own WebSocket) {\n\
                    \x20   let mut ws = ws;\n\
                    \x20   loop {\n\
                    \x20       match ws.recv() {\n\

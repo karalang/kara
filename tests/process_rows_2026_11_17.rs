@@ -56,7 +56,8 @@ fn skipped(mode: &str, err: &str) -> bool {
     mode != "__mir-run" && err.contains("runtime archive")
 }
 
-const SHOW: &str = "fn show(r: Result[ExitStatus, IoError]) -> String {
+const SHOW: &str =
+    "import std.process.{ExitStatus};\nfn show(r: Result[ExitStatus, IoError]) -> String {
     match r {
         Ok(st) => f\"ok {st.code().unwrap()}\",
         Err(IoError.NotFound) => \"not found\".to_string(),
@@ -74,7 +75,7 @@ fn command_env_entries_no_environment_holds_start_nothing() {
         let dir = scratch("env");
         let marker = dir.join("ran");
         let src = format!(
-            "{SHOW}fn main() {{
+            "import std.process.{{Command, ExitStatus}};\n{SHOW}fn main() {{
     let touch = \"touch {m}\";
     println(show(Command.new(\"sh\").arg(\"-c\").arg(touch).env(\"A=B\", \"c\").status()));
     println(show(Command.new(\"sh\").arg(\"-c\").arg(touch).env(\"\", \"c\").status()));
@@ -108,7 +109,7 @@ fn spawn_failures_take_the_kinds_io_md_lists() {
         let file = dir.join("plain.txt");
         std::fs::write(&file, "x").unwrap();
         let src = format!(
-            "{SHOW}fn main() {{
+            "import std.process.{{Command, ExitStatus}};\n{SHOW}fn main() {{
     println(show(Command.new(\"{b}\").status()));
     println(show(Command.new(\"true\").current_dir(\"{f}\").status()));
     println(show(Command.new(\"no-such-program-kara\").status()));
@@ -140,7 +141,7 @@ fn a_command_path_finds_the_program() {
         std::fs::write(&prog, "#!/bin/sh\nexit 7\n").unwrap();
         std::fs::set_permissions(&prog, std::fs::Permissions::from_mode(0o755)).unwrap();
         let src = format!(
-            "{SHOW}fn main() {{
+            "import std.process.{{Command, ExitStatus}};\n{SHOW}fn main() {{
     println(show(Command.new(\"myprog_px\").env(\"PATH\", \"{b}\").status()));
     println(show(Command.new(\"myprog_px\").current_dir(\"{b}\").status()));
 }}

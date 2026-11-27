@@ -17,7 +17,7 @@ mod common;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-const SRC: &str = r#"
+const SRC: &str = r#"import std.sync.{Semaphore};
 import std.sync.{Atomic, TaskGroup};
 import std.time.{Instant};
 

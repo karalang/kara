@@ -193,7 +193,7 @@ fn main() {
 
 /// `#[derive(Serialize, Deserialize)]` and `Json` compiled: the same text
 /// as on the MIR interpreter (`tests/mir_serde.rs`), at -O0 and -O2.
-const SERDE_PROGRAM: &str = r#"
+const SERDE_PROGRAM: &str = r#"import std.json.{Json};
 #[derive(Serialize, Deserialize)]
 struct Config {
     #[serde(rename: "server_name")]
@@ -628,7 +628,7 @@ fn mir_a_cast_into_a_wider_place_widens() {
 /// mir-llvm, `test_e2e_float_wrapper_value_field_from_enum_payload`).
 #[test]
 fn mir_float_arithmetic_into_a_wider_place_widens() {
-    const SRC: &str = "enum Num { I(i64), F(F32) }\n\
+    const SRC: &str = "import std.cmp.{F32}; enum Num { I(i64), F(F32) }\n\
         fn arith(n: Num) -> f64 { match n { I(x) => x as f64, F(f) => f.value + 1.0 } }\n\
         fn twice(f: f32) -> f64 { f * 2.0 }\n\
         fn neg(f: f32) -> f64 { -f }\n\
@@ -1033,7 +1033,7 @@ fn main() {
     println(f"{sum} {top[1]} {top.len()}");
 }
 "#;
-    const TASKS: &str = r#"fn walk(n: i64) -> i64 {
+    const TASKS: &str = r#"import std.sync.{TaskGroup}; fn walk(n: i64) -> i64 {
     let steps = [3, 5, 7];
     let mut t = 0;
     for s in [1, 2] {
@@ -6823,7 +6823,7 @@ fn main() {
 fn mir_atomics_take_no_ordering() {
     // B-2026-10-19-67: every atomic operation is sequentially consistent and
     // takes no ordering; the deprecated trailing `MemoryOrdering` still runs.
-    const SRC: &str = r#"sync struct Counter { count: Atomic[i64] }
+    const SRC: &str = r#"import std.sync.{Atomic, MemoryOrdering}; sync struct Counter { count: Atomic[i64] }
 fn bump(c: ref Counter) { let _ = c.count.fetch_add(1); }
 fn main() {
     let c = Counter { count: Atomic.new(0) };
@@ -7524,7 +7524,7 @@ fn mir_panic_handler_runs_once_before_the_exit() {
             "once\n",
         ),
         (
-            "#[panic_handler]\nfn on_panic(info: PanicInfo) {\n    \
+            "import std.sync.{Channel, Receiver, Sender}; #[panic_handler]\nfn on_panic(info: PanicInfo) {\n    \
              println(f\"[{info.message}] [{info.location}]\");\n}\n\
              fn main() {\n    let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();\n    \
              let v = rx.recv();\n    println(v.is_some());\n    let _ = tx.send(1);\n}\n",
@@ -7764,7 +7764,7 @@ fn main() { println(f"{pick(true)} {pick(false)}"); }
             "1 6\n",
         ),
         (
-            r#"struct FakeEnv {}
+            r#"import std.env.{EnvProvider}; struct FakeEnv {}
 impl EnvProvider for FakeEnv { fn args(ref self) -> Vec[String] { ["p", "x", "y"] } }
 fn count() -> i64 with reads(Env) { env.args().len() }
 fn main() {
@@ -8873,7 +8873,7 @@ fn mir_uppercase_local_field_paths() {
 /// `map` and bound to a local, are the library's wrapper constructors.
 #[test]
 fn mir_the_float_wrapper_constructor_as_a_value() {
-    let src = r#"fn main() {
+    let src = r#"import std.cmp.{F32, F64}; fn main() {
     let a: Vec[f64] = [3.0, 1.0, 2.0];
     let w: Vec[F64] = a.iter().map(F64.from).collect();
     let hi: F64 = w.iter().max().unwrap();

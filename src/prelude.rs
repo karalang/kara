@@ -2600,7 +2600,8 @@ pub const LIBRARY_GLOBAL_MODULES: &[(&[&str], &[&str], &[&str])] = &[
     (&["std", "gpu"], &["GpuBuffer"], &[]),
     (
         &["std", "embedded"],
-        &["VolatileCell", "CriticalSectionGuard"],
+        // `VolatileCell` is deferred (library_imports::DEFERRED_LIBRARY_NAMES).
+        &["CriticalSectionGuard"],
         &[],
     ),
     (

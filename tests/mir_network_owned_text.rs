@@ -38,7 +38,7 @@ impl Drop for Scratch {
     }
 }
 
-const FAKE: &str = r#"struct Fh { n: i64 }
+const FAKE: &str = r#"import std.net.{HttpError, Request, Response}; struct Fh { n: i64 }
 impl NetworkProvider for Fh {
     fn send(mut ref self, req: Request) -> Result[Response, HttpError] {
         self.n += 1;
@@ -132,7 +132,7 @@ fn every_lane(name: &str, main: &str, want: &str) {
 fn client_get_and_post_take_a_string_url_under_a_fake() {
     every_lane(
         "strings",
-        r#"fn main() {
+        r#"import std.net.{Client}; fn main() {
     with_provider[Network](Fh { n: 0 }, || {
         let c = Client.new();
         let url = "http://x/a".to_string();
@@ -157,7 +157,7 @@ fn client_get_and_post_take_a_string_url_under_a_fake() {
 fn client_get_and_post_take_literals_under_a_fake() {
     every_lane(
         "literals",
-        r#"fn main() {
+        r#"import std.net.{Client}; fn main() {
     with_provider[Network](Fh { n: 0 }, || {
         let c = Client.new();
         show(c.get("http://x/l"));

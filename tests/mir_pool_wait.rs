@@ -136,7 +136,7 @@ fn take(pool: ref Pool[Conn, String], ms: i64) -> Result[i64, PoolError[String]]
 fn mir_pool_acquire_waits_for_a_value_to_come_back() {
     let src = format!(
         "{PRELUDE}{}",
-        r#"
+        r#"import std.pool.{Pool}; import std.sync.{TaskGroup};
 fn waiter(pool: own Pool[Conn, String]) {
     println(f"waiter {show(take(pool, 5000))}");
 }
@@ -166,7 +166,7 @@ fn main() {
 fn mir_pool_acquire_times_out_or_is_busy() {
     let src = format!(
         "{PRELUDE}{}",
-        r#"
+        r#"import std.pool.{Pool}; import std.sync.{TaskGroup};
 fn waiter(pool: own Pool[Conn, String], ms: i64) {
     println(f"waiter {show(take(pool, ms))}");
 }
@@ -200,7 +200,7 @@ fn main() {
 fn mir_pool_acquire_past_max_waiters_is_busy() {
     let src = format!(
         "{PRELUDE}{}",
-        r#"
+        r#"import std.pool.{Pool}; import std.sync.{TaskGroup};
 fn main() {
     let pool: Pool[Conn, String] = Pool.new(|| conn(9), 1, 1);
     let group = TaskGroup.new();

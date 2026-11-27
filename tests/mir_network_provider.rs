@@ -86,7 +86,7 @@ fn assert_both(name: &str, src: &str, want: &str) {
 /// a refusal comes back as the fake's error, and its drop calls `close`.
 /// A stream kept past the override fails with `ProviderUnavailable` and
 /// drops quietly.
-const CLIENT: &str = r#"
+const CLIENT: &str = r#"import std.net.{TcpStream};
 struct Fake { n: i64, data: Vec[u8] }
 
 impl NetworkProvider for Fake {
@@ -178,7 +178,7 @@ fn provider_network_override_takes_client_sockets() {
 /// A server in a `providers` block: `bind` and `accept` reach the fake,
 /// an accepted stream belongs to it too, its errors keep their payloads,
 /// and `try_clone` on a fake's socket is `Unsupported`.
-const SERVER: &str = r#"
+const SERVER: &str = r#"import std.net.{TcpListener};
 struct Wire { next: i64, pending: Vec[i64], log: Vec[String] }
 
 impl NetworkProvider for Wire {
@@ -282,7 +282,7 @@ fn provider_network_block_takes_listeners_and_accepted_streams() {
 
 /// A socket reaches the fake it was opened under inside a nested override,
 /// and from a task, whose read of a fake's stream completes at once.
-const NESTED: &str = r#"
+const NESTED: &str = r#"import std.net.{TcpStream}; import std.sync.{TaskGroup};
 struct Named { name: String, next: i64 }
 
 impl NetworkProvider for Named {
@@ -351,7 +351,7 @@ fn provider_network_fake_in_a_test_file_leaves_the_build_alone() {
     .unwrap();
     std::fs::write(
         root.join("src/main.kara"),
-        r#"pub fn peek(s: ref TcpStream) -> i64 with sends(Network) receives(Network) blocks suspends {
+        r#"import std.net.{TcpListener, TcpStream}; pub fn peek(s: ref TcpStream) -> i64 with sends(Network) receives(Network) blocks suspends {
     let mut b = [0u8; 2];
     match s.read(b[..]) {
         Ok(n) => n,
@@ -378,7 +378,7 @@ fn main() {
     .unwrap();
     std::fs::write(
         root.join("src/main_test.kara"),
-        r#"struct Fake { }
+        r#"import std.net.{TcpStream}; struct Fake { }
 
 impl NetworkProvider for Fake {
     fn connect(mut ref self, addr: Str) -> Result[i64, NetError] { Ok(1) }
@@ -444,7 +444,7 @@ test "refused names NetError" {
 fn provider_network_send_takes_the_http_client() {
     assert_both(
         "http",
-        r#"struct Recorder { seen: i64 }
+        r#"import std.net.{Client, HttpError, Request, Response}; struct Recorder { seen: i64 }
 
 impl NetworkProvider for Recorder {
     fn send(mut ref self, req: Request) -> Result[Response, HttpError] {
@@ -504,7 +504,7 @@ err down
 #[cfg(target_os = "linux")]
 #[test]
 fn provider_network_built_requests_are_freed() {
-    let src = "fn main() {\n\
+    let src = "import std.net.{Request}; fn main() {\n\
                    let mut n = 0;\n\
                    for i in 0..ROUNDS {\n\
                        let r = Request.new(\"GET\".to_string(), f\"http://api.test/items/{i}?page=1\".to_string()).with_body(\"x\".to_string());\n\

@@ -185,7 +185,7 @@ fn tls_stream(
     rustls::StreamOwned::new(conn, tcp(port))
 }
 
-const SRC: &str = r#"import std.io.{BufReader, BufWriter};
+const SRC: &str = r#"import std.io.{BufReader, BufWriter}; import std.net.{TlsListener, TlsStream, TcpListener, TcpStream};
 import std.sync.{TaskGroup};
 
 fn lines(tag: Str, s: own TlsStream) -> String {

@@ -255,7 +255,8 @@ fn main() {
 /// A body that would suspend here keeps its loops in order today
 /// (`suspends_as_value`); this pins that the cancel exit stays clean
 /// whichever form the loop takes.
-const CANCELLED: &str = r#"import std.time.{sleep, Duration};
+const CANCELLED: &str = r#"import std.sync.{TaskGroup};
+import std.time.{sleep, Duration};
 fn spin(t: i64) -> i64 {
     let mut s = t;
     let mut j = 0;

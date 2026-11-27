@@ -236,7 +236,8 @@ fn mir_sync_counts_clone_drop_and_upgrade() {
 /// and the last release runs `Drop`.
 #[test]
 fn mir_sync_counts_cross_into_tasks() {
-    let src = r#"sync struct Config {
+    let src = r#"import std.sync.{Atomic, TaskGroup};
+sync struct Config {
     name: String,
     hits: Atomic[i64],
 }
@@ -334,7 +335,8 @@ fn main() {
     }
 }
 
-const ATOMICS: &str = r#"import std.sync.{Atomic};
+const ATOMICS: &str = r#"import std.sync.{TaskGroup};
+import std.sync.{Atomic};
 
 sync struct Stats {
     n: Atomic[i64],
@@ -393,7 +395,8 @@ fn mir_sync_counts_atomic_cells_are_atomic_instructions() {
 /// mark and detach are one atomic exchange each.
 #[test]
 fn mir_sync_counts_task_handles_free_their_block_once() {
-    let src = r#"struct Noisy { name: String }
+    let src = r#"import std.sync.{TaskGroup};
+struct Noisy { name: String }
 impl Drop for Noisy { fn drop(mut ref self) { println(f"drop {self.name}"); } }
 fn make(n: own String, ms: i64) -> Noisy { sleep_ms(ms); Noisy { name: n } }
 fn main() {

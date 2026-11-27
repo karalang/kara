@@ -114,7 +114,8 @@ fn old_read_to_string_unwrap_or_is_one_error_with_a_fix() {
 fn old_read_to_string_unwrap_and_expect_keep_their_panic() {
     let path = scratch(
         "unwrap.kara",
-        r#"fn main() {
+        r#"import std.process.{Command, Stdio};
+fn main() {
     let child = Command.new("sh").arg("-c").arg("printf one; printf two >&2")
         .stdout(Stdio.piped()).stderr(Stdio.piped()).spawn().unwrap();
     let a = match child.stdout() { Some(r) => r.read_to_string().unwrap(), None => String.new() };

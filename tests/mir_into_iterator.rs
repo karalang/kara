@@ -55,7 +55,7 @@ fn main() {
 }
 "#;
 
-const COLLECTIONS: &str = r#"
+const COLLECTIONS: &str = r#"import std.sync.{Receiver, Sender};
 fn total[C: IntoIterator[Item = i64]](c: own C) -> i64 {
     let mut s = 0;
     for x in c.into_iter() { s += x; }

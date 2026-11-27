@@ -231,7 +231,7 @@ fn test_vector_is_copy() {
     // `uy` after the rebind (B-2026-07-11-1, surfaced by Slipstream's
     // `Vector[f64, 2]` collide kernel — the SIMD analog of `test_primitives_dont_move`).
     ownership_ok(
-        "fn mix() -> Vector[f64, 2] {\n\
+        "import std.simd.{Vector};\nfn mix() -> Vector[f64, 2] {\n\
              let ux = Vector[f64, 2].splat(2.0);\n\
              let uy = Vector[f64, 2].splat(3.0);\n\
              let e1 = ux;\n\
@@ -7696,7 +7696,7 @@ fn test_concurrent_plain_struct_builtin_suggested_routes_compile() {
          }}"
     );
     // Route 3 — share it through a `Mutex`.
-    let guarded = "fn ra(v: ref Mutex[Vec[i64]]) -> i64 { 1 }\n\
+    let guarded = "import std.sync.{Mutex};\nfn ra(v: ref Mutex[Vec[i64]]) -> i64 { 1 }\n\
                    fn rb(v: ref Mutex[Vec[i64]]) -> i64 { 2 }\n\
                    fn main() {\n\
                        let mut base: Vec[i64] = Vec.new();\n\

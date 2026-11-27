@@ -94,7 +94,7 @@ pub const IMPORT_REQUIRED_MODULES: &[(&str, &[&str])] = &[
     // Experimental modules (library/README.md).
     ("std.simd", &["Vector"]),
     ("std.gpu", &["GpuBuffer"]),
-    ("std.embedded", &["VolatileCell", "CriticalSectionGuard"]),
+    ("std.embedded", &["CriticalSectionGuard"]),
     (
         "std.tracing",
         &[
@@ -158,6 +158,30 @@ pub const INTERNAL_LIBRARY_NAMES: &[(&str, Option<&str>)] = &[
     // spell `Str` (strings.md).
     ("StringSlice", Some("Str")),
 ];
+
+/// Library names that check but run on no backend, so under the
+/// experimental rule they are deferred (the review's amendment to the
+/// prelude ruling, 2026-11-26): each with the deferred.md section that
+/// schedules it. A use, imported or not, is refused.
+pub const DEFERRED_LIBRARY_NAMES: &[(&str, &str)] = &[
+    // `VolatileCell.new` is not lowered on the compiled backend and is
+    // refused by the interpreter (measured at 33c7d4502a).
+    ("VolatileCell", "docs/deferred.md § Volatile access"),
+];
+
+/// Why a [`DEFERRED_LIBRARY_NAMES`] name is refused; `None` for any other.
+pub fn deferred_message(name: &str) -> Option<String> {
+    let (_, section) = DEFERRED_LIBRARY_NAMES.iter().find(|(n, _)| *n == name)?;
+    Some(format!(
+        "`{name}` is deferred: it is not in 0.8, because it checks but runs on no \
+         backend ({section})"
+    ))
+}
+
+/// Whether `name` is a [`DEFERRED_LIBRARY_NAMES`] name.
+pub fn is_deferred(name: &str) -> bool {
+    DEFERRED_LIBRARY_NAMES.iter().any(|(n, _)| *n == name)
+}
 
 /// Whether `name` is an item of an [`IMPORT_REQUIRED_MODULES`] module, so a
 /// program's own type of that name shadows nothing it can see unimported.
@@ -259,6 +283,11 @@ pub fn missing_library_imports(src: &str) -> Vec<TypeError> {
         match &t.token {
             Token::Import => in_import = true,
             Token::Semicolon => in_import = false,
+            Token::Identifier { name, raw: false }
+                if in_import && !declared.contains(name) && is_deferred(name) =>
+            {
+                internal.push(deferred_name_error(name, t.span));
+            }
             Token::Identifier { name, raw: false } if !in_import => {
                 // A bare use of a variant's name is the variant (a pattern
                 // `Match(n)`, a constructor), unless a path goes on from it.
@@ -280,6 +309,10 @@ pub fn missing_library_imports(src: &str) -> Vec<TypeError> {
                     && matches!(&tokens[i - 2].token,
                         Token::Identifier { name: verb, .. } if verb == "sends" || verb == "receives")
                 {
+                    continue;
+                }
+                if is_deferred(name) {
+                    internal.push(deferred_name_error(name, t.span));
                     continue;
                 }
                 if let Some((_, instead)) = INTERNAL_LIBRARY_NAMES
@@ -393,6 +426,22 @@ fn internal_name_error(name: &str, instead: Option<&str>, span: Span) -> TypeErr
             span,
             replacement: to.to_string(),
         }),
+        class: None,
+        expected: None,
+        got: None,
+        help: None,
+    }
+}
+
+/// A use of a [`DEFERRED_LIBRARY_NAMES`] name: refused, naming the section
+/// that schedules it. No fix: nothing in 0.8 does what it does.
+fn deferred_name_error(name: &str, span: Span) -> TypeError {
+    TypeError {
+        message: deferred_message(name).unwrap_or_default(),
+        span,
+        kind: TypeErrorKind::RemovedInCore,
+        lint_name: None,
+        fix_it: None,
         class: None,
         expected: None,
         got: None,

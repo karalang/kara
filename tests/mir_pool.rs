@@ -141,7 +141,8 @@ fn same_on_the_pool(name: &str, src: &str) -> String {
     interp
 }
 
-const ATOMIC: &str = r#"import std.sync.{Atomic};
+const ATOMIC: &str = r#"import std.sync.{TaskGroup};
+import std.sync.{Atomic};
 
 sync struct Counter {
     n: Atomic[i64],
@@ -174,7 +175,8 @@ fn main() {
 }
 "#;
 
-const MUTEX: &str = r#"import std.time.{sleep, Duration};
+const MUTEX: &str = r#"import std.sync.{Mutex, TaskGroup};
+import std.time.{sleep, Duration};
 
 fn bump(m: Mutex[i64], n: i64) {
     let mut i = 0;
@@ -207,7 +209,8 @@ fn main() {
 }
 "#;
 
-const CHANNEL: &str = r#"fn produce(tx: Sender[i64], n: i64) {
+const CHANNEL: &str = r#"import std.sync.{Channel, Sender, TaskGroup};
+fn produce(tx: Sender[i64], n: i64) {
     let mut i = 1;
     while i <= n {
         tx.send(i).unwrap();
@@ -232,7 +235,8 @@ fn main() {
 }
 "#;
 
-const FIB: &str = r#"fn fib(n: i64) -> i64 {
+const FIB: &str = r#"import std.sync.{TaskGroup};
+fn fib(n: i64) -> i64 {
     if n < 2 {
         return n;
     }
@@ -279,7 +283,8 @@ fn mir_pool_nested_groups_spawn_and_join() {
     assert_eq!(same_on_the_pool("fib", FIB), "17711\n");
 }
 
-const DEADLOCK: &str = r#"fn wait_for(rx: Receiver[i64]) -> i64 {
+const DEADLOCK: &str = r#"import std.sync.{Channel, Receiver, TaskGroup};
+fn wait_for(rx: Receiver[i64]) -> i64 {
     rx.recv().unwrap()
 }
 

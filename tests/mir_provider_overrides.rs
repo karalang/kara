@@ -111,6 +111,7 @@ fn mir(dir: &Path, stage: &str) -> String {
 /// that prints too; `Stdout.println` and `stdout.flush()` reach it as
 /// well. Outside the call they write to the process's stdout.
 const STDOUT_OVERRIDE: &str = r#"
+import std.io.{StdoutProvider};
 struct Tag { n: i64 }
 
 impl StdoutProvider for Tag {
@@ -178,6 +179,7 @@ fn provider_stdout_override_takes_print_and_println() {
 /// natives only, with no placeholder to rewrite, even when it binds
 /// another resource.
 const NO_STREAM_OVERRIDE: &str = r#"
+import std.env.{EnvProvider};
 struct FakeEnv { }
 
 impl EnvProvider for FakeEnv {
@@ -213,6 +215,7 @@ fn provider_no_stream_override_keeps_the_fused_printers() {
 /// `Stdin.read_line` and `stdin.read_to_string` from the provider, and the
 /// real stdin is read again once the call returns.
 const STDERR_AND_STDIN: &str = r#"
+import std.io.{StderrProvider, StdinProvider};
 struct Collect { lines: i64 }
 
 impl StderrProvider for Collect {
@@ -284,6 +287,7 @@ fn provider_stderr_and_stdin_overrides() {
 /// provider, in a callee too (§14.11); once the call returns, `fs` is the
 /// real file system again.
 const FILE_SYSTEM_PATHS: &str = r#"
+import std.io.{FileSystemProvider};
 struct MemFs { files: Map[String, String] }
 
 impl FileSystemProvider for MemFs {
@@ -347,6 +351,7 @@ fn provider_file_system_override_takes_path_operations() {
 /// A program's own `Stdout` or `FileSystem` type shadows the library's
 /// resource of that name, in a program that overrides another resource.
 const OWN_RESOURCE_NAMES: &str = r#"
+import std.env.{EnvProvider};
 struct Stdout { n: i64 }
 
 struct FileSystem { m: i64 }
@@ -380,6 +385,7 @@ fn provider_own_type_named_like_a_resource_shadows_it() {
 /// `Unsupported`, and once the call has returned the file fails with
 /// `ProviderUnavailable` and drops quietly (core-semantics §14.11).
 const FILE_HANDLES: &str = r#"
+import std.io.{File, FileSystemProvider, OpenOptions};
 struct MemFs { data: Vec[u8], opened: i64, closed: i64 }
 
 impl FileSystemProvider for MemFs {
@@ -469,6 +475,7 @@ fn provider_file_system_override_takes_file_handles() {
 /// live, inside a nested `with_provider[FileSystem]` too; an `Other`
 /// error keeps its text, and a `Vec[File]` closes each file.
 const NESTED_FILE_HANDLES: &str = r#"
+import std.io.{File, FileSystemProvider, OpenOptions};
 struct Tagged { name: String, next: i64 }
 
 impl FileSystemProvider for Tagged {
@@ -551,6 +558,7 @@ fn provider_file_reaches_its_own_provider_inside_a_nested_override() {
 /// through its handle methods, short reads and writes included, and fail
 /// with `ProviderUnavailable` once its call has returned.
 const BUFFERED_FILE_HANDLES: &str = r#"
+import std.io.{BufReader, BufWriter, File, FileSystemProvider, OpenOptions};
 struct Mem { files: Map[i64, Vec[u8]], pos: Map[i64, i64], next: i64, chunk: i64 }
 
 impl FileSystemProvider for Mem {
@@ -662,6 +670,7 @@ fn provider_buffered_files_reach_the_provider() {
 /// until the block ends, by falling off its end, `break`, `return` or
 /// `?`; an OS file opened outside it works inside it.
 const PROVIDERS_BLOCK_FILES: &str = r#"
+import std.io.{File, FileSystemProvider, OpenOptions};
 struct MemFs { data: Vec[u8], opened: i64, closed: i64 }
 
 impl FileSystemProvider for MemFs {
@@ -779,6 +788,7 @@ fn provider_block_files_end_on_every_exit() {
 /// print, and a `Stdout` overridden there refuses the program, naming the
 /// method (core-semantics §14.11; check side B-2026-10-29-15).
 const HANDLER_RESOURCES: &str = r#"
+import std.io.{File, FileSystemProvider, OpenOptions};
 struct MemFs { n: i64 }
 
 impl FileSystemProvider for MemFs {

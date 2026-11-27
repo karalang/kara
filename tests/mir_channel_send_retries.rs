@@ -10,7 +10,7 @@ mod common;
 
 use std::process::Command;
 
-const SRC: &str = r#"fn start(group: ref TaskGroup, tx: own Sender[i64]) -> Vec[TaskHandle[i64]] {
+const SRC: &str = r#"import std.sync.{Receiver, Sender, TaskGroup, TaskHandle}; fn start(group: ref TaskGroup, tx: own Sender[i64]) -> Vec[TaskHandle[i64]] {
     let mut hs: Vec[TaskHandle[i64]] = Vec.new();
     for p in 0..4 {
         let t = tx.clone();

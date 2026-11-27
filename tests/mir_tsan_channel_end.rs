@@ -44,7 +44,8 @@ fn waitlist_channels_whose_ends_drop_on_different_workers_run_clean() {
     let src = dir.join("main.kara");
     std::fs::write(
         &src,
-        r#"import std.sync.{Mutex, TaskGroup};
+        r#"import std.sync.{Sender};
+import std.sync.{Mutex, TaskGroup};
 
 struct Turns {
     stage: i64,

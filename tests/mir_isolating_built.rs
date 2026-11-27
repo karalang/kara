@@ -120,7 +120,7 @@ fn stdout_on_both_env(name: &str, src: &str, env: &[(&str, &str)]) -> String {
 /// closure `sort_by` calls are each contained.
 #[test]
 fn mir_isolating_built_contains_every_kind_of_panic() {
-    let src = r#"
+    let src = r#"import std.sync.{TaskFailed, TaskGroup};
 struct Noisy { name: String }
 
 impl Drop for Noisy {
@@ -227,7 +227,7 @@ fn main() {
 /// own place in the program.
 #[test]
 fn mir_isolating_built_ends_the_native_a_panic_is_in() {
-    let src = r#"struct Noisy {
+    let src = r#"import std.sync.{TaskFailed, TaskGroup}; struct Noisy {
     name: String,
 }
 
@@ -312,7 +312,7 @@ fn main() {
 /// the end each end their task alone.
 #[test]
 fn mir_isolating_built_contains_runtime_errors() {
-    let src = r#"fn show(name: String, r: Result[i64, TaskFailed]) {
+    let src = r#"import std.sync.{TaskFailed, TaskGroup}; fn show(name: String, r: Result[i64, TaskFailed]) {
     match r {
         Ok(v) => println(f"{name} ok {v}"),
         Err(TaskFailed.Panicked { message, .. }) => println(f"{name} panicked: {message}"),
@@ -371,7 +371,7 @@ fn main() {
 /// by the group's deadline is `Err(Cancelled)`.
 #[test]
 fn mir_isolating_built_tears_down_and_cancels() {
-    let src = r#"
+    let src = r#"import std.sync.{Receiver, Sender, TaskFailed, TaskGroup};
 import std.time.{Duration};
 
 fn step(n: i64) -> Result[i64, String] {

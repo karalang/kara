@@ -98,7 +98,7 @@ fn check(name: &str, src: &str, want: (&str, &str)) {
 /// reaches `X` although `Y` is nearer where it runs; `Y` was bound where
 /// `Stdout` is `C`, so its `print` reaches `C`. A plain function and a
 /// closure value between them pass the providers on.
-const XCY: &str = r#"
+const XCY: &str = r#"import std.io.{StderrProvider, StdoutProvider};
 struct X {}
 impl StderrProvider for X {
     fn write(mut ref self, s: Str) { print(f"X[{s}]"); }
@@ -148,7 +148,7 @@ fn provider_methods_run_with_their_binding_site_x_c_y() {
 /// A tee: a fake `Stdout` that counts and forwards to the `Stdout` it was
 /// bound under, the real stream at top level and an outer fake inside
 /// one.
-const TEE: &str = r#"
+const TEE: &str = r#"import std.io.{StdoutProvider};
 struct Outer {}
 impl StdoutProvider for Outer {
     fn write(mut ref self, s: Str) { eprint(f"<{s}>"); }
@@ -185,7 +185,7 @@ fn provider_tee_forwards_to_the_binding_outside_it() {
 /// A `Stdout` fake that prints to `Stderr` and a `Stderr` fake that prints
 /// to `Stdout`, one after the other and never nested: each reaches the real
 /// other stream (probe wk48j e1, the row's case (3)).
-const DISJOINT: &str = r#"
+const DISJOINT: &str = r#"import std.io.{StderrProvider, StdoutProvider};
 struct Cap { n: i64 }
 impl StdoutProvider for Cap { fn write(mut ref self, s: Str) { eprintln("c"); } fn flush(mut ref self) {} }
 struct ErrCap {}
@@ -202,7 +202,7 @@ fn provider_fakes_of_each_stream_reach_the_real_other() {
 /// The two fakes nested: the inner `Stdout` fake's `eprintln` reaches the
 /// outer `Stderr` fake, whose `print` reaches the `Stdout` in scope where
 /// it was bound, the real one (probe wk48j e5, the row's case (2)).
-const MUTUAL: &str = r#"
+const MUTUAL: &str = r#"import std.io.{StderrProvider, StdoutProvider};
 struct Cap { n: i64 }
 impl StdoutProvider for Cap { fn write(mut ref self, s: Str) { eprintln("c"); } fn flush(mut ref self) {} }
 struct ErrCap {}
@@ -217,7 +217,7 @@ fn provider_mutual_nest_reaches_the_outer_fake_then_the_real_stream() {
 
 /// The mutual nest through two other resources, each fake using the
 /// other's (probe wk48j e7).
-const MUTUAL_CLOCK: &str = r#"
+const MUTUAL_CLOCK: &str = r#"import std.random.{RandomProvider}; import std.time.{ClockProvider};
 import std.time.{Clock};
 import std.random;
 struct R1 { k: u64 }
@@ -235,7 +235,7 @@ fn provider_mutual_nest_through_clock_and_random() {
 /// A `Stderr` fake whose `write` prints to `Stderr` itself reaches the
 /// real stream, never itself, beside a disjoint `Stdout` fake (probe wk48j
 /// e6, the row's case (1)).
-const OWN_RESOURCE: &str = r#"
+const OWN_RESOURCE: &str = r#"import std.io.{StderrProvider, StdoutProvider};
 struct Cap { n: i64 }
 impl StdoutProvider for Cap { fn write(mut ref self, s: Str) { eprintln("c"); } fn flush(mut ref self) {} }
 struct ErrCap {}
@@ -256,7 +256,7 @@ fn tee_nest(n: usize) -> String {
         body = format!("with_provider[Stdout](Tee {{ n: {i} }}, || {body})");
     }
     format!(
-        "struct Tee {{ n: i64 }}\n\
+        "import std.io.{{StdoutProvider}}; struct Tee {{ n: i64 }}\n\
          impl StdoutProvider for Tee {{ fn write(mut ref self, s: Str) {{ print(f\"[{{s}}]\"); }} \
          fn flush(mut ref self) {{}} }}\n\
          fn main() {{ {body}; println(\"\"); }}\n"
@@ -302,7 +302,7 @@ fn provider_nest_of_sixteen_runs_and_seventeen_is_refused() {
 /// however deep it runs.
 #[test]
 fn provider_rebound_on_every_round_of_a_recursion_is_refused() {
-    let src = "struct Tee { n: i64 }\n\
+    let src = "import std.io.{StdoutProvider}; struct Tee { n: i64 }\n\
         impl StdoutProvider for Tee { fn write(mut ref self, s: Str) { print(f\"[{s}]\"); } \
         fn flush(mut ref self) {} }\n\
         fn nest(k: i64) { if k == 0 { print(\"x\"); } else { \

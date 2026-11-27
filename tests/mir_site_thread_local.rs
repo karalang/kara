@@ -12,7 +12,7 @@ mod common;
 
 use std::process::Command;
 
-const SRC: &str = r#"fn pick(i: i64) -> Option[i64] {
+const SRC: &str = r#"import std.sync.{TaskGroup}; fn pick(i: i64) -> Option[i64] {
     if i == 37 { None } else { Some(i) }
 }
 fn work(i: i64) -> i64 {

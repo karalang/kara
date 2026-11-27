@@ -120,6 +120,7 @@ fn stdout_on_both_env(name: &str, src: &str, env: &[(&str, &str)]) -> String {
 #[test]
 fn mir_cancel_exits_every_frame_and_drops_the_unsent_value() {
     let src = r#"
+import std.sync.{Receiver, Sender, TaskGroup};
 struct Noisy {
     name: String,
 }
@@ -202,6 +203,7 @@ done
 #[test]
 fn mir_cancel_running_and_unstarted_tasks() {
     let src = r#"
+import std.sync.{TaskGroup};
 struct Noisy {
     name: String,
 }

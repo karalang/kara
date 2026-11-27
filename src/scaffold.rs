@@ -819,8 +819,8 @@ mod tests {
     fn backend_test_body_calls_the_handler() {
         let body = backend_main_test_body();
         assert!(
-            body.starts_with("test \""),
-            "expected `test \"...\" {{ ... }}` shape"
+            body.starts_with("import std.net.Request;\n\ntest \""),
+            "expected the import, then `test \"...\" {{ ... }}` shape"
         );
         assert!(body.contains("handle(Request.new(\"GET\", \"/health\"))"));
         assert!(!body.contains("assert_eq(1 + 1, 2)"));
@@ -845,7 +845,7 @@ mod tests {
         assert!(main.contains("Server.serve_ws("));
         assert!(main.contains("/health"));
         let test = fs::read_to_string(dir.path().join("src/main_test.kara")).expect("test");
-        assert!(test.starts_with("test \""));
+        assert!(test.starts_with("import std.net.Request;\n\ntest \""));
         let readme = fs::read_to_string(dir.path().join("README.md")).expect("README");
         assert!(readme.contains("# my_api"));
         assert!(

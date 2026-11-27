@@ -84,7 +84,7 @@ fn every_lane(name: &str, src: &str, want: &str) {
 fn task_cancelled_before_its_first_poll_cancels_the_group_it_makes() {
     every_lane(
         "cancel_first",
-        "import std.time.{Duration, Instant, sleep};
+        "import std.sync.{TaskGroup};\nimport std.time.{Duration, Instant, sleep};
 fn inner() -> i64 { defer println(\"inner torn down\"); sleep(Duration.ms(3000)); 0 }
 fn outer() -> i64 {
     defer println(\"outer torn down\");
@@ -109,7 +109,7 @@ fn main() {
 fn deadline_passed_before_the_first_poll_tears_the_task_down() {
     every_lane(
         "deadline_first",
-        "import std.time.{Duration, Instant, sleep};
+        "import std.sync.{TaskGroup};\nimport std.time.{Duration, Instant, sleep};
 fn spin(ms: i64) { let t = Instant.now(); let mut s = 0; while t.elapsed().as_ms() < ms { s = s + 1; } }
 fn inner() -> i64 { defer println(\"inner torn down\"); sleep(Duration.ms(5000)); 0 }
 fn outer() -> i64 {
@@ -135,7 +135,7 @@ fn main() {
 fn isolating_group_drop_waits_for_its_tasks() {
     every_lane(
         "isolating_drop",
-        "import std.time.{Duration, sleep};
+        "import std.sync.{TaskGroup};\nimport std.time.{Duration, sleep};
 fn work(v: ref Vec[i64]) -> i64 { sleep(Duration.ms(50)); println(f\"sum {v.len()}\"); 0 }
 fn run() {
     let v = [1, 2, 3];

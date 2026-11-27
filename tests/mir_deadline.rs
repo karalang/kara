@@ -111,6 +111,7 @@ fn stdout_on_both(name: &str, src: &str) -> String {
 #[test]
 fn mir_deadline_read_timeout_bounds_a_suspended_read() {
     let src = r#"
+import std.net.{TcpError, TcpListener, TcpStream}; import std.sync.{TaskGroup};
 fn ticks(tag: String) {
     for i in 0..3 {
         sleep_ms(20);
@@ -189,6 +190,7 @@ fn main() {
 #[test]
 fn mir_deadline_cancel_tears_down_suspended_tasks() {
     let src = r#"
+import std.sync.{Receiver, TaskFailed, TaskGroup};
 struct Noisy {
     name: String,
 }
@@ -258,6 +260,7 @@ fn main() {
 #[test]
 fn mir_deadline_cancel_reaches_nested_groups() {
     let src = r#"
+import std.sync.{TaskGroup};
 struct Noisy {
     name: String,
 }
@@ -302,6 +305,7 @@ fn main() {
 #[test]
 fn mir_deadline_with_deadline_cancels_the_group() {
     let src = r#"
+import std.sync.{Receiver, Sender, TaskFailed, TaskGroup};
 import std.time.{Duration, timeout, TimedOut};
 
 struct Noisy {

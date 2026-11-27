@@ -912,7 +912,7 @@ fn err_channel_send_closure_literal_captures_rooted() {
     // Direct closure literal sent via `tx.send(closure)` where the closure
     // captures a provider-rooted resource — rejected.
     let errs = errors(
-        "effect resource Db;\n\
+        "import std.sync.{Channel};\neffect resource Db;\n\
          struct FakeDb {}\n\
          impl FakeDb { fn query(self) -> i64 { 0 } }\n\
          fn main() {\n\
@@ -932,7 +932,7 @@ fn err_channel_send_let_bound_closure_captures_rooted() {
     // Closure assigned to a let-binding, then sent — same rule via the
     // let-bound-identifier rebind chain.
     let errs = errors(
-        "effect resource Db;\n\
+        "import std.sync.{Channel};\neffect resource Db;\n\
          struct FakeDb {}\n\
          impl FakeDb { fn query(self) -> i64 { 0 } }\n\
          fn main() {\n\
@@ -954,7 +954,7 @@ fn err_channel_send_helper_returning_closure() {
     // the return value flows directly into `tx.send(...)` — caught via
     // the program-wide `compute_escapable_caps` pre-pass.
     let errs = errors(
-        "effect resource Db;\n\
+        "import std.sync.{Channel};\neffect resource Db;\n\
          struct FakeDb {}\n\
          impl FakeDb { fn query(self) -> i64 { 0 } }\n\
          fn make_job() -> Fn() -> i64 { || Db.query() }\n\
@@ -977,7 +977,7 @@ fn err_channel_send_via_function_param_sender() {
     // escapes via send. Parameter type annotation drives the receiver-
     // type resolution.
     let errs = errors(
-        "effect resource Db;\n\
+        "import std.sync.{Sender};\neffect resource Db;\n\
          struct FakeDb {}\n\
          impl FakeDb { fn query(self) -> i64 { 0 } }\n\
          fn forward(tx: Sender[i64]) {\n\
@@ -996,7 +996,7 @@ fn ok_channel_send_non_closure_value() {
     // Sending a primitive value through the channel — no closure, no
     // escape concern.
     let errs = errors(
-        "effect resource Db;\n\
+        "import std.sync.{Channel};\neffect resource Db;\n\
          struct FakeDb {}\n\
          impl FakeDb { fn query(self) -> i64 { 0 } }\n\
          fn main() {\n\
@@ -1014,7 +1014,7 @@ fn ok_channel_send_non_closure_value() {
 fn ok_channel_send_pure_closure() {
     // Closure with no captures of any rooted resource — passes.
     let errs = errors(
-        "effect resource Db;\n\
+        "import std.sync.{Channel};\neffect resource Db;\n\
          struct FakeDb {}\n\
          impl FakeDb { fn query(self) -> i64 { 0 } }\n\
          fn main() {\n\
@@ -1033,7 +1033,7 @@ fn ok_channel_send_ambient_only_closure() {
     // default provider) — no `with_provider` introduces those resources,
     // so they aren't on the rooted stack and the send is allowed.
     let errs = errors(
-        "effect resource Db;\n\
+        "import std.sync.{Channel};\neffect resource Db;\n\
          struct FakeDb {}\n\
          impl FakeDb { fn query(self) -> i64 { 0 } }\n\
          fn main() {\n\

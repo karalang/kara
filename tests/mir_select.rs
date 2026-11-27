@@ -106,6 +106,7 @@ fn stdout_on_both(name: &str, src: &str) -> String {
 #[test]
 fn mir_select_waits_for_another_task_and_prefers_the_first_arm() {
     let src = r#"
+import std.sync.{Sender, TaskGroup};
 import std.time.{Duration};
 fn worker(tx: own Sender[i64]) {
     sleep_ms(30);
@@ -158,6 +159,7 @@ fn main() {
 #[test]
 fn mir_select_in_a_loop_with_break_and_nested() {
     let src = r#"
+import std.sync.{Receiver, Sender, TaskGroup};
 import std.time.{Duration};
 struct Noisy { n: i64 }
 impl Drop for Noisy {
@@ -222,6 +224,7 @@ fn main() {
 #[test]
 fn mir_select_recv_and_send_timeout() {
     let src = r#"
+import std.sync.{Sender, TaskGroup};
 import std.time.{Duration};
 fn later(tx: own Sender[i64]) {
     sleep_ms(30);

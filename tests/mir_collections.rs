@@ -184,7 +184,8 @@ fn vecdeque_insert_past_the_end_panics() {
 
 /// The SipHash-2-4 paper's key `00 01 .. 0f` on the empty input and on
 /// `00 .. 0e`, and a zero key on a `Str`'s bytes.
-const SIPHASH: &str = r#"fn content_id(payload: Str) -> u64 {
+const SIPHASH: &str = r#"import std.hash.{StableHash};
+fn content_id(payload: Str) -> u64 {
     StableHash.siphash24(payload.bytes(), 0, 0)
 }
 fn main() {
@@ -983,6 +984,7 @@ fn main() {
 /// that owns heap memory too; one never read never runs it, and each drops
 /// what it holds (B-2026-10-22-25).
 const LAZY: &str = r#"
+import std.sync.{LazyLock};
 struct Pair { a: i64, b: String }
 fn words() -> Vec[String] { println("words"); return vec!["x".to_string(), "yz".to_string()]; }
 fn pair() -> Pair { println("pair"); return Pair { a: 7, b: "seven".to_string() }; }
@@ -1025,6 +1027,7 @@ fn lazy_lock_is_clean_under_asan() {
 fn runtime_introspection_and_negative_fills_agree_on_both_backends() {
     agrees(
         r#"
+import std.runtime.{Runtime};
 fn main() {
     println(Runtime.list_tasks().len());
     println(Runtime.list_par_blocks().len());

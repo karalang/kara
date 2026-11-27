@@ -10,7 +10,7 @@ use karac::run_playground;
 #[test]
 fn a_bare_for_moving_its_elements_out_does_not_run() {
     let r = run_playground(
-        "fn square(n: i64) -> i64 { n * n }\n\
+        "import std.sync.{TaskGroup, TaskHandle};\nfn square(n: i64) -> i64 { n * n }\n\
          fn main() {\n    \
              let mut pool: TaskGroup = TaskGroup.new();\n    \
              let mut handles: Vec[TaskHandle[i64]] = Vec.new();\n    \

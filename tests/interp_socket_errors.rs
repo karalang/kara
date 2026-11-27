@@ -64,7 +64,8 @@ fn compiled(src: &str) -> Option<String> {
 
 /// The accepted side closes with the client's line unread, so the kernel
 /// resets the connection: the client reads the answer, then the reset.
-const RESET: &str = r#"fn main() {
+const RESET: &str = r#"import std.net.{TcpListener, TcpStream};
+fn main() {
     let l = TcpListener.bind("127.0.0.1:0").unwrap();
     let c = TcpStream.connect(l.local_addr().unwrap()).unwrap();
     let _ = c.write_all("data\n".bytes());

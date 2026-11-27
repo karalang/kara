@@ -75,7 +75,7 @@ fn outer_group_as_parameter_is_refused() {
     refused(
         "param",
         &format!(
-            "{CLK}fn under(tg: TaskGroup) -> TaskHandle[i64] {{ \
+            "import std.sync.{{TaskHandle}};\n{CLK}fn under(tg: TaskGroup) -> TaskHandle[i64] {{ \
              with_provider[Clk](F {{ t: vec![1] }}, || tg.spawn(|| Clk.now())) }}
 fn main() {{ let tg = TaskGroup.new(); let h = under(tg); println(h.join()); }}"
         ),
@@ -128,7 +128,7 @@ fn group_from_an_outer_with_provider_spawned_under_an_inner_one_is_refused() {
 fn outer_group_under_a_stdout_override_is_refused() {
     refused(
         "stdout",
-        "struct Cap { n: i64 }
+        "import std.io.{StdoutProvider}; import std.sync.{TaskGroup};\nstruct Cap { n: i64 }
 impl StdoutProvider for Cap {
     fn write(mut ref self, s: Str) { self.n = self.n + 1; }
     fn flush(mut ref self) {}

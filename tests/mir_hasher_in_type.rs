@@ -133,7 +133,7 @@ fn mir_hasher_in_type_tables_walk_in_a_fixed_order() {
 fn mir_hasher_in_type_tables_of_two_hashers_differ() {
     let (dir, file) = scratch(
         "in-type-differ",
-        "fn total(m: ref Map[i64, i64]) -> i64 {\n    m.len()\n}\n\nfn main() {\n    \
+        "import std.hash.{FxBuildHasher};\nfn total(m: ref Map[i64, i64]) -> i64 {\n    m.len()\n}\n\nfn main() {\n    \
          let m: Map[i64, i64, FxBuildHasher] = Map.new();\n    println(f\"{total(m)}\");\n}\n",
     );
     let out = Command::new(env!("CARGO_BIN_EXE_karac"))

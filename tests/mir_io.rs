@@ -80,7 +80,7 @@ fn interp_and_build(dir: &Path, src: &str) -> (String, Option<String>) {
     (interp, Some(String::from_utf8(run.stdout).unwrap()))
 }
 
-const FILES: &str = r#"
+const FILES: &str = r#"import std.io.{File, SeekFrom};
 fn show(e: IoError) -> String {
     match e {
         IoError.NotFound => "not found".to_string(),
@@ -153,7 +153,7 @@ fn file_and_clock_natives_match_the_interpreter() {
     }
 }
 
-const PROCESSES: &str = r#"
+const PROCESSES: &str = r#"import std.process.{Command, Stdio};
 fn show(e: IoError) -> String {
     match e {
         IoError.NotFound => "not found".to_string(),
@@ -272,7 +272,7 @@ fn process_natives_match_the_interpreter() {
 /// loop, `read_to_end`, text that is not UTF-8, a dropped or untaken stdin
 /// ending its child, `env_remove`, a dropped child and `Stdio`, and a
 /// missing working directory.
-const PROCESS_SURFACE: &str = r#"
+const PROCESS_SURFACE: &str = r#"import std.io.{File}; import std.process.{Command, Stdio};
 fn show(e: IoError) -> String {
     match e {
         IoError.NotFound => "not found".to_string(),
@@ -359,7 +359,7 @@ fn process_surface_matches_the_interpreter() {
 /// handshake completes into the backlog before `accept`. Covers each
 /// `TcpError` cause the runtime reports, `try_clone`, a half-close, and the
 /// listener's `Drop` closing its port.
-const SOCKETS: &str = r#"
+const SOCKETS: &str = r#"import std.net.{TcpError, TcpListener, TcpStream};
 fn show(e: TcpError) -> String {
     match e {
         TcpError.Interrupted => "interrupted".to_string(),
@@ -477,7 +477,7 @@ fn tcp_natives_match_the_interpreter() {
 /// `recv`, a datagram cut to the buffer, `local_addr`, a read timeout,
 /// `try_clone`, a second bind), `TcpListener.local_addr`, a `TcpStream`
 /// read timeout, and `TcpError` matching as `NetError` (B-2026-10-15-18).
-const UDP: &str = r#"
+const UDP: &str = r#"import std.net.{TcpError, TcpListener, TcpStream};
 fn show(e: NetError) -> String {
     match e {
         NetError.Interrupted => "interrupted".to_string(),
@@ -746,7 +746,7 @@ fn http_server() -> u16 {
 
 /// `Client.get` / `post`, the `RequestBuilder` chain, a response's status,
 /// body, bytes and headers, a non-2xx status, and a refused connection.
-const HTTP: &str = r#"
+const HTTP: &str = r#"import std.net.{Client};
 fn main() {
     let c = Client.new();
     let base = "http://127.0.0.1:PORT";
@@ -840,7 +840,7 @@ fn http_client_natives_match_the_interpreter() {
 /// status, a header by name without case, every header, and the body. A refused
 /// connection, an error the program built and one whose message was
 /// copied keep none (io.md § HTTP client, B-2026-11-09-44).
-const HTTP_ERROR_RESPONSE: &str = r#"
+const HTTP_ERROR_RESPONSE: &str = r#"import std.net.{Client, HttpError};
 fn show(e: HttpError) {
     let status = match e.status() {
         Some(s) => f"{s}",
@@ -917,7 +917,7 @@ fn http_error_keeps_the_response_of_an_error_status() {
 #[test]
 fn http_error_a_program_builds_keeps_no_response() {
     let dir = Scratch::new("http_error_built");
-    let fake = r#"
+    let fake = r#"import std.net.{Client, HttpError, Request, Response};
 struct Down {}
 
 impl NetworkProvider for Down {
@@ -940,7 +940,7 @@ fn main() {
     if let Some(built) = built {
         assert_eq!(built, interp);
     }
-    let alone = r#"
+    let alone = r#"import std.net.{HttpError};
 fn main() {
     let e = HttpError { message: "built".to_string() };
     println(f"{e.message()} {e.status().is_none()} {e.header("a".to_string()).is_none()} {e.body().is_none()}");
@@ -956,7 +956,7 @@ fn main() {
 /// `Server.serve` with a function handler returning a program's own
 /// `Response`, whose `headers` the server sends: the handler echoes what
 /// `Request`'s methods read.
-const SERVE: &str = r#"
+const SERVE: &str = r#"import std.net.{Request, Server};
 struct Response { status: i64, body: String, headers: Vec[(String, String)] }
 
 fn handle(req: Request) -> Response {
@@ -991,7 +991,7 @@ fn main() {
 "#;
 
 /// `Server.serve` with a closure handler and `std.http`'s `Response`.
-const SERVE_CLOSURE: &str = r#"
+const SERVE_CLOSURE: &str = r#"import std.net.{Response, Server};
 fn main() {
     let greeting = "hello".to_string();
     let r = Server.serve("127.0.0.1:0".to_string(), |req| {
@@ -1005,7 +1005,7 @@ fn main() {
 "#;
 
 /// A `Server.serve` that cannot bind.
-const SERVE_UNBOUND: &str = r#"
+const SERVE_UNBOUND: &str = r#"import std.net.{Request, Response, Server};
 fn handle(req: Request) -> Response {
     Response { status: 200, body: req.path() }
 }
@@ -1230,7 +1230,7 @@ fn http_server_natives_match_the_interpreter() {
 /// and `Request.headers()` names each header in lower case, as legacy's
 /// server did (a `header` lookup ignores case either way). Found by the
 /// corpus driver (ADR-4 plan step 4).
-const SERVE_STATIC: &str = r#"
+const SERVE_STATIC: &str = r#"import std.net.{Server};
 fn main() {
     match Server.serve_static("127.0.0.1:0", "{}") {
         Ok(_) => println("served"),
@@ -1239,7 +1239,7 @@ fn main() {
 }
 "#;
 
-const HEADER_NAMES: &str = r#"
+const HEADER_NAMES: &str = r#"import std.net.{Request, Response, Server};
 fn handle(req: Request) -> Response {
     let mut s = "".to_string();
     for (k, v) in req.headers() {
@@ -1318,7 +1318,7 @@ fn serve_static_and_lowercased_header_names_match_on_both_backends() {
 /// listener bound to port 0 then reports `BOUND_PORT=<n>` on stderr, on both
 /// backends. Unset, nothing is printed (`udp_and_socket_options_match_the_
 /// interpreter` asserts that output exactly). The corpus driver relies on it.
-const ANNOUNCED: &str = r#"fn main() {
+const ANNOUNCED: &str = r#"import std.net.{TcpListener}; fn main() {
     let listener = TcpListener.bind("127.0.0.1:0").unwrap();
     let stream = listener.accept().unwrap();
     let mut buf: Array[u8, 16] = [0u8; 16];
@@ -1389,7 +1389,7 @@ fn announce_port_hook_reports_a_bound_listener_on_both_backends() {
 /// with `KARAC_ANNOUNCE_PORT` unset, `Server.serve` answers a request and no
 /// `BOUND_PORT` line reaches stdout or stderr, on both backends. The
 /// announce itself is the listener's, which the test above pins.
-const QUIET_SERVER: &str = r#"fn handle(r: Request) -> Response {
+const QUIET_SERVER: &str = r#"import std.net.{Request, Response, Server}; fn handle(r: Request) -> Response {
     Response { status: 200, body: "ok".to_string() }
 }
 
@@ -1483,7 +1483,7 @@ fn server_prints_no_bound_port_unless_asked_on_both_backends() {
 /// B-2026-10-14-44 — io.md's spellings: paths and addresses are `Str`
 /// (a `String` still passes), and `File.read` / `write` count in `i64`.
 /// `karac check` accepts the program and both MIR backends run it.
-const STR_PATHS: &str = r#"fn main() {
+const STR_PATHS: &str = r#"import std.io.{File}; import std.net.{TcpStream}; fn main() {
     let p: Str = "DIR/data.txt";
     match fs.write(p, "hi\n") { Ok(_) => {}, Err(_) => println("w") }
     match File.create(p) {
@@ -1547,7 +1547,7 @@ fn file_and_socket_functions_take_str() {
 /// ruling 2026-11-16, B-2026-11-16-209), `?` on
 /// the `File` inside the constructor, a small capacity, `read` / `consume`
 /// / `read_to_string`, and a `BufWriter` that flushes when it drops.
-const BUFFERED: &str = r#"fn count(path: Str) -> Result[i64, IoError] {
+const BUFFERED: &str = r#"import std.io.{BufReader, BufWriter, File}; fn count(path: Str) -> Result[i64, IoError] {
     let mut n = 0;
     for line in BufReader.new(File.open(path)?).lines() {
         let l = line?;
@@ -1698,7 +1698,7 @@ fn file_system_natives_match_the_interpreter() {
 /// link, a dangling link and a file, `Metadata.mode` after
 /// `set_permissions` (and its `InvalidInput` range), and `set_modified` on
 /// a file and a directory, read back through `modified_ms`.
-const FS_LINKS: &str = r#"
+const FS_LINKS: &str = r#"import std.io.{Metadata};
 fn show(r: Result[(), IoError]) -> String {
     match r { Ok(_) => "ok".to_string(), Err(e) => match e { IoError.NotFound => "notfound".to_string(), IoError.AlreadyExists => "exists".to_string(), IoError.InvalidInput => "invalid".to_string(), _ => "other".to_string() } }
 }
@@ -1765,7 +1765,7 @@ fn file_system_links_modes_and_times_match_the_interpreter() {
 /// `BufReader.fill_buf` (docs/library/io.md § Buffered I/O,
 /// B-2026-10-14-72): a view of the reader's buffer, read in a scope that
 /// ends before `consume`, then the rest, then an empty view at the end.
-const FILL_BUF: &str = r#"
+const FILL_BUF: &str = r#"import std.io.{BufReader, File};
 fn main() {
     fs.write("DIR/fb.txt", "HELLOWORLD").unwrap();
     let mut r = BufReader.with_capacity(File.open("DIR/fb.txt").unwrap(), 4);
@@ -1803,7 +1803,7 @@ fn fill_buf_views_the_readers_buffer_on_both_backends() {
 fn consume_while_a_fill_buf_view_lives_is_a_borrow_error() {
     let dir = Scratch::new("fillbuf_borrow");
     let file = dir.path().join("main.kara");
-    let src = r#"
+    let src = r#"import std.io.{BufReader, File};
 fn main() {
     let mut r = BufReader.new(File.open("x.txt").unwrap());
     let b = r.fill_buf().unwrap();
@@ -1829,7 +1829,7 @@ fn main() {
 /// `Result[(), SendError[T]]`, `recv` returning `Option[T]` (`None` once
 /// every sender is gone and the channel is drained), `Receiver.into_iter`,
 /// `TaskGroup.new(limit: n)` and a `TaskHandle` returned from a function.
-const CHANNELS: &str = r#"
+const CHANNELS: &str = r#"import std.sync.{Receiver, SendError, Sender, TaskGroup, TaskHandle};
 fn start(group: ref TaskGroup, n: i64) -> TaskHandle[i64] {
     group.spawn(|| n * 2)
 }
@@ -1897,7 +1897,7 @@ fn channel_and_task_group_natives_match_the_interpreter() {
 /// `write_bytes` and the `InvalidInput` refusals (docs/library/io.md § Files,
 /// B-2026-10-15-28): a page rewritten in place, a file cut short, a lock
 /// file made with `create_new`, and the combinations that open nothing.
-const OPEN_OPTIONS: &str = r#"
+const OPEN_OPTIONS: &str = r#"import std.io.{File, SeekFrom};
 fn show(e: IoError) -> String {
     match e {
         IoError.NotFound => "not found",
@@ -2013,7 +2013,7 @@ fn main() {
 /// `BufWriter` over its stdin (docs/library/io.md § Buffered I/O), on both
 /// backends: `lines`, `read_line` and `read_to_string` through a small
 /// buffer, and a writer whose drop closes the child's stdin.
-const PIPE_BUFFERS: &str = r#"
+const PIPE_BUFFERS: &str = r#"import std.process.{Child, Command, Stdio}; import std.io.{BufReader, BufWriter};
 fn feed(child: ref Child) {
     let w = BufWriter.new(child.stdin().unwrap());
     let _ = w.write_all("zeta\nalpha\n".bytes());
@@ -2059,7 +2059,7 @@ fn buffered_io_over_a_childs_pipes() {
 /// The default providers of the program-rooted resources (core-semantics
 /// §14.7, B-2026-10-20-11) ask the operating system, as the ambient natives
 /// do, and a test double states only the methods it uses.
-const DEFAULT_PROVIDERS: &str = r#"
+const DEFAULT_PROVIDERS: &str = r#"import std.env.{EnvProvider};
 struct FakeEnv {}
 impl EnvProvider for FakeEnv {
     fn var(ref self, name: Str) -> Result[String, VarError] { Ok("fake") }
@@ -2090,7 +2090,7 @@ fn main() {
 "#;
 
 /// A method the double leaves out panics, naming the resource and the method.
-const UNIMPLEMENTED_METHOD: &str = r#"
+const UNIMPLEMENTED_METHOD: &str = r#"import std.time.{ClockProvider};
 struct FakeClock {}
 impl ClockProvider for FakeClock {
     fn now(ref self) -> i64 { 42 }
@@ -2176,7 +2176,7 @@ fn https_origin_for(name: &str, body: &'static str) -> (u16, String) {
     (port, pem)
 }
 
-const HTTPS_GET: &str = r#"
+const HTTPS_GET: &str = r#"import std.net.{Client};
 fn main() {
     let c = Client.new();
     match c.get("URL") {
@@ -2345,7 +2345,7 @@ fn fetch_program(urls: &[&str]) -> String {
         .map(|u| format!("    fetch(\"{u}\");\n"))
         .collect();
     format!(
-        r#"
+        r#"import std.net.{{Client}};
 fn fetch(url: own String) {{
     let c = Client.new();
     match c.get(url) {{
@@ -2483,7 +2483,7 @@ fn http_client_goes_through_the_environment_proxy_on_both_backends() {
     assert_eq!(taken.load(std::sync::atomic::Ordering::SeqCst), before);
 }
 
-const REDIRECT_CREDENTIALS: &str = r#"
+const REDIRECT_CREDENTIALS: &str = r#"import std.net.{Client};
 fn fetch(url: own String) {
     let c = Client.new();
     let req = c.request("GET", url).header("Authorization", "Bearer t").header("Cookie", "c=1");
@@ -2591,7 +2591,7 @@ fn redirects_keep_credentials_only_on_the_first_origin_on_both_backends() {
 #[test]
 fn schemeless_urls_fail_alike_on_both_backends() {
     let dir = Scratch::new("schemeless_urls");
-    let src = r#"fn fetch(url: own String) {
+    let src = r#"import std.net.{Client}; fn fetch(url: own String) {
     match Client.new().request("GET", url).send() {
         Ok(r) => println(r.body()),
         Err(e) => println(f"error: {e.message()}"),

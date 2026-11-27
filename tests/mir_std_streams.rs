@@ -177,6 +177,7 @@ fn text_that_is_not_utf8_is_invalid_utf8() {
 /// `stdout.flush()` pushes out a partial line, and what a program printed
 /// comes out before a child it then starts writes to the same stdout.
 const ORDER: &str = r#"
+import std.process.{Command};
 fn main() {
     print("x");
     stdout.flush();
@@ -208,6 +209,7 @@ fn stdout_flush_orders_output_against_a_child() {
 /// `File.append` given a `String` path twice (it takes a `Str`, so the
 /// path stays the caller's).
 const CONVERSIONS: &str = r#"
+import std.io.{File};
 fn show(e: IoError) -> String {
     match e {
         IoError.NotFound => "NotFound".to_string(),
@@ -309,6 +311,7 @@ fn redirect_server() -> u16 {
 /// io.md: "The client follows up to five redirects". The message of the
 /// failure is not specified, so only its presence is printed.
 const REDIRECTS: &str = r#"
+import std.net.{Client};
 fn main() {
     let c = Client.new();
     let mut k = 0;

@@ -1599,13 +1599,17 @@ impl<'a> super::Resolver<'a> {
         {
             return None;
         }
+        // A name README keeps out of the prelude is not visible without
+        // its import, whatever table the checker reads it from.
         let visible = |name: &str| {
-            crate::prelude::PRELUDE_TYPES.contains(&name)
+            (crate::prelude::PRELUDE_TYPES.contains(&name)
                 || crate::prelude::LIBRARY_SOURCE_TYPES.contains(&name)
                 || crate::prelude::PRELUDE_FUNCTIONS.contains(&name)
                 || crate::prelude::PRELUDE_TRAITS.contains(&name)
                 || name == "String"
-                || crate::module_rename::library_function_names().contains(name)
+                || crate::module_rename::library_function_names().contains(name))
+                && !crate::library_imports::is_import_required(name)
+                && !crate::library_imports::is_deferred(name)
         };
         if !imp.items.iter().all(|it| visible(&it.name)) {
             return None;
@@ -1650,13 +1654,17 @@ impl<'a> super::Resolver<'a> {
         {
             return None;
         }
+        // A name README keeps out of the prelude is not visible without
+        // its import, whatever table the checker reads it from.
         let visible = |name: &str| {
-            crate::prelude::PRELUDE_TYPES.contains(&name)
+            (crate::prelude::PRELUDE_TYPES.contains(&name)
                 || crate::prelude::LIBRARY_SOURCE_TYPES.contains(&name)
                 || crate::prelude::PRELUDE_FUNCTIONS.contains(&name)
                 || crate::prelude::PRELUDE_TRAITS.contains(&name)
                 || name == "String"
-                || crate::module_rename::library_function_names().contains(name)
+                || crate::module_rename::library_function_names().contains(name))
+                && !crate::library_imports::is_import_required(name)
+                && !crate::library_imports::is_deferred(name)
         };
         let home = |name: &str| -> Option<String> {
             let mut homes: Vec<String> = crate::prelude::GATED_STDLIB_SOURCES
@@ -1820,7 +1828,10 @@ impl<'a> super::Resolver<'a> {
             {
                 let mut replacement = None;
                 let mut suggestion = None;
-                if let Some((note, edit)) = prelude.take() {
+                if let Some(why) = crate::library_imports::deferred_message(&it.name) {
+                    // Deferred: neither the prelude's nor a near name's.
+                    message = format!("`{}` has no item `{}`: {why}", imp.path.join("."), it.name);
+                } else if let Some((note, edit)) = prelude.take() {
                     message = format!("`{}` has no item `{}`{note}", imp.path.join("."), it.name);
                     replacement = Some(edit);
                 } else if message.starts_with(&format!("`{}` has no item", imp.path.join("."))) {
