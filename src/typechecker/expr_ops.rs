@@ -4521,6 +4521,43 @@ impl<'a> super::TypeChecker<'a> {
         {
             return None;
         }
+        // `a + b.as_str()` with `b` a `String`, as Rust writes it: the
+        // `.as_str()` is what made the view, so a place is lent (`a + ref
+        // b`, as `karac fix` makes of Rust's `a + &b`) and an owned
+        // temporary is added as it is (`a + b.clone()`), with no copy
+        // (B-2026-11-26-82).
+        if let ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            args_close_span,
+            ..
+        } = &right.kind
+        {
+            let string = self
+                .node_types
+                .get(&object.id)
+                .is_some_and(|(t, _)| is_string_concat_operand(&self.resolved_now(t)));
+            if method == "as_str" && args.is_empty() && string {
+                let end = args_close_span.offset + args_close_span.length;
+                let place = matches!(
+                    object.kind,
+                    ExprKind::Identifier(_)
+                        | ExprKind::FieldAccess { .. }
+                        | ExprKind::TupleIndex { .. }
+                        | ExprKind::Index { .. }
+                );
+                let text = crate::formatter::render_expr_one_line(object);
+                return Some(FixIt {
+                    span: Span {
+                        offset: right.span.offset,
+                        length: end.checked_sub(right.span.offset)?,
+                        ..right.span
+                    },
+                    replacement: if place { format!("ref {text}") } else { text },
+                });
+            }
+        }
         to_string_fix(right)
     }
 
