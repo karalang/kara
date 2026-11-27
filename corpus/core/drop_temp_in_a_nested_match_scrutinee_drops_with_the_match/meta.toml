@@ -1,0 +1,10 @@
+source = "review-thread rulings 2026-11-27 (core-semantics sentence map)"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop", "temporaries"]
+expected_from = "spec"
+rules = ["7.4"]
+backends = []
+env = {}
+note = "core-semantics cs.561: cs.561 (review-thread ruling 2026-11-27): the narrower row wins for every row. The argument temporary of `look` sits in a `match` scrutinee nested in a `let`, so it drops at the end of the match, before `after()` runs, not at the end of the statement."

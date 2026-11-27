@@ -1,0 +1,10 @@
+source = "review-thread rulings 2026-11-27 (core-semantics sentence map)"
+dedup_of = []
+expect = "error:E0516"
+exit = 1
+tags = ["references"]
+expected_from = "spec"
+rules = ["5.3"]
+backends = []
+env = {}
+note = "core-semantics cs.345: cs.345: a reborrow returned on one branch stays live on the other branch when it is used there after a write to the vector, so the write is refused (karac checks borrows by the last use reachable from each point). The expected.out wording of an error pin is guidance, not a byte oracle."

@@ -1,0 +1,10 @@
+source = "review-thread rulings 2026-11-27 (core-semantics sentence map)"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop", "collections"]
+expected_from = "spec"
+rules = ["7.8"]
+backends = []
+env = {}
+note = "core-semantics cs.599: cs.599 (review-thread ruling 2026-11-27): a SortedMap drops in key order, and within an entry the key drops before the value."

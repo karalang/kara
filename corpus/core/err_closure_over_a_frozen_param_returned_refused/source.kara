@@ -1,0 +1,14 @@
+// cs.665 (review-thread ruling 2026-11-27): a closure that captures a frozen
+// handle is a view, but unlike a view result it may not be returned: a frozen
+// handle has no origin §5.4 can name. Here it is returned straight from a
+// `frozen` parameter.
+shared struct Node { val: i64 }
+fn mk(g: frozen Node) -> Fn() -> i64 {
+    || g.val + 1
+}
+fn main() {
+    let r = Node { val: 3 };
+    let g = freeze r;
+    let f = mk(g);
+    println(f());
+}

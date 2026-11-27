@@ -1,0 +1,16 @@
+// cs.414b (review-thread ruling 2026-11-27): the signature alone decides what a
+// call borrows (§5.4, §9.4). `mk` clones `p` inside its body, but `p` is a
+// borrowed parameter, so `mk(name)` still may not outlive `name`; only `own p`
+// frees the caller.
+fn mk(p: String) -> Fn(String) -> String {
+    let q = p.clone();
+    |s| f"{q}{s}"
+}
+fn main() {
+    let mut f: Fn(String) -> String = |s| f"{s}";
+    {
+        let name = "hi ".to_string();
+        f = mk(name);
+    }
+    println(f("there".to_string()));
+}

@@ -1,0 +1,18 @@
+// cs.561 (review-thread ruling 2026-11-27): the narrower row wins for every
+// row. The argument temporary of `look` sits in a `match` scrutinee nested in
+// a `let`, so it drops at the end of the match, before `after()` runs, not at
+// the end of the statement.
+struct D { n: i64 }
+impl Drop for D { fn drop(mut ref self) { println(f"drop {self.n}"); } }
+fn look(d: D) -> i64 { d.n }
+fn after() -> i64 { println("after"); 100 }
+fn main() {
+    let v = match look(D { n: 1 }) {
+        1 => {
+            println("arm");
+            10
+        }
+        _ => 0,
+    } + after();
+    println(v);
+}

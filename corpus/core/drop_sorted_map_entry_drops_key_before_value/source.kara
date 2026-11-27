@@ -1,0 +1,13 @@
+// cs.599 (review-thread ruling 2026-11-27): a SortedMap drops in key order,
+// and within an entry the key drops before the value.
+#[derive(Eq, PartialEq, Ord, PartialOrd)]
+struct K { id: i64 }
+impl Drop for K { fn drop(mut ref self) { println(f"k{self.id}"); } }
+struct V { id: i64 }
+impl Drop for V { fn drop(mut ref self) { println(f"v{self.id}"); } }
+fn main() {
+    let mut m: SortedMap[K, V] = SortedMap.new();
+    m.insert(K { id: 2 }, V { id: 2 });
+    m.insert(K { id: 1 }, V { id: 1 });
+    println(m.len());
+}

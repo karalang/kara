@@ -1,0 +1,10 @@
+source = "review-thread rulings 2026-11-27 (core-semantics sentence map)"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "references"]
+expected_from = "spec"
+rules = ["5.7"]
+backends = []
+env = {}
+note = "core-semantics cs.414b: cs.414b (review-thread ruling 2026-11-27): with `own p` the returned closure owns the value, so `mk(name)` may outlive `name`."

@@ -1,0 +1,10 @@
+source = "review-thread rulings 2026-11-27 (core-semantics sentence map)"
+dedup_of = []
+expect = "error:E0516"
+exit = 1
+tags = ["references"]
+expected_from = "spec"
+rules = ["5.3"]
+backends = []
+env = {}
+note = "core-semantics cs.345: cs.345: a reborrow taken before a loop and returned from it on one branch is used again on the next round, after the push, so the push is refused. The expected.out wording of an error pin is guidance, not a byte oracle."

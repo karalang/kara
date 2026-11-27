@@ -1,0 +1,9 @@
+// cs.364 (review-thread ruling 2026-11-27): with no borrowed parameter, a
+// view of anything but static data is an error: here a view of a local.
+fn label(n: i64) -> Str {
+    let s = n.to_string();
+    s.as_str()
+}
+fn main() {
+    println(label(7));
+}

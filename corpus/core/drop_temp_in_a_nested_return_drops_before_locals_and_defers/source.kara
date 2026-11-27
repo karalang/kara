@@ -1,0 +1,16 @@
+// cs.561 (review-thread ruling 2026-11-27): an argument temporary in a
+// `return e` nested in a larger statement drops as the return row says: after
+// `e` is computed, before the function's defers and locals (which then run in
+// reverse: the defer, then `k`).
+struct D { n: i64 }
+impl Drop for D { fn drop(mut ref self) { println(f"drop {self.n}"); } }
+fn look(d: D) -> i64 { d.n }
+fn f(c: bool) -> i64 {
+    let k = D { n: 5 };
+    defer println("defer");
+    let x = if c { return look(D { n: 4 }) + k.n; } else { 0 };
+    x
+}
+fn main() {
+    println(f(true));
+}

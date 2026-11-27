@@ -1,0 +1,13 @@
+// cs.414b (review-thread ruling 2026-11-27): with `own p` the returned closure
+// owns the value, so `mk(name)` may outlive `name`.
+fn mk(p: own String) -> Fn(String) -> String {
+    |s| f"{p}{s}"
+}
+fn main() {
+    let mut f: Fn(String) -> String = |s| f"{s}";
+    {
+        let name = "hi ".to_string();
+        f = mk(name);
+    }
+    println(f("there".to_string()));
+}

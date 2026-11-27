@@ -1,0 +1,10 @@
+source = "review-thread rulings 2026-11-27 (core-semantics sentence map)"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop", "errdefer"]
+expected_from = "spec"
+rules = ["7.7"]
+backends = []
+env = {}
+note = "core-semantics cs.581: cs.581 (review-thread ruling 2026-11-27): an errdefer belongs to its scope. The inner block ends normally, so its errdefer is discarded, and the later failure return runs only the function-level errdefer. The loop's errdefer is left by `break` and discarded the same way."

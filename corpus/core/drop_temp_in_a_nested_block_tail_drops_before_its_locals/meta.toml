@@ -1,0 +1,10 @@
+source = "review-thread rulings 2026-11-27 (core-semantics sentence map)"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop", "temporaries"]
+expected_from = "spec"
+rules = ["7.4"]
+backends = []
+env = {}
+note = "core-semantics cs.561: cs.561 (review-thread ruling 2026-11-27): an argument temporary in a block tail nested in a larger statement drops as the block-tail row says: after the tail is computed and before the block's locals, so before `after()`."

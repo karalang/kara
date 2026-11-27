@@ -1,0 +1,14 @@
+// cs.561 (review-thread ruling 2026-11-27): an argument temporary in a block
+// tail nested in a larger statement drops as the block-tail row says: after
+// the tail is computed and before the block's locals, so before `after()`.
+struct D { n: i64 }
+impl Drop for D { fn drop(mut ref self) { println(f"drop {self.n}"); } }
+fn look(d: D) -> i64 { d.n }
+fn after() -> i64 { println("after"); 100 }
+fn main() {
+    let v = {
+        let k = D { n: 2 };
+        look(D { n: 3 }) + k.n
+    } + after();
+    println(v);
+}

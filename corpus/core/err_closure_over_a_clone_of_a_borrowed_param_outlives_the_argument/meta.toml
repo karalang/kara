@@ -1,0 +1,10 @@
+source = "review-thread rulings 2026-11-27 (core-semantics sentence map)"
+dedup_of = []
+expect = "error:E0516"
+exit = 1
+tags = ["closure", "references"]
+expected_from = "spec"
+rules = ["5.7"]
+backends = []
+env = {}
+note = "core-semantics cs.414b: cs.414b (review-thread ruling 2026-11-27): the signature alone decides what a call borrows (§5.4, §9.4). `mk` clones `p` inside its body, but `p` is a borrowed parameter, so `mk(name)` still may not outlive `name`; only `own p` frees the caller. The expected.out wording of an error pin is guidance, not a byte oracle."

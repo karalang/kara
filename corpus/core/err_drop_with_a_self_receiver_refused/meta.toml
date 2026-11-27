@@ -1,0 +1,10 @@
+source = "review-thread rulings 2026-11-27 (core-semantics sentence map)"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["drop"]
+expected_from = "spec"
+rules = ["7.11"]
+backends = []
+env = {}
+note = "core-semantics cs.613: cs.613 (review-thread ruling 2026-11-27): `fn drop(mut ref self)` is the only form; a `self` receiver is refused with E_DROP_SIGNATURE_INVALID. The expected.out wording of an error pin is guidance, not a byte oracle."

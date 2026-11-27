@@ -1,0 +1,12 @@
+// cs.665 (review-thread ruling 2026-11-27): a closure over a handle frozen in
+// the function may not be returned either.
+shared struct Node { val: i64 }
+fn mk() -> Fn() -> i64 {
+    let n = Node { val: 3 };
+    let g = freeze n;
+    || g.val + 1
+}
+fn main() {
+    let f = mk();
+    println(f());
+}

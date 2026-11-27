@@ -1,0 +1,1 @@
+error[E0511]: main.kara:7:8: `frozen` binding `g` is captured by a closure that escapes

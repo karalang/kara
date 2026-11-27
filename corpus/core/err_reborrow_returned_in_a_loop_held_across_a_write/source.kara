@@ -1,0 +1,18 @@
+// cs.345: a reborrow taken before a loop and returned from it on one branch is
+// used again on the next round, after the push, so the push is refused.
+fn first(v: mut ref Vec[i64]) -> mut ref i64 {
+    let r = mut ref v[0];
+    let mut i = 0;
+    while i < 3 {
+        if *r > 10 { return r; }
+        v.push(i);
+        i += 1;
+    }
+    mut ref v[0]
+}
+fn main() {
+    let mut v: Vec[i64] = [1];
+    let r = first(mut v);
+    *r += 1;
+    println(f"{v}");
+}

@@ -1,0 +1,14 @@
+// cs.364 (review-thread ruling 2026-11-27): with no borrowed parameter the
+// result borrows nothing, so the body may return a value with no origins:
+// static data, or a collection holding no reference.
+fn unit(metric: bool) -> Str {
+    if metric { "km" } else { "mi" }
+}
+fn none(n: i64) -> Vec[ref String] {
+    Vec.new()
+}
+fn main() {
+    println(unit(true));
+    println(unit(false));
+    println(none(3).len());
+}

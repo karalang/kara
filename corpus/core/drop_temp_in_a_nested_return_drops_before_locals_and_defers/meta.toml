@@ -1,0 +1,10 @@
+source = "review-thread rulings 2026-11-27 (core-semantics sentence map)"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop", "temporaries"]
+expected_from = "spec"
+rules = ["7.4"]
+backends = []
+env = {}
+note = "core-semantics cs.561: cs.561 (review-thread ruling 2026-11-27): an argument temporary in a `return e` nested in a larger statement drops as the return row says: after `e` is computed, before the function's defers and locals (which then run in reverse: the defer, then `k`)."

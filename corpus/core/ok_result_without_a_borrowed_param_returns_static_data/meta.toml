@@ -1,0 +1,10 @@
+source = "review-thread rulings 2026-11-27 (core-semantics sentence map)"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["references"]
+expected_from = "spec"
+rules = ["5.4"]
+backends = []
+env = {}
+note = "core-semantics cs.364: cs.364 (review-thread ruling 2026-11-27): with no borrowed parameter the result borrows nothing, so the body may return a value with no origins: static data, or a collection holding no reference."

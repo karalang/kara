@@ -1,0 +1,16 @@
+// cs.345: a reborrow returned on one branch stays live on the other branch
+// when it is used there after a write to the vector, so the write is refused
+// (karac checks borrows by the last use reachable from each point).
+fn first(v: mut ref Vec[i64]) -> mut ref i64 {
+    let r = mut ref v[0];
+    if *r > 10 { return r; }
+    v.push(0);
+    *r += 1;
+    mut ref v[0]
+}
+fn main() {
+    let mut v: Vec[i64] = [1];
+    let r = first(mut v);
+    *r += 1;
+    println(f"{v}");
+}

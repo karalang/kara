@@ -4347,6 +4347,13 @@ fn main() -> () {
             "err_mutfn_immutable_binding_call_refused",
             "err_mutfn_own_param_call_needs_rebind_refused",
             "err_nonescaping_param_to_escaping_param_refused",
+            // Review's 2026-11-27 rulings and the B-2026-11-27-47 holder rule:
+            // refused by the TaskGroup pass and the frozen-escape check, which
+            // this harness skips.
+            "err_closure_held_past_a_copy_place_it_writes_then_place_used",
+            "err_closure_held_past_a_copy_place_then_place_written",
+            "err_closure_over_a_frozen_local_returned_refused",
+            "err_closure_over_a_frozen_param_returned_refused",
         ];
         // Pins that call Kāra library functions, which `check_built` does
         // not append (a `select` desugars to calls into sync.kara;
@@ -4529,6 +4536,12 @@ fn main() -> () {
             "ok_two_next_results_live_together",
             "ok_views_coexist_with_reads",
             "ok_write_through_ref_fixes",
+            // Review's 2026-11-27 rulings on §5.3: `ref` / `mut ref` of a
+            // place through a reference local needs the full front end.
+            "ok_mut_ref_local_reassigned_while_a_reborrow_through_it_lives",
+            "ok_reborrow_returned_in_a_loop_taken_afresh_each_round",
+            "ok_reborrow_returned_on_one_branch_then_written_on_the_other",
+            "ok_ref_local_reassigned_while_a_borrow_through_it_lives",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus/core");
         let mut pins: Vec<_> = std::fs::read_dir(&root)

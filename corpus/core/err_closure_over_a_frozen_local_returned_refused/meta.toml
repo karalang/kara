@@ -1,0 +1,10 @@
+source = "review-thread rulings 2026-11-27 (core-semantics sentence map)"
+dedup_of = []
+expect = "error:E0511"
+exit = 1
+tags = ["closure", "handles"]
+expected_from = "spec"
+rules = ["9.2"]
+backends = []
+env = {}
+note = "core-semantics cs.665: cs.665 (review-thread ruling 2026-11-27): a closure over a handle frozen in the function may not be returned either. The expected.out wording of an error pin is guidance, not a byte oracle."

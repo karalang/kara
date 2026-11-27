@@ -1,4 +1,4 @@
-fn take(s: String) { println(s); }
+fn take(s: own String) { println(s); }
 fn main() {
     let mut s = "a".to_string();
     take(s);
