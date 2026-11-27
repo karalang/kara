@@ -1094,6 +1094,8 @@ fn run_with(
             _ => None,
         },
         tasks: Vec::new(),
+        exec_queue: std::collections::VecDeque::new(),
+        exec_parked: Vec::new(),
         log_ids: 0,
         handles: Vec::new(),
         groups: Vec::new(),
@@ -1897,6 +1899,11 @@ struct Interp<'a> {
     cancel_after: Option<u64>,
     /// The executor's tasks (B-2026-10-14-49), the root first, by id.
     tasks: Vec<TaskSlot>,
+    /// The run queue and the parked tasks of the executor's loop, lent
+    /// here while it polls a task, so `Runtime.list_tasks()` can list them
+    /// (B-2026-11-26-93).
+    exec_queue: std::collections::VecDeque<usize>,
+    exec_parked: Vec<(usize, Wait)>,
     /// The last `std.log` task id given out: an auto-par task logs as its
     /// spawner and takes no number (B-2026-11-18-55).
     log_ids: i128,
@@ -3318,11 +3325,12 @@ impl<'a> Interp<'a> {
                 self.forgotten.extend(args);
                 Ok(Value::Unit)
             }
-            // design.md §17's introspection: the interpreter has no
-            // scheduler to list (B-2026-10-22-38).
-            ("Runtime", "list_tasks" | "list_par_blocks") => {
-                Ok(self.alloc_box("Vec", Value::Agg(vec![])))
-            }
+            // design.md § Debugger contract: every task suspended in the
+            // executor, as the compiled runtime's `karac_mir_list_tasks`
+            // lists them (B-2026-11-26-93). `par {}` blocks run inline here,
+            // so there is no active one to list (B-2026-10-22-38).
+            ("Runtime", "list_tasks") => self.list_tasks(ret),
+            ("Runtime", "list_par_blocks") => Ok(self.alloc_box("Vec", Value::Agg(vec![]))),
             // What the profile says, as a compiled build answers: `karac
             // run` and `karac build` set the strip variable from kara.toml
             // (design.md § Debugger contract, B-2026-11-25-24). The lists
@@ -14599,6 +14607,84 @@ impl<'a> Interp<'a> {
         Ok(Value::Variant(idx as u32, v.into_iter().collect()))
     }
 
+    /// `Runtime.list_tasks()`: one `TaskInfo` per task that is not the one
+    /// running and has not finished: queued (`Running`) or parked on what
+    /// its `__ready` saw (B-2026-11-26-93). The interpreter records no spawn
+    /// site, so `spawn_site_id`, `file`, `line` and `col` are zero and
+    /// empty, as runtime.kara allows.
+    fn list_tasks(&mut self, ret: Ty) -> R<Value> {
+        // Without the metadata the list is empty, as a stripped build's is.
+        if matches!(
+            std::env::var("KARAC_STRIP_DEBUG_METADATA").as_deref(),
+            Ok("1" | "true")
+        ) {
+            return Ok(self.alloc_box("Vec", Value::Agg(vec![])));
+        }
+        let fields: Vec<String> = match self.tys.kind(ret) {
+            TyKind::Intrinsic(IntrinsicTy::Vec(e)) => match self.tys.kind(e) {
+                TyKind::Adt(a) => self.tys.adt(a).variants[0]
+                    .fields
+                    .iter()
+                    .map(|(n, _)| n.clone())
+                    .collect(),
+                _ => return err("Runtime.list_tasks: its element is not `TaskInfo`".to_string()),
+            },
+            _ => return err("Runtime.list_tasks: it does not return a `Vec`".to_string()),
+        };
+        let mut rows: Vec<(usize, Option<Wait>)> = self
+            .exec_queue
+            .iter()
+            .map(|&t| (t, None))
+            .chain(self.exec_parked.iter().map(|(t, w)| (*t, Some(w.clone()))))
+            .chain(self.spawned.iter().map(|&t| (t, None)))
+            .filter(|&(t, _)| t != self.cur_task && (t == self.root_task || !self.task_done(t)))
+            .collect();
+        rows.sort_by_key(|r| r.0);
+        rows.dedup_by_key(|r| r.0);
+        let mut out = Vec::with_capacity(rows.len());
+        for (t, w) in rows {
+            let wait = match w {
+                None => Value::Variant(0, vec![]),
+                Some(Wait::Join(h)) => {
+                    let peer = self
+                        .tasks
+                        .iter()
+                        .position(|s| s.handle == h)
+                        .filter(|&p| !self.task_done(p))
+                        .map_or(0, |p| p + 1);
+                    Value::Variant(1, vec![Value::Int(peer as i128)])
+                }
+                Some(Wait::Until(_)) => Value::Variant(3, vec![]),
+                Some(
+                    Wait::Accept(fd)
+                    | Wait::Read(fd, _)
+                    | Wait::Write(fd, _)
+                    | Wait::Datagram(fd, _)
+                    | Wait::Tls(fd, _, _),
+                ) => Value::Variant(2, vec![Value::Int(i128::from(fd))]),
+                Some(_) => Value::Variant(1, vec![Value::Int(0)]),
+            };
+            // Ids count from 1, the root's, as the compiled runtime's do; 0
+            // is the root's parent sentinel.
+            let parent = match self.tasks[t].group {
+                0 => 0,
+                g => self.groups[g - 1].owner + 1,
+            };
+            let mut row = Vec::with_capacity(fields.len());
+            for f in &fields {
+                row.push(match f.as_str() {
+                    "wait_target" => wait.clone(),
+                    "file" => self.alloc_box("String", Value::Str(String::new())),
+                    "task_id" => Value::Int(t as i128 + 1),
+                    "parent_task_id" => Value::Int(parent as i128),
+                    _ => Value::Int(0),
+                });
+            }
+            out.push(Value::Agg(row));
+        }
+        Ok(self.alloc_box("Vec", Value::Agg(out)))
+    }
+
     fn alloc_box(&mut self, ty_name: &str, value: Value) -> Value {
         let a = self.alloc(HeapObj {
             count: 1,
@@ -18851,7 +18937,13 @@ impl<'a> Interp<'a> {
                 &mut self.active_spans,
                 std::mem::take(&mut self.tasks[t].spans),
             );
+            // Lent for the poll, and nested-safe: a run inside it lends its
+            // own and gives these back.
+            let lent_q = std::mem::replace(&mut self.exec_queue, std::mem::take(&mut queue));
+            let lent_p = std::mem::replace(&mut self.exec_parked, std::mem::take(&mut parked));
             let polled = self.call(&resume, vec![Value::Ref(at.clone())]);
+            queue = std::mem::replace(&mut self.exec_queue, lent_q);
+            parked = std::mem::replace(&mut self.exec_parked, lent_p);
             self.tasks[t].spans = std::mem::replace(&mut self.active_spans, outer);
             let polled = polled?;
             // Tasks it spawned run after it, in spawn order, but for one a
