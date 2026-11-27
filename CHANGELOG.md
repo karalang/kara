@@ -1311,6 +1311,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   sequence, as it reads a body. It answered `400 Bad Request`. Names, the
   method and the target stay ASCII (B-2026-11-26-94, found by
   conformance/http_server_fuzz.py against h11).
+- A compiled `extern "C"` call passes a struct that goes on the stack, after
+  the argument registers are used up, with its fields: the call site now
+  carries `byval` as the declaration does, where the optimizer dropped the
+  copy's contents and C read zeros (B-2026-11-27-62). The interpreter's
+  slot for a struct returned by value from C is 16-aligned, where an
+  `i128` field's aligned store could fault (B-2026-11-27-53).
 - The HTTP server answers `400 Bad Request` and closes the connection for a
   line of spaces or tabs before the request line (` \r\n`, `\r \n`): RFC
   9112 §2.2 lets a server skip only empty lines there, and a peer that

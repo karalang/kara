@@ -182,6 +182,41 @@ fn ffi_abi_i128_and_sixteen_byte_aligned_structs() {
     );
 }
 
+/// B-2026-11-27-62: a struct the registers no longer hold goes on the
+/// stack whole, and the compiled call site carries `byval`, so its copy is
+/// filled (it reached C as zeros); B-2026-11-27-53: the interpreter's
+/// slots sit at the struct's alignment, which C reports back.
+#[test]
+fn ffi_abi_structs_on_the_stack_after_the_registers() {
+    every_lane(
+        "#[repr(C)]\n#[derive(Copy, Clone)]\n\
+         struct A { x: u16, y: f32 }\n\
+         #[repr(C)]\n#[derive(Copy, Clone)]\n\
+         struct B { a: i64, b: i64, c: i64 }\n\
+         unsafe extern \"C\" {\n\
+         \x20   fn ska(a0: i64, a1: i64, a2: i64, a3: i64, a4: i64, a5: i64, a6: i64, s: A) -> i64;\n\
+         \x20   fn skb(a0: i64, a1: i64, a2: i64, a3: i64, a4: i64, a5: i64, a6: i64, s: B) -> i64;\n\
+         \x20   fn skb6(a0: i64, a1: i64, a2: i64, a3: i64, a4: i64, a5: i64, s: B) -> i64;\n\
+         \x20   fn misaligned(p: *const B) -> i64;\n\
+         }\n\
+         fn main() {\n\
+         \x20   println(ska(1, 2, 3, 4, 5, 6, 7, A { x: 3, y: 4.0 }));\n\
+         \x20   println(skb(1, 2, 3, 4, 5, 6, 7, B { a: 1, b: 2, c: 3 }));\n\
+         \x20   let b = B { a: 4, b: 5, c: 6 };\n\
+         \x20   println(skb6(1, 2, 3, 4, 5, 6, b));\n\
+         \x20   println(misaligned(ptr.const(b)));\n\
+         }\n",
+        "#include <stdint.h>\n\
+         struct A { uint16_t x; float y; };\n\
+         struct B { int64_t a, b, c; };\n\
+         int64_t ska(int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6, struct A s) { return a0 + a5 + a6 * 1000 + s.x * 10 + (int64_t)s.y; }\n\
+         int64_t skb(int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6, struct B s) { return a6 * 1000 + s.a * 100 + s.b * 10 + s.c; }\n\
+         int64_t skb6(int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, struct B s) { return a5 * 1000 + s.a * 100 + s.b * 10 + s.c; }\n\
+         int64_t misaligned(const struct B* p) { return (int64_t)((uintptr_t)p % _Alignof(struct B)); }\n",
+        "7041\n7123\n6456\n0\n",
+    );
+}
+
 /// B-2026-11-22-56: a `union` value is refused naming the deferral, not
 /// as "no definition for type".
 #[test]

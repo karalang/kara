@@ -356,6 +356,19 @@ impl<'ctx> Cx<'ctx, '_> {
             }
         }
         let r = self.builder.build_call(f, &vals, "").map_err(e)?;
+        // The call site carries the declaration's parameter and result
+        // attributes. LLVM reads `byval` and `sret` off the call, not the
+        // callee: without them the optimizer took a stack-passed struct's
+        // copy for an unread pointer and dropped the stores that filled it,
+        // so C saw zeros (B-2026-11-27-62).
+        for i in 0..f.count_params() {
+            for a in f.attributes(AttributeLoc::Param(i)) {
+                r.add_attribute(AttributeLoc::Param(i), a);
+            }
+        }
+        for a in f.attributes(AttributeLoc::Return) {
+            r.add_attribute(AttributeLoc::Return, a);
+        }
         let d = self.place_ptr(dest)?;
         match ret {
             Crossing::Void => Ok(()),

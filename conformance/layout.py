@@ -332,9 +332,18 @@ def main():
         c.append(f"struct {n} r_{n}(void) {{ struct {n} s; __builtin_memset(&s, 0xA5, sizeof s); {assigns_b} return s; }}\n")
         assigns_c = " ".join(f"p->{lf.path} = {c_literal(lf, v)};" for lf, v in zip(leaves, vc))
         c.append(f"void w_{n}(struct {n}* p) {{ {assigns_c} }}\n")
+        # Where each slot lands: a pointer to the program's value, and a
+        # by-value struct after seven integers, so on x86-64 it goes on the
+        # stack behind one stack word, must each sit at the struct's
+        # alignment (B-2026-11-27-53).
+        c.append(f"uint64_t pa_{n}(const struct {n}* p) {{ return (uint64_t)((uintptr_t)p % _Alignof(struct {n})); }}\n")
+        c.append(f"uint64_t sk_{n}(int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, "
+                 f"int64_t a6, struct {n} s) {{ return ({hsum_v}) * 13ULL + (uint64_t)(a0 + a1 + a2 + a3 + a4 + a5 + a6) "
+                 f"+ ((uintptr_t)&s % _Alignof(struct {n}) ? 0x8000000000000000ULL : 0); }}\n")
         externs += [f"fn h_{n}(p: *const {n}) -> u64;", f"fn v_{n}(s: {n}) -> u64;",
                     f"fn sv_{n}(a: i32, s: {n}, b: f64, d: i8) -> u64;", f"fn r_{n}() -> {n};",
-                    f"fn w_{n}(p: *mut {n});"]
+                    f"fn w_{n}(p: *mut {n});", f"fn pa_{n}(p: *const {n}) -> u64;",
+                    f"fn sk_{n}(a0: i64, a1: i64, a2: i64, a3: i64, a4: i64, a5: i64, a6: i64, s: {n}) -> u64;"]
         lit = kara_value(s, iter(va), iter(leaves))
         body.append(f"    let a_{n} = {lit};")
         emit(f"    println(f\"{n}.size_of {{{n}.size_of()}}\");", None, f"{n} size")
@@ -345,6 +354,10 @@ def main():
         ai, bf, di = rng.randint(-1000, 1000), rng.randint(-400, 400) / 4 + 0.25, rng.randint(-128, 127)
         hs = (h * 3 + (ai & M64) * 5 + (int(bf * 4) & M64) * 7 + (di & M64) * 11) & M64
         emit(f"    println(sv_{n}({ai}, a_{n}, {bf!r}, {di}));", str(hs), f"{n} to C by value among scalars")
+        emit(f"    println(pa_{n}(ptr.const(a_{n})));", "0", f"{n} pointer at its alignment")
+        ks = [rng.randint(-1000, 1000) for _ in range(7)]
+        emit(f"    println(sk_{n}({', '.join(map(str, ks))}, a_{n}));", str((h * 13 + (sum(ks) & M64)) & M64),
+             f"{n} by value after seven integers, at its alignment")
         shows = " ".join(kara_show(lf, f"r_{n}_.{lf.path}") for lf in leaves)
         body.append(f"    let r_{n}_ = r_{n}();")
         emit(f"    println(f\"{shows}\");", " ".join(shown(lf, v) for lf, v in zip(leaves, vb)),
