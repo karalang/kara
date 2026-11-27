@@ -64,7 +64,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | perf | 206 |
 | other | 163 |
 | soundness | 141 |
-| miscompile | 112 |
+| miscompile | 113 |
 | run-vs-build | 80 |
 | crash | 71 |
 | codegen-gap | 48 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 972 |
+| typecheck | 973 |
 | mir | 350 |
 | mir-llvm | 341 |
 | cli | 324 |
@@ -131,6 +131,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-27-12 | 2026-11-27 | runtime | low | The HTTP client refuses a response whose header block uses obs-fold (a header line continued on the next line that starts with a space or tab): `Client.get` returns Err 'request failed: invalid HTTP header parsed', where RFC 9112 §5.2 requires a user agent that receives obs-fold in a response to replace each fold with SP and read the value | — |
 | B-2026-11-27-13 | 2026-11-27 | runtime | low | The HTTP client refuses any response with more than 100 header fields, or a head over about 400 KiB, with Err 'request failed: message head is too large'; neither limit is documented, and 100 fields is low for real responses (many Set-Cookie, CDN and tracing headers) | — |
 | B-2026-11-27-16 | 2026-11-27 | cli | low | In a package, the E0520 import fix-it for a library name used only in a test file (src/main_test.kara) is labelled src/main.kara at offset 0, so `karac fix` applies nothing and the error stays | — |
+| B-2026-11-27-17 | 2026-11-27 | typecheck | high | `if c { (r, steps) } else { (r, r) }` with `steps: i32` and `r: i64` checks clean as an `(i64, i32)` and narrows the second branch's `r` silently (3000000000 prints -1294967296): an `if` or `match` joins tuples, `Option`s and lists at their first branch without LUB rule 4's refusal of two number types, and a branch's tuple of literals settles at `i64` before the sibling can type it | — |
 
 ### Relocated
 
