@@ -760,26 +760,90 @@ async fn http_exchange_h2<T>(
 where
     T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
-    let (mut sender, conn) = hyper::client::conn::http2::handshake(
-        hyper_util::rt::TokioExecutor::new(),
-        hyper_util::rt::TokioIo::new(io),
-    )
-    .await
-    .map_err(|e| format!("{url}: HTTP/2 handshake failed: {e}"))?;
+    let (mut sender, conn) =
+        hyper::client::conn::http2::Builder::new(hyper_util::rt::TokioExecutor::new())
+            .max_header_list_size(H2_HEADER_LIST_CEILING)
+            .handshake(hyper_util::rt::TokioIo::new(io))
+            .await
+            .map_err(|e| format!("{url}: HTTP/2 handshake failed: {e}"))?;
     let conn = tokio::task::spawn(async move {
         let _ = conn.await;
     });
     let fetched = async {
         let req = http_build_request(method, &uri.to_string(), None, body, headers, url)?;
-        let resp = sender
-            .send_request(req)
-            .await
-            .map_err(|e| format!("{url}: request failed: {e}"))?;
+        let resp = sender.send_request(req).await.map_err(|e| {
+            if h2_head_refused(&e) {
+                format!(
+                    "{url}: the HTTP/2 response head was refused: a malformed header \
+                         block, or a header list larger than {} KiB",
+                    H2_HEADER_LIST_CEILING / 1024
+                )
+            } else {
+                format!("{url}: request failed: {e}")
+            }
+        })?;
+        if let Some(over) = h2_head_limit_text(url, resp.headers()) {
+            return Err(over);
+        }
         http_collect_response(resp, url).await
     }
     .await;
     http_close_conn(sender, conn).await;
     fetched
+}
+
+/// The header list h2 itself decodes before it refuses a response
+/// (SETTINGS_MAX_HEADER_LIST_SIZE, RFC 9113 §6.5.2). It is above
+/// `MAX_RESPONSE_HEAD` so that a head over the client's own limits arrives
+/// decoded and `h2_head_limit_text` names the limit it broke, as over
+/// HTTP/1.1; hyper's default, 16 KiB, refused heads HTTP/1.1 reads, with
+/// only "http2 error" (docs/library/io.md § HTTP client, B-2026-11-27-23).
+const H2_HEADER_LIST_CEILING: u32 = 1024 * 1024;
+
+/// The client's HTTP/1.1 head limits, applied to an HTTP/2 response head,
+/// so a response does not pass or fail by the protocol ALPN picked. A
+/// field is measured as h2 measures a header list: its name and value
+/// plus 32 bytes.
+fn h2_head_limit_text(url: &str, headers: &hyper::HeaderMap) -> Option<String> {
+    if headers.len() > MAX_RESPONSE_HEADERS {
+        return Some(format!(
+            "{url}: response head has more than {MAX_RESPONSE_HEADERS} header fields"
+        ));
+    }
+    let size: usize = headers
+        .iter()
+        .map(|(n, v)| n.as_str().len() + v.len() + 32)
+        .sum();
+    (size > MAX_RESPONSE_HEAD).then(|| {
+        format!(
+            "{url}: response head is larger than {} KiB",
+            MAX_RESPONSE_HEAD / 1024
+        )
+    })
+}
+
+/// h2 refuses a response head itself in three ways, none of which says
+/// which cause it was: it resets the request's stream with PROTOCOL_ERROR
+/// for a header list over `H2_HEADER_LIST_CEILING` or a malformed field,
+/// and closes the connection with COMPRESSION_ERROR (a header block too
+/// big to skip, or HPACK it cannot decode) or ENHANCE_YOUR_CALM (too many
+/// CONTINUATION frames for the ceiling). h2 is not a direct dependency, so
+/// the refusal is read from the error's text.
+fn h2_head_refused(e: &hyper::Error) -> bool {
+    let mut src: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(e);
+    while let Some(s) = src {
+        let text = s.to_string();
+        if text == "stream error detected: unspecific protocol error detected"
+            || text.starts_with(
+                "connection error detected: unable to maintain the header compression context",
+            )
+            || text.starts_with("connection error detected: detected excessive load generating")
+        {
+            return true;
+        }
+        src = s.source();
+    }
+    false
 }
 
 /// The `User-Agent` a request carries unless it sets its own.
