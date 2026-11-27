@@ -6506,10 +6506,12 @@ impl<'l, 'a> Bx<'l, 'a> {
         // the `errdefer` bodies too.
         let ret = Place::local(Local::RETURN_PLACE);
         self.push_scope();
-        self.note_escaping_lets(&f.body);
+        // The returned closures first: a local closure one of them names
+        // escapes with it (B-2026-11-27-22).
         if let Some(e) = &f.body.final_expr {
             self.note_returned_closures(e);
         }
+        self.note_escaping_lets(&f.body);
         self.block_stmts(&f.body)?;
         match &f.body.final_expr {
             Some(e) => {
@@ -7045,6 +7047,76 @@ impl<'l, 'a> Bx<'l, 'a> {
                 // the same value returned directly does (§9.3,
                 // B-2026-11-20-5).
                 self.note_returned_closures(value);
+            }
+        }
+        self.note_closures_escaping_inside(block);
+    }
+
+    /// A `let c = || ..` that an escaping closure of `block` names escapes
+    /// with it: `let c = || n + 1; || c()` returns `c` inside the closure it
+    /// returns, so `c` captures by move as the returned closure does, and an
+    /// owned or `Copy` capture of it no longer borrows the body's local
+    /// (core semantics §9.3, B-2026-11-27-22). The names follow chains
+    /// (`let d = || c(); || d()`) to a fixed point.
+    fn note_closures_escaping_inside(&mut self, block: &Block) {
+        let mut lets: Vec<(NodeId, NodeId, SymbolId)> = Vec::new();
+        for s in &block.stmts {
+            let StmtKind::Let { pattern, value, .. } = &s.kind else {
+                continue;
+            };
+            let (PatternKind::Binding(name), ExprKind::Closure { .. }) =
+                (&pattern.kind, &value.kind)
+            else {
+                continue;
+            };
+            if let Some(&sym) = self.lcx.binding_syms.get(&(pattern.id, name.clone())) {
+                lets.push((pattern.id, value.id, sym));
+            }
+        }
+        if lets.is_empty() {
+            return;
+        }
+        // Each closure literal of the block, with the locals it names.
+        let mut named: Vec<(NodeId, FxHashSet<SymbolId>)> = Vec::new();
+        crate::span_visitor::for_each_expr_in_block(block, &mut |e| {
+            if let ExprKind::Closure { .. } = &e.kind {
+                let syms = crate::span_visitor::expr_node_ids(e)
+                    .into_iter()
+                    .filter_map(|id| match self.lcx.res.get(&id) {
+                        Some(Res::Local(s)) => Some(*s),
+                        _ => None,
+                    })
+                    .collect();
+                named.push((e.id, syms));
+            }
+        });
+        let mut escaping: FxHashSet<NodeId> = named
+            .iter()
+            .map(|(id, _)| *id)
+            .filter(|id| self.returned_closures.contains(id))
+            .collect();
+        escaping.extend(
+            lets.iter()
+                .filter(|(p, ..)| self.escaping_lets.contains(p))
+                .map(|(_, v, _)| *v),
+        );
+        loop {
+            let mut grew = false;
+            for &(pat, value, sym) in &lets {
+                if self.escaping_lets.contains(&pat) {
+                    continue;
+                }
+                let named_by_escaping = named
+                    .iter()
+                    .any(|(id, syms)| *id != value && escaping.contains(id) && syms.contains(&sym));
+                if named_by_escaping {
+                    self.escaping_lets.insert(pat);
+                    escaping.insert(value);
+                    grew = true;
+                }
+            }
+            if !grew {
+                break;
             }
         }
     }
