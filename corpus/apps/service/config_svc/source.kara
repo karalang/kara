@@ -19,6 +19,8 @@
 // a batch of requests and shuts down its write side; the server reads to
 // end of input and answers each request in order.
 
+import std.net.{TcpListener, TcpStream};
+
 const ADDR: Str = "127.0.0.1:23736";
 const FILE: Str = "config.json";
 

@@ -15,6 +15,8 @@
 // an unknown version are all handled. Each request goes to an access log,
 // which is written to disk at the end and read back.
 
+import std.net.{TcpListener, TcpStream};
+
 const PORT_ADDR: Str = "127.0.0.1:23745";
 const ROOT: Str = "www";
 const BOUNDARY: Str = "KARA_BYTERANGES";

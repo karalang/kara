@@ -140,7 +140,7 @@ Experimental modules: implemented in 0.8 and imported like any other, but their 
 | `std.tracing` (experimental) | `Span`, `LogEvent`, `SpanField`, `NoOpExporter`, `StdoutExporter`, `Log` |
 | `std.protobuf` (experimental) | `ProtoBuf`, `ProtoReader` |
 
-`VolatileCell` checks but runs on no backend, so it is deferred and not in 0.8 ([deferred.md § Volatile access](../deferred.md#volatile-access-inline-assembly-interrupts)).
+`VolatileCell` checks but runs on no backend, so it is deferred and not in 0.8 ([deferred.md § Volatile Memory Access (MMIO)](../deferred.md#volatile-memory-access-mmio)).
 
 The data track (`Tensor`, `Column`, `DataFrame`, `LazyFrame`, `LazyExpr`, `LazyGroupBy`, `Stats`) is the post-v1 `kara-data` package and is not in 0.8 ([data.md](data.md), [deferred.md § M4c](../deferred.md)).
 

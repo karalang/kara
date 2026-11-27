@@ -6082,6 +6082,7 @@ The language-level rules:
 `select` waits on several channel operations at once and runs the first that is ready. It is the shape of a long-lived main loop: a new message, or a shutdown signal, or a timeout.
 
 ```kara
+import std.sync.{Receiver, Sender};
 import std.time.{Duration};
 
 fn main() {

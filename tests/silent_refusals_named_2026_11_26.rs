@@ -94,7 +94,7 @@ fn refused(name: &str, src: &str, code: &str, says: &str, at: &str) {
 fn silent_refusal_ref_vector_element_is_a_receiver() {
     accepted_and_prints(
         "ref_vector",
-        "fn main() {\n    let v: Vec[Vector[i64, 4]] = [Vector[i64, 4](1, 2, 3, 4)];\n    let g = ref v[0];\n    println(g.reduce_sum());\n    let w: Vector[i64, 4] = Vector[i64, 4](1, 1, 1, 1);\n    let r = ref w;\n    println(r.reduce_sum());\n}\n",
+        "import std.simd.{Vector}; fn main() {\n    let v: Vec[Vector[i64, 4]] = [Vector[i64, 4](1, 2, 3, 4)];\n    let g = ref v[0];\n    println(g.reduce_sum());\n    let w: Vector[i64, 4] = Vector[i64, 4](1, 1, 1, 1);\n    let r = ref w;\n    println(r.reduce_sum());\n}\n",
         "10\n4\n",
     );
 }

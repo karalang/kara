@@ -166,7 +166,10 @@ pub const INTERNAL_LIBRARY_NAMES: &[(&str, Option<&str>)] = &[
 pub const DEFERRED_LIBRARY_NAMES: &[(&str, &str)] = &[
     // `VolatileCell.new` is not lowered on the compiled backend and is
     // refused by the interpreter (measured at 33c7d4502a).
-    ("VolatileCell", "docs/deferred.md § Volatile access"),
+    (
+        "VolatileCell",
+        "docs/deferred.md § Volatile Memory Access (MMIO)",
+    ),
 ];
 
 /// Why a [`DEFERRED_LIBRARY_NAMES`] name is refused; `None` for any other.

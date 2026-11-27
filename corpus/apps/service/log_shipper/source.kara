@@ -32,6 +32,9 @@
 //   B-2026-10-15-23  check treats `find`'s argument as moved, so field_of
 //                    reads `key.len()` before the find
 
+import std.io.{File, SeekFrom};
+import std.net.{TcpListener, TcpStream};
+
 const PORT_ADDR: Str = "127.0.0.1:23746";
 const BATCH: i64 = 4;
 const MAX_ATTEMPTS: i64 = 4;

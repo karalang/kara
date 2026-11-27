@@ -19,6 +19,9 @@
 //   B-2026-10-12-7   split / lines are eager Vec[String]: no collect, and
 //                    `ref lines[i]` where a Str would be Copy
 
+import std.net.{TcpListener, TcpStream};
+import std.process.{Command, Stdio};
+
 const ADDR: Str = "127.0.0.1:23734";
 const DOMAIN: Str = "example.test";
 const MAILDIR: Str = "maildir";

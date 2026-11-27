@@ -35,7 +35,7 @@ fn karac(args: &[&str]) -> (bool, String) {
     )
 }
 
-const LANES: &str = "fn main() {
+const LANES: &str = "import std.simd.{Vector}; fn main() {
     let a: Vector[i8, 4] = Vector[i8, 4].splat(-128);
     let m: Vector[i8, 4] = Vector[i8, 4].splat(-1);
     let d = a / m;
@@ -103,7 +103,7 @@ fn a_vector_lane_divided_by_zero_panics_compiled() {
 fn scalar_overflow_still_traps_beside_a_wrapping_vector() {
     let file = program(
         "scalar",
-        "fn main() {\n    let v: Vector[u8, 4] = Vector[u8, 4].splat(200);\n    let w = v + v;\n    println(w[0] as i64);\n    let b: u8 = 200;\n    let c = b + b;\n    println(c);\n}\n",
+        "import std.simd.{Vector}; fn main() {\n    let v: Vector[u8, 4] = Vector[u8, 4].splat(200);\n    let w = v + v;\n    println(w[0] as i64);\n    let b: u8 = 200;\n    let c = b + b;\n    println(c);\n}\n",
     );
     let (ok, out) = karac(&["__mir-run", file.to_str().unwrap()]);
     assert!(!ok, "{out}");

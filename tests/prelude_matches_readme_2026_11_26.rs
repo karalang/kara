@@ -184,7 +184,7 @@ fn a_deferred_library_name_is_refused_imported_or_not() {
         let (ok, out) = karac(&dir, &["check", &file]);
         assert!(
             !ok && out.contains("`VolatileCell` is deferred")
-                && out.contains("docs/deferred.md § Volatile access")
+                && out.contains("docs/deferred.md § Volatile Memory Access (MMIO)")
                 && !out.contains("in the prelude"),
             "{tag}:\n{out}"
         );

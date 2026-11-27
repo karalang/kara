@@ -17,6 +17,8 @@
 //   B-2026-10-14-60  field() calls find_field, an index loop over the Vec
 //   B-2026-10-14-61  middleware is called as middleware[i](r), not m(r)
 
+import std.net.{TcpListener, TcpStream};
+
 const ADDR: Str = "127.0.0.1:23733";
 const TOKEN: Str = "s3cret";
 

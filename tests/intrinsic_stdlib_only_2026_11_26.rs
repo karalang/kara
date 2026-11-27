@@ -39,12 +39,12 @@ fn intrinsic_calls_in_a_program_are_refused_naming_the_user_surface() {
     for (name, src, surface) in [
         (
             "fence",
-            "fn main() {\n    // Safety: none needed.\n    unsafe { fence(MemoryOrdering.SeqCst); }\n}\n",
+            "import std.sync.{MemoryOrdering}; fn main() {\n    // Safety: none needed.\n    unsafe { fence(MemoryOrdering.SeqCst); }\n}\n",
             "library/concurrency.md § Atomics",
         ),
         (
             "compiler_fence",
-            "fn main() { compiler_fence(MemoryOrdering.SeqCst); }\n",
+            "import std.sync.{MemoryOrdering}; fn main() { compiler_fence(MemoryOrdering.SeqCst); }\n",
             "sequentially consistent",
         ),
         (
