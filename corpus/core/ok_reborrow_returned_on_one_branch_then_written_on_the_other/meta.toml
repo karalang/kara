@@ -1,0 +1,10 @@
+source = "review-thread rulings 2026-11-27 (core-semantics sentence map)"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["references"]
+expected_from = "spec"
+rules = ["5.3"]
+backends = []
+env = {}
+note = "core-semantics cs.345: cs.345 (review-thread ruling 2026-11-27, NLL problem case #3): a reborrow returned on one branch is dead on the other, so `v.push` there is accepted (location-sensitive liveness, as Polonius proves). v = [1]: not returned, pushed."

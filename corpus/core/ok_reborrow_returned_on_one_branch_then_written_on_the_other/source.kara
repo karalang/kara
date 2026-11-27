@@ -1,0 +1,15 @@
+// cs.345 (review-thread ruling 2026-11-27, NLL problem case #3): a reborrow
+// returned on one branch is dead on the other, so `v.push` there is accepted
+// (location-sensitive liveness, as Polonius proves). v = [1]: not returned, pushed.
+fn first(v: mut ref Vec[i64]) -> mut ref i64 {
+    let r = mut ref v[0];
+    if *r > 10 { return r; }
+    v.push(0);
+    mut ref v[0]
+}
+fn main() {
+    let mut v: Vec[i64] = [1];
+    let r = first(mut v);
+    *r += 1;
+    println(f"{v}");
+}

@@ -1,0 +1,10 @@
+source = "review-thread rulings 2026-11-27 (core-semantics sentence map)"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["references"]
+expected_from = "spec"
+rules = ["5.3"]
+backends = []
+env = {}
+note = "core-semantics cs.345: cs.345 (review-thread ruling 2026-11-27): the loop form of problem case #3. The reborrow is taken afresh each round and returned on one branch, so the push on the other is accepted."

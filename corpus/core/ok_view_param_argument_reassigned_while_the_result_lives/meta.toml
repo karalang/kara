@@ -1,0 +1,10 @@
+source = "review-thread rulings 2026-11-27 (core-semantics sentence map)"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["references"]
+expected_from = "spec"
+rules = ["5.4"]
+backends = []
+env = {}
+note = "core-semantics cs.363: cs.363 (review-thread ruling 2026-11-27): a view parameter contributes its argument's origins (what it views), not the argument's place. `t` is a `Str` local passed as `s`; reassigning `t` while `r` lives is accepted, and `text`, which `t` viewed, stays borrowed."

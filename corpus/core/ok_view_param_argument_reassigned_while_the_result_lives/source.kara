@@ -1,0 +1,15 @@
+// cs.363 (review-thread ruling 2026-11-27): a view parameter contributes its
+// argument's origins (what it views), not the argument's place. `t` is a
+// `Str` local passed as `s`; reassigning `t` while `r` lives is accepted,
+// and `text`, which `t` viewed, stays borrowed.
+fn pv(a: Vec[String], s: Str) -> ref String { ref a[0] }
+fn main() {
+    let names = ["a".to_string()];
+    let text = "abc".to_string();
+    let mut t: Str = text.as_str();
+    let r = pv(names, t);
+    t = "lit";
+    println(r);
+    println(t);
+    println(text);
+}

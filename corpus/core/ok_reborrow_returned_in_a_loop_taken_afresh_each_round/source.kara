@@ -1,0 +1,19 @@
+// cs.345 (review-thread ruling 2026-11-27): the loop form of problem case #3.
+// The reborrow is taken afresh each round and returned on one branch, so the
+// push on the other is accepted.
+fn first(v: mut ref Vec[i64]) -> mut ref i64 {
+    let mut i = 0;
+    while i < 3 {
+        let r = mut ref v[0];
+        if *r > 10 { return r; }
+        v.push(i);
+        i += 1;
+    }
+    mut ref v[0]
+}
+fn main() {
+    let mut v: Vec[i64] = [1];
+    let r = first(mut v);
+    *r += 1;
+    println(f"{v}");
+}
