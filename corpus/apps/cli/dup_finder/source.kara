@@ -10,6 +10,9 @@
 //                    (`find`, `mkdir -p`, `rm --`)
 //   B-2026-10-12-3   SortedMap has no get_mut: contains_key, then index
 
+import std.process.{Command, Stdio};
+import std.io.{File};
+
 const CHUNK: i64 = 64;
 
 struct FileInfo { path: String, size: i64, hash: u64 }

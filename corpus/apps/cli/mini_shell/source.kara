@@ -19,6 +19,9 @@
 //                    operator and command name are matched as String
 //   B-2026-10-14-36  String.clear is not lowered on the compiled backends
 
+import std.process.{Command, Stdio};
+import std.io.{File};
+
 const SCRIPT: Str = "# quoting and expansion
 echo hello   world
 echo 'single $GREETING stays' \"double [$GREETING]\" mixed'quo'\"tes\"
