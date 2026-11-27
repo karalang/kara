@@ -47,11 +47,11 @@ fn fixed(name: &str, src: &str) -> (String, bool, String) {
 /// twice as an expression, and the reduction read with `unwrap_or(0)`.
 #[test]
 fn a_scan_that_stops_on_a_branch_takes_the_seeds_suffix() {
-    let src = "fn reach(coins: Vec[i32]) -> i32 {\n    let reach = coins.iter().scan(0, |reach, c| if c > reach + 1 { None } else { Some((reach + c, reach + c)) }).last().unwrap_or(0);\n    reach + 1\n}\n\nfn main() {\n    println(reach([1, 1, 4, 10].to_vec()));\n}\n";
+    let src = "fn reach(coins: Vec[i32]) -> i32 {\n    let reach = coins.iter().scan(0, |reach, c| if c > reach + 1 { None } else { Some((reach + c, reach + c)) }).last().unwrap_or(0);\n    reach + 1\n}\n\nfn main() {\n    println(reach([1, 1, 4, 10].to_vec()));\n    println(reach([1, 1, 1, 4].to_vec()));\n}\n";
     let (text, ok, out) = fixed("stops", src);
     assert!(text.contains(".scan(0i32, "), "{text}");
     assert!(ok, "{text}");
-    assert_eq!(out, "8\n");
+    assert_eq!(out, "3\n8\n");
 }
 
 /// The plain `Some((s, s))` form read with `unwrap_or`, and a block tail
