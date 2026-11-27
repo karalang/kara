@@ -8451,7 +8451,11 @@ impl<'a> super::TypeChecker<'a> {
     /// `String`'s `find` takes a `Str` pattern only; the first char that
     /// passes a test is `char_indices().find(..)`, and its byte offset the
     /// `.map(|(i, _)| i)` of that, which is what the fix writes (kata 2734,
-    /// B-2026-11-20-140). `None` when the call is not that shape.
+    /// B-2026-11-20-140). `contains`, `starts_with` and `ends_with` with a
+    /// closure are the same shape, and each has an exact rewrite over the
+    /// chars: `chars().any(..)`, `chars().next().is_some_and(..)` and
+    /// `chars().last().is_some_and(..)` (kata 1805, B-2026-11-27-70). `None` when
+    /// the call is not that shape.
     fn find_with_closure(
         &mut self,
         object: &Expr,
@@ -8459,7 +8463,7 @@ impl<'a> super::TypeChecker<'a> {
         args: &[CallArg],
         args_close_span: &Span,
     ) -> Option<Type> {
-        if method != "find" || args.len() != 1 {
+        if !matches!(method, "find" | "contains" | "starts_with" | "ends_with") || args.len() != 1 {
             return None;
         }
         let arg = &args[0].value;
@@ -8496,10 +8500,32 @@ impl<'a> super::TypeChecker<'a> {
             | ExprKind::StringLit(_) => receiver,
             _ => format!("({receiver})"),
         };
-        let fixed = format!(
-            "{receiver}.char_indices().find(|(_, {name})| {}).map(|(i, _)| i)",
-            crate::formatter::render_expr(body)
-        );
+        let body = crate::formatter::render_expr(body);
+        let (fixed, why, ty) = match method {
+            "find" => (
+                format!("{receiver}.char_indices().find(|(_, {name})| {body}).map(|(i, _)| i)"),
+                "the first char that passes a test is `char_indices().find(..)`",
+                Type::Named {
+                    name: "Option".to_string(),
+                    args: vec![Type::Int(IntSize::I64)],
+                },
+            ),
+            "contains" => (
+                format!("{receiver}.chars().any(|{name}| {body})"),
+                "whether any char passes a test is `chars().any(..)`",
+                Type::Bool,
+            ),
+            "starts_with" => (
+                format!("{receiver}.chars().next().is_some_and(|{name}| {body})"),
+                "whether the first char passes a test is `chars().next().is_some_and(..)`",
+                Type::Bool,
+            ),
+            _ => (
+                format!("{receiver}.chars().last().is_some_and(|{name}| {body})"),
+                "whether the last char passes a test is `chars().last().is_some_and(..)`",
+                Type::Bool,
+            ),
+        };
         self.error_fix_diffs.insert(
             SpanKey::from_span(&arg.span),
             vec![crate::resolver::TextEdit {
@@ -8510,16 +8536,12 @@ impl<'a> super::TypeChecker<'a> {
         );
         self.type_error(
             format!(
-                "a `String`'s `find` takes a `Str` pattern, not a closure; the first char \
-                 that passes a test is `char_indices().find(..)`: write `{fixed}` \
-                 (docs/library/strings.md)"
+                "a `String`'s `{method}` takes a `Str` pattern, not a closure; {why}: \
+                 write `{fixed}` (docs/library/strings.md)"
             ),
             arg.span,
             TypeErrorKind::TypeMismatch,
         );
-        Some(Type::Named {
-            name: "Option".to_string(),
-            args: vec![Type::Int(IntSize::I64)],
-        })
+        Some(ty)
     }
 }

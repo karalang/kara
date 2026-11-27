@@ -1386,7 +1386,7 @@ impl<'a> super::TypeChecker<'a> {
             _ => false,
         };
         if !is_char {
-            return false;
+            return self.predicate_pattern_for_str(method, arg, arg_ty);
         }
         let replacement = match &arg.kind {
             ExprKind::CharLit(c) => format!("{:?}", c.to_string()),
@@ -1417,6 +1417,77 @@ impl<'a> super::TypeChecker<'a> {
                 span: arg.span,
                 replacement,
             },
+        );
+        true
+    }
+
+    /// Rust's other two needle kinds where a string method wants its `Str`
+    /// pattern: a char predicate (`s.split(|c: char| c.is_ascii_lowercase())`)
+    /// or a set of chars (`s.split(['a', 'b'])`, `s.find(&[' ', ','][..])`).
+    /// Both are deferred to a `Pattern` trait (deferred.md § String
+    /// Patterns), so there is no edit to make, but the bare "expected 'Str'"
+    /// named no way to write it (B-2026-11-27-70): the message names the chars'
+    /// iterator for a test and the sequence's `split` for a split. `false`
+    /// when `arg_ty` is neither.
+    fn predicate_pattern_for_str(
+        &mut self,
+        method: Option<&str>,
+        arg: &Expr,
+        arg_ty: &Type,
+    ) -> bool {
+        let shown = match arg_ty {
+            Type::Ref(inner) => inner.as_ref(),
+            t => t,
+        };
+        let is_char = |t: &Type| matches!(t, Type::Char);
+        let kind = match shown {
+            Type::Function { params, .. } | Type::OnceFunction { params, .. }
+                if params.len() == 1 =>
+            {
+                "a char predicate"
+            }
+            Type::Array { element, .. } | Type::Slice { element, .. } if is_char(element) => {
+                "a set of chars"
+            }
+            Type::Named { name, args } if name == "Vec" && args.len() == 1 && is_char(&args[0]) => {
+                "a set of chars"
+            }
+            _ => return false,
+        };
+        let route = match method {
+            Some("contains") => {
+                "test the chars instead: `s.chars().any(|c| ..)`".to_string()
+            }
+            Some("find") => {
+                "find it in the chars instead: `s.char_indices().find(|(_, c)| ..)` gives the byte offset and the char"
+                    .to_string()
+            }
+            Some("rfind") => {
+                "find it in the chars instead: `s.char_indices().filter(|(_, c)| ..).last()` gives the byte offset and the char"
+                    .to_string()
+            }
+            Some("starts_with") => {
+                "test the first char instead: `s.chars().next().is_some_and(|c| ..)`".to_string()
+            }
+            Some("ends_with") => {
+                "test the last char instead: `s.chars().last().is_some_and(|c| ..)`".to_string()
+            }
+            _ => "to split at a char class, collect the chars (`let cs: Vec[char] = s.chars().collect();`) \
+                  and split them with the sequence's `cs.split(|c| ..)`, whose runs are `Slice[char]`; \
+                  to test the chars, use `s.chars()` (`any`, `position`)"
+                .to_string(),
+        };
+        let found = type_display(arg_ty);
+        let head = match method {
+            Some(m) => format!("'{m}' takes a `Str` pattern, found '{found}'"),
+            None => format!("expected 'Str', found '{found}'"),
+        };
+        self.type_error(
+            format!(
+                "{head}: {kind} as a string pattern is deferred (deferred.md § String Patterns); {route}"
+            ),
+            arg.span,
+            TypeErrorKind::TypeMismatch,
         );
         true
     }
