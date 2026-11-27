@@ -2491,6 +2491,14 @@ impl Cx<'_> {
                                 || (closure_free && matches!(self.tys.kind(t), TyKind::Closure(..)))
                                 || slotted.is_some_and(|s| !contains_ty(self.tys, s, qt.ty))
                         }
+                        // A `Str` or `Slice` view the pointee has no slot
+                        // for, the `who` and `data` of `self.note(who, data)`
+                        // on a struct whose one `ref` field is a
+                        // `ref Mutex[State]`, leaves only what the viewed
+                        // value holds, never the view (B-2026-11-27-43).
+                        TyKind::Str | TyKind::Slice(_) => {
+                            slotted.is_some_and(|s| !contains_ty(self.tys, s, qt.ty))
+                        }
                         _ => false,
                     })
                 });

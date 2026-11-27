@@ -13,8 +13,9 @@
 //! At the import line the parser reports one diagnostic whose fix rewrites
 //! the line and, in one envelope, every use in the file: `AtomicI64`
 //! becomes `Atomic[i64]` (as a type and as a constructor's receiver alike),
-//! `Arc<T>` becomes `T`, `Arc::new(x)` becomes `x`, and `Arc::clone(&x)` or
-//! `x.clone()` on a name bound to an `Arc` becomes `ref x`.
+//! `Arc<T>` becomes `T` (a struct's field `ref T`, unless the file fills it
+//! with an `Arc::new(..)`), `Arc::new(x)` becomes `x`, and `Arc::clone(&x)`
+//! or `x.clone()` on a name bound to an `Arc` becomes `ref x`.
 
 use crate::resolver::TextEdit;
 use crate::token::Token;
@@ -183,11 +184,29 @@ impl super::Parser {
             length: to - from,
             replacement: String::new(),
         };
+        // The fields an `Arc::new(..)` initializes in a struct literal
+        // (`state: Arc::new(..)`): the struct owns that value, so the field
+        // keeps it.
+        let mut owning_fields: Vec<&str> = Vec::new();
+        for k in 0..self.tokens.len() {
+            if let Some(name) = ident(k) {
+                if matches!(token(k + 1), Some(Token::Colon)) && arc_call(k + 2, "new") {
+                    owning_fields.push(name);
+                }
+            }
+        }
         let mut edits = Vec::new();
         let mut k = 0;
         while k < self.tokens.len() {
-            // `Arc<T>` / `Arc[T]`: the head and its closing bracket go.
+            // `Arc<T>` / `Arc[T]`: the head and its closing bracket go. A
+            // struct's field shares a value someone else made, which a
+            // task borrows from the scope of its group: the field is
+            // `ref T` (B-2026-11-27-41), unless the file fills it with an
+            // `Arc::new(..)` of its own.
             if is_arc(k) && opens_type(k + 1) {
+                let field = self
+                    .struct_field_name_before(k)
+                    .filter(|f| !owning_fields.contains(&f.as_str()));
                 let mut depth: i64 = 0;
                 let mut j = k + 1;
                 let mut close = None;
@@ -217,7 +236,15 @@ impl super::Parser {
                     j += 1;
                 }
                 if let Some((offset, length)) = close {
-                    edits.push(delete(span(k).offset, span(k + 2).offset));
+                    edits.push(TextEdit {
+                        offset: span(k).offset,
+                        length: span(k + 2).offset - span(k).offset,
+                        replacement: if field.is_some() {
+                            "ref ".to_string()
+                        } else {
+                            String::new()
+                        },
+                    });
                     edits.push(TextEdit {
                         offset,
                         length,
@@ -276,5 +303,65 @@ impl super::Parser {
             k += 1;
         }
         edits
+    }
+
+    /// When the type at token `k` is a named field's type in a `struct`'s
+    /// braces (`name: Arc<..>`, `pub name: ..`), the field's name.
+    fn struct_field_name_before(&self, k: usize) -> Option<String> {
+        let token = |i: usize| self.tokens.get(i).map(|t| &t.token);
+        if !matches!(token(k.checked_sub(1)?), Some(Token::Colon)) {
+            return None;
+        }
+        let name = match token(k.checked_sub(2)?) {
+            Some(Token::Identifier { name, .. }) => name.clone(),
+            _ => return None,
+        };
+        let mut before = k.checked_sub(3)?;
+        if matches!(token(before), Some(Token::Pub)) {
+            before = before.checked_sub(1)?;
+        }
+        if !matches!(token(before), Some(Token::LeftBrace | Token::Comma)) {
+            return None;
+        }
+        // The `{` that opens the braces holding the field.
+        let mut depth = 0usize;
+        let mut open = None;
+        for i in (0..=before).rev() {
+            match token(i) {
+                Some(Token::RightBrace | Token::RightParen | Token::RightBracket) => depth += 1,
+                Some(Token::LeftBrace) if depth == 0 => {
+                    open = Some(i);
+                    break;
+                }
+                Some(Token::LeftBrace | Token::LeftParen | Token::LeftBracket) => {
+                    depth = depth.checked_sub(1)?
+                }
+                _ => {}
+            }
+        }
+        // `struct Name {` or `struct Name[T] {`.
+        let mut i = open?.checked_sub(1)?;
+        if matches!(token(i), Some(Token::RightBracket | Token::GreaterThan)) {
+            let mut d = 0usize;
+            loop {
+                match token(i) {
+                    Some(Token::RightBracket | Token::GreaterThan) => d += 1,
+                    Some(Token::LeftBracket | Token::LessThan) => {
+                        d -= 1;
+                        if d == 0 {
+                            break;
+                        }
+                    }
+                    None => return None,
+                    _ => {}
+                }
+                i = i.checked_sub(1)?;
+            }
+            i = i.checked_sub(1)?;
+        }
+        if !matches!(token(i), Some(Token::Identifier { .. })) {
+            return None;
+        }
+        matches!(token(i.checked_sub(1)?), Some(Token::Struct)).then_some(name)
     }
 }

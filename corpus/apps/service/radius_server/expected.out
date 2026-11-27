@@ -1,0 +1,149 @@
+== pap
+nas1: alice, right password -> Access-Accept id 250 auth ok c46231d4 | Service-Type=2 Framed-IP-Address=10.0.0.11 Session-Timeout=3600 Class="staff" Reply-Message="Welcome, alice"
+nas1: alice, wrong password -> Access-Reject id 251 auth ok 4505b172 | Reply-Message="Wrong password"
+nas1: erin, a 39-byte password -> Access-Accept id 252 auth ok 6cb81e50 | Service-Type=2 Framed-IP-Address=10.0.0.15 Session-Timeout=7200 Class="staff" Reply-Message="Welcome, erin"
+nas1: erin, cut at 16 bytes -> Access-Reject id 253 auth ok 32701974 | Reply-Message="Wrong password"
+nas1: ghost -> Access-Reject id 254 auth ok dd72bb5e | Reply-Message="Unknown user"
+nas1: dave, disabled -> Access-Reject id 255 auth ok 117f26e8 | Reply-Message="Account disabled"
+nas1: no User-Name -> Access-Reject id 0 auth ok 13486911 | Reply-Message="No User-Name"
+== chap
+nas2: bob, CHAP-Challenge -> Access-Accept id 250 auth ok f9640575 | Service-Type=2 Framed-IP-Address=10.0.0.12 Session-Timeout=1800 Class="staff" Reply-Message="Welcome, bob"
+nas2: bob, authenticator as challenge -> Access-Accept id 251 auth ok e58a16af | Service-Type=2 Framed-IP-Address=10.0.0.12 Session-Timeout=1800 Class="staff" Reply-Message="Welcome, bob"
+nas2: bob, wrong password -> Access-Reject id 252 auth ok bfff6c8f | Reply-Message="Wrong password"
+nas2: alice by CHAP, 24-byte challenge -> Access-Accept id 253 auth ok 393f5aec | Service-Type=2 Framed-IP-Address=10.0.0.11 Session-Timeout=3600 Class="staff" Reply-Message="Welcome, alice"
+== challenge
+nas1: carol, password -> Access-Challenge id 1 auth ok da9537d8 | State="otp-1" Reply-Message="Enter the 6-digit code"
+nas1: carol, the code -> Access-Accept id 2 auth ok 004bb5a8 | Service-Type=2 Framed-IP-Address=10.0.0.13 Session-Timeout=900 Class="contractor" Reply-Message="Welcome, carol"
+nas1: carol, password again -> Access-Challenge id 3 auth ok ae28d527 | State="otp-2" Reply-Message="Enter the 6-digit code"
+nas1: carol, a wrong code -> Access-Reject id 4 auth ok 1cf4db22 | Reply-Message="Wrong code"
+nas1: carol, otp-2 replayed -> Access-Reject id 5 auth ok 75ea060f | Reply-Message="Unknown State"
+nas1: bob, a State never issued -> Access-Reject id 6 auth ok d0467a21 | Reply-Message="Unknown State"
+== message-authenticator
+nas2: alice, signed -> Access-Accept id 254 auth ok 5306c326 | Service-Type=2 Framed-IP-Address=10.0.0.11 Session-Timeout=3600 Class="staff" Reply-Message="Welcome, alice" Message-Authenticator=ok
+nas2: alice, signature off by a bit -> no reply
+== accounting
+nas1: start alice s-1 -> Accounting-Response id 7 auth ok 9fcf91cb
+nas1: alice, while s-1 is open -> Access-Reject id 8 auth ok 44a0cca3 | Reply-Message="Already logged in (1 of 1)"
+nas1: start alice s-1 again -> Accounting-Response id 9 auth ok f6a244c3
+nas1: interim s-1 -> Accounting-Response id 10 auth ok 058605e5
+nas1: stop s-1 -> Accounting-Response id 11 auth ok 940855b9
+nas1: alice, after the stop -> Access-Accept id 12 auth ok 491b3be3 | Service-Type=2 Framed-IP-Address=10.0.0.11 Session-Timeout=3600 Class="staff" Reply-Message="Welcome, alice"
+nas2: start bob b-1 -> Accounting-Response id 0 auth ok 0a9401e7
+nas2: start bob b-2 -> Accounting-Response id 1 auth ok 6b0dacfc
+nas2: interim b-2 -> Accounting-Response id 2 auth ok 926e0626
+nas1: start erin e-1 -> Accounting-Response id 13 auth ok 9eed6b1c
+nas2: accounting-on (nas2 rebooted) -> Accounting-Response id 3 auth ok e02f471e
+nas2: interim b-1 after the reboot -> Accounting-Response id 4 auth ok 321115d0
+nas1: stop of an unknown session -> Accounting-Response id 14 auth ok 100157d6
+nas1: start, bad request authenticator -> no reply
+nas1: no Acct-Status-Type -> no reply
+nas1: start without a session id -> no reply
+nas1: Acct-Status-Type 9 -> no reply
+nas1: start alice s-2 -> Accounting-Response id 19 auth ok 244eab76
+== duplicates
+nas2: bob, first send -> Access-Accept id 5 auth ok 9181b0f8 | Service-Type=2 Framed-IP-Address=10.0.0.12 Session-Timeout=1800 Class="staff" Reply-Message="Welcome, bob"
+nas2: bob, the same bytes again -> Access-Accept id 5 auth ok 9181b0f8 | Service-Type=2 Framed-IP-Address=10.0.0.12 Session-Timeout=1800 Class="staff" Reply-Message="Welcome, bob"
+nas2: same id, new authenticator -> Access-Reject id 5 auth ok 070d004b | Reply-Message="Wrong password"
+== broken
+rogue: an unknown client -> no reply
+nas3: nas3 with an old secret -> Access-Reject id 250 auth BAD 1f1a1ad2 | Reply-Message="Wrong password"
+nas3: nas3 with an old secret, signed -> no reply
+nas1: 19 bytes -> no reply
+nas1: length 4097 -> no reply
+nas1: length past the datagram -> no reply
+nas1: attribute of length 1 -> no reply
+nas1: attribute past the end -> no reply
+nas1: 8 bytes of padding -> Access-Accept id 20 auth ok 97712ca4 | Service-Type=2 Framed-IP-Address=10.0.0.12 Session-Timeout=1800 Class="staff" Reply-Message="Welcome, bob"
+nas1: an Access-Accept sent to the server -> no reply
+nas1: an Accounting-Request on the auth port -> no reply
+nas1: an Access-Request on the acct port -> no reply
+nas1: a 20-byte User-Password -> no reply
+nas1: PAP and CHAP together -> no reply
+nas1: no credentials -> no reply
+nas1: a 16-byte CHAP-Password -> no reply
+nas1: an 8-byte Message-Authenticator -> no reply
+nas1: Status-Server unsigned -> no reply
+== status
+nas2: Status-Server to auth -> Access-Accept id 6 auth ok 19cc39b5 | Reply-Message="up, 42 requests" Message-Authenticator=ok
+nas2: Status-Server to acct -> Accounting-Response id 7 auth ok 7ec78650 | Message-Authenticator=ok
+nas1: halt auth -> Access-Accept id 27 auth ok 352dc871 | Reply-Message="up, 43 requests" Message-Authenticator=ok
+nas1: halt acct -> Accounting-Response id 28 auth ok 4cd1f431 | Message-Authenticator=ok
+== auth log (43 datagrams)
+nas1: access alice by PAP -> Access-Accept
+nas1: access alice by PAP -> Access-Reject, Wrong password
+nas1: access erin by PAP -> Access-Accept
+nas1: access erin by PAP -> Access-Reject, Wrong password
+nas1: access ghost by PAP -> Access-Reject, Unknown user
+nas1: access dave by PAP -> Access-Reject, Account disabled
+nas1: access (none) by PAP -> Access-Reject, No User-Name
+nas2: access bob by CHAP -> Access-Accept
+nas2: access bob by CHAP -> Access-Accept
+nas2: access bob by CHAP -> Access-Reject, Wrong password
+nas2: access alice by CHAP -> Access-Accept
+nas1: access carol by PAP -> Access-Challenge, otp-1
+nas1: access carol by PAP -> Access-Accept
+nas1: access carol by PAP -> Access-Challenge, otp-2
+nas1: access carol by PAP -> Access-Reject, Wrong code
+nas1: access carol by PAP -> Access-Reject, Unknown State
+nas1: access bob by PAP -> Access-Reject, Unknown State
+nas2: access alice by PAP -> Access-Accept
+nas2: dropped, bad Message-Authenticator
+nas1: access alice by PAP -> Access-Reject, Already logged in (1 of 1)
+nas1: access alice by PAP -> Access-Accept
+nas2: access bob by PAP -> Access-Accept
+nas2: id 5 again, cached reply resent
+nas2: access bob by PAP -> Access-Reject, Wrong password
+?: dropped, unknown client
+nas3: access alice by PAP -> Access-Reject, Wrong password
+nas3: dropped, bad Message-Authenticator
+nas1: dropped, short packet of 19 bytes
+nas1: dropped, length 4097 out of range
+nas1: dropped, length 49 beyond the 43-byte datagram
+nas1: dropped, bad attribute at offset 20
+nas1: dropped, bad attribute at offset 20
+nas1: access bob by PAP -> Access-Accept, 8 padding bytes ignored
+nas1: dropped, code 2 on the auth port
+nas1: dropped, code 4 on the auth port
+nas1: dropped, User-Password of 20 bytes
+nas1: dropped, both User-Password and CHAP-Password
+nas1: dropped, no User-Password, CHAP-Password or State
+nas1: dropped, CHAP-Password of 16 bytes
+nas1: dropped, Message-Authenticator of 8 bytes
+nas1: dropped, Status-Server without Message-Authenticator
+nas2: status -> Access-Accept
+nas1: status, halt -> Access-Accept
+== acct log (19 datagrams)
+nas1: start nas1/s-1 for alice -> Accounting-Response
+nas1: start nas1/s-1 for alice: already open -> Accounting-Response
+nas1: interim nas1/s-1: in 1200 out 34000 60s -> Accounting-Response
+nas1: stop nas1/s-1 for alice: 300s, User-Request -> Accounting-Response
+nas2: start nas2/b-1 for bob -> Accounting-Response
+nas2: start nas2/b-2 for bob -> Accounting-Response
+nas2: interim nas2/b-2: in 77 out 4096 15s -> Accounting-Response
+nas1: start nas1/e-1 for erin -> Accounting-Response
+nas2: accounting-on: closed 2 session(s) -> Accounting-Response
+nas2: interim nas2/b-1: unknown session -> Accounting-Response
+nas1: stop nas1/nope: unknown session -> Accounting-Response
+nas1: dropped, bad request authenticator
+nas1: dropped, no Acct-Status-Type
+nas1: dropped, no Acct-Session-Id
+nas1: dropped, Acct-Status-Type 9
+nas1: start nas1/s-2 for alice -> Accounting-Response
+nas1: dropped, code 1 on the acct port
+nas2: status -> Accounting-Response
+nas1: status, halt -> Accounting-Response
+== open sessions
+nas1/e-1 erin 10.0.0.15 in 0 out 0 0s
+nas1/s-2 alice 10.0.0.11 in 0 out 0 0s
+== closed sessions
+nas1/s-1 alice in 5000 out 99000 300s User-Request
+nas2/b-1 bob in 0 out 0 0s NAS-Reboot
+nas2/b-2 bob in 77 out 4096 15s NAS-Reboot
+== counts
+access-accept 12
+access-challenge 2
+access-reject 12
+accounting-response 14
+dropped 21
+duplicate 1
+status-server 4

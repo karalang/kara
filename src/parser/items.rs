@@ -2139,13 +2139,26 @@ impl super::Parser {
             if self.eat(&Token::Ref) && self.eat(&Token::SelfValue) {
                 return Some((SelfParam::MutRef, self.span_from(&start)));
             }
-            // `mut self`: in Rust an owned receiver bound mutably; what a
-            // method that changes its receiver means is `mut ref self`.
+            // `mut self`: in Rust an owned receiver bound mutably. A method
+            // that hands `self` back (`fn serve(mut self) -> Port { .. self }`,
+            // a builder's `-> Self`) consumes it, which is `own self`, whose
+            // fields it may write; any other is taken to change its receiver,
+            // which is `mut ref self` (B-2026-11-27-40).
             self.pos = saved;
             if matches!(self.peek_token_ref_at(1), Token::SelfValue) {
                 self.advance();
                 self.advance();
                 let span = self.span_from(&start);
+                if self.mut_self_hands_back() {
+                    self.rust_receiver(
+                        "`mut self` is Rust syntax -- a receiver that is consumed (this method \
+                         hands `self` back) is `own self`, and its fields can be written",
+                        span,
+                        "own self",
+                    );
+                    self.own_self_consumed = true;
+                    return Some((SelfParam::Owned, span));
+                }
                 self.rust_receiver(
                     "`mut self` is Rust syntax -- a receiver that writes is `mut ref self` \
                      (one that consumes is `own self`)",
@@ -2183,6 +2196,71 @@ impl super::Parser {
 
     /// Report a Rust-spelled receiver at `span` with the machine edit that
     /// rewrites it to `kara` (B-2026-11-01-5).
+    /// With the cursor just past a `mut self` receiver: whether the method's
+    /// return type names `Self` (or the impl's type) and its body uses a bare
+    /// `self`, not only `self.field` or `self[i]`, which is a method that
+    /// hands its receiver back. Token lookahead only; consumes nothing.
+    fn mut_self_hands_back(&self) -> bool {
+        let token = |i: usize| self.tokens.get(i).map(|t| &t.token);
+        let own_name = self.impl_self_name.clone();
+        let mut i = self.pos;
+        let mut depth = 0usize;
+        // The `)` that closes the parameter list.
+        loop {
+            match token(i) {
+                None => return false,
+                Some(Token::LeftParen | Token::LeftBracket) => depth += 1,
+                Some(Token::RightParen) if depth == 0 => break,
+                Some(Token::RightParen | Token::RightBracket) => depth -= 1,
+                _ => {}
+            }
+            i += 1;
+        }
+        i += 1;
+        if !matches!(token(i), Some(Token::Arrow)) {
+            return false;
+        }
+        // The return type, up to the body's `{`.
+        let mut names_self = false;
+        loop {
+            i += 1;
+            match token(i) {
+                None | Some(Token::Semicolon) => return false,
+                Some(Token::LeftBrace) => break,
+                Some(Token::SelfType) => names_self = true,
+                Some(Token::Identifier { name, .. })
+                    if own_name.as_deref() == Some(name.as_str()) =>
+                {
+                    names_self = true
+                }
+                _ => {}
+            }
+        }
+        if !names_self {
+            return false;
+        }
+        let mut braces = 0usize;
+        loop {
+            match token(i) {
+                None => return false,
+                Some(Token::LeftBrace) => braces += 1,
+                Some(Token::RightBrace) => {
+                    braces -= 1;
+                    if braces == 0 {
+                        return false;
+                    }
+                }
+                Some(Token::SelfValue)
+                    if !matches!(token(i + 1), Some(Token::Dot | Token::LeftBracket)) =>
+                {
+                    return true;
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+    }
+
     fn rust_receiver(&mut self, message: &str, span: Span, kara: &str) {
         self.error_at(message, span);
         self.fix_edits.insert(

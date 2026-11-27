@@ -10255,9 +10255,16 @@ impl<'l, 'a> Bx<'l, 'a> {
         // An array or `Vec` stored where a `Slice` is wanted (an element of
         // `[[5], be16(n)]` passed as a `Slice[Slice[u8]]`) is viewed, as it
         // would be at a parameter (B-2026-11-16-171).
+        // A `ref` to one (`int_of(Some(ref a.v))` at an
+        // `Option[Slice[u8]]`) is viewed the same way, not read as the
+        // sequence (B-2026-11-27-45).
+        let seq = match self.tys().tcx().kind(et) {
+            HK::Ref(t) | HK::MutRef(t) => t,
+            _ => et,
+        };
         if matches!(self.tys().tcx().kind(want), HK::Slice { .. })
             && matches!(
-                self.tys().tcx().kind(et),
+                self.tys().tcx().kind(seq),
                 HK::Array { .. }
                     | HK::Intrinsic {
                         kind: IntrinsicKind::Vec,

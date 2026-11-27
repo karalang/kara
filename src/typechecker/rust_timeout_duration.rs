@@ -83,6 +83,7 @@ impl TypeChecker<'_> {
             return;
         };
         let d = &inner.value;
+        self.timeout_ms_args.insert(SpanKey::from_span(&d.span));
         let Some(end) = end_of(d) else {
             return;
         };

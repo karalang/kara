@@ -656,6 +656,14 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   (`.map(Some)`, `.map(Tag.Name)`) to the closure `|a0| Some(a0)`
   (B-2026-11-26-66).
 
+- `karac fix` writes more Rust shared-state code as Kāra: `mut self` on a
+  method that hands `self` back becomes `own self`, where it was always
+  `mut ref self` (B-2026-11-27-40); `Arc<T>` in a struct field becomes
+  `ref T`, a borrow a task takes from its group's scope, unless the file
+  fills the field with `Arc::new(..)` (B-2026-11-27-41); and a `u64` left at
+  `set_read_timeout(Some(ms))` once `Duration::from_millis(ms)` is mended
+  away gets `as i64` (B-2026-11-27-42).
+
 - `..mut ref rest` over a `mut ref Array[T, N]` binds `rest` as a
   `mut ref Array[T, K]` into the array itself (design.md § Slice and array
   patterns): writes through it, element by element, through `iter_mut`,
@@ -1224,6 +1232,15 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `Vec[ref i64]` keeps its references (B-2026-11-08-19).
 
 ### Wrong behaviour fixed
+
+- Three programs the check accepted no longer stop before they run. A
+  `for` over an `Array` in a function that suspends (its body reads a
+  socket) failed with "index is held across a suspension point"
+  (B-2026-11-27-44). `Some(ref v)`, with `v: Vec[u8]`, passed to an
+  `Option[Slice[u8]]` built invalid MIR, "field 0 of Option has the wrong
+  type" (B-2026-11-27-45). A `mut ref self` call on a struct with a `ref`
+  field, given `Str` or `Slice` arguments it has no field to keep, was
+  refused as if it kept them (E0509, E0516; B-2026-11-27-43).
 
 - `Ok(Array.from_fn(n, f))` and `Some(..)` where a `Result[Array[T, N],
   E]` or `Option[Array[T, N]]` is wanted take the length from the slot, as

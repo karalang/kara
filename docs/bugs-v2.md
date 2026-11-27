@@ -58,16 +58,16 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 796 |
-| false-positive | 406 |
+| diagnostics | 799 |
+| false-positive | 407 |
 | missing-feature | 268 |
 | perf | 206 |
 | other | 165 |
 | soundness | 142 |
 | miscompile | 113 |
 | run-vs-build | 80 |
-| crash | 71 |
-| codegen-gap | 48 |
+| crash | 72 |
+| codegen-gap | 49 |
 | use-after-free | 13 |
 | leak | 5 |
 | double-free | 2 |
@@ -76,11 +76,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 976 |
-| mir | 350 |
+| typecheck | 977 |
+| mir | 353 |
 | mir-llvm | 341 |
 | cli | 326 |
-| parser | 166 |
+| parser | 168 |
 | ownership | 148 |
 | runtime | 121 |
 | interp | 118 |
@@ -125,6 +125,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-27-22 | 2026-11-27 | ownership | medium | A closure returned over a local closure that captures an owned value (`fn mk(pre: own String) -> Fn(String) -> String { let c = || pre.clone(); |s| f"{c()}{s}" }`, or a Copy local `let n = 1; let c = || n + 1; || c()`) is refused E0509 "the result borrows `pre`, which this function owns": the local closure captures by reference though it moves into the escaping one | — |
 | B-2026-11-27-24 | 2026-11-27 | typecheck | high | A closure that moves a captured FIELD or tuple path out (`|| take(o.a)`, `|| take(t.0)`, `|| o.a`) is typed as a repeatable `Fn`, not `OnceFn`, so `karac check` accepts it in a `Vec[Fn() -> i64]`; called twice there, the compiled program reads freed memory (ASan heap-use-after-free), where moving the whole capture (`|| take(s)`) is refused with E0235 | — |
 | B-2026-11-27-23 | 2026-11-27 | runtime | low | Over HTTP/2 the HTTP client refused any response whose header list was over 16 KiB (hyper's default SETTINGS_MAX_HEADER_LIST_SIZE), with the unnamed Err 'request failed: http2 error', where the same response over HTTP/1.1 is read up to 408 KiB; and it had no field-count limit there, where HTTP/1.1 refuses a 101st field | — |
+| B-2026-11-27-40 | 2026-11-27 | parser | low | `karac fix` writes Rust's `mut self` as `mut ref self` even on a method that hands `self` back (`fn serve(mut self) -> Port { .. self }`), which is then E0200 'cannot give away the borrowed receiver' | — |
+| B-2026-11-27-41 | 2026-11-27 | parser | medium | `karac fix` writes `Arc<Mutex<T>>` in a struct field as an owned `Mutex[T]`, so the constructor takes `own` and the second `Arc::clone(&state)` is a use after move (E0500) | — |
+| B-2026-11-27-42 | 2026-11-27 | typecheck | low | `set_read_timeout(Some(Duration::from_millis(wait)))` with `wait: u64` mends to `Some(wait)`, then stops on 'implicit coercion from u64 to i64 would narrow' with no fix | — |
+| B-2026-11-27-43 | 2026-11-27 | mir | medium | A `mut ref self` call on a struct with a `ref` field is refused (E0509/E0516) for keeping its `Str` / `Slice` arguments, though the struct has no field that can hold either | — |
+| B-2026-11-27-44 | 2026-11-27 | mir | medium | A `for` over an `Array` in a function that suspends stops before running with 'index _N is held across a suspension point' | — |
+| B-2026-11-27-45 | 2026-11-27 | mir | medium | `Some(ref v)` with `v: Vec[u8]` passed to an `Option[Slice[u8]]` parameter passes the check and builds invalid MIR: 'field 0 of Option has the wrong type' | — |
 
 ### Relocated
 

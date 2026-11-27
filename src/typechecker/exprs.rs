@@ -17524,12 +17524,21 @@ impl<'a> super::TypeChecker<'a> {
                 && self
                     .duration_unit_args
                     .contains(&SpanKey::from_span(&expr.span));
+            // The milliseconds of `set_read_timeout(Some(ms))`, once the
+            // `Duration::from_millis(ms)` around a `u64` is mended away:
+            // no timeout reaches `i64::MAX` ms, so `as i64` keeps every value
+            // (B-2026-11-27-42).
+            let timeout_ms = matches!(source, Type::UInt(UIntSize::U64))
+                && self
+                    .timeout_ms_args
+                    .contains(&SpanKey::from_span(&expr.span));
             // A `usize` / `isize` size expression where an `i64` is wanted
             // (`Vec.with_capacity(n * (n + 1) / 2)` after a Rust template's
             // `let n = n as usize;`): `as i64` keeps the meaning for any size
             // a collection can hold, so it is the machine fix, the operand
             // parenthesized unless it is a postfix form (B-2026-11-08-16).
             if duration_unit
+                || timeout_ms
                 || matches!(
                     source,
                     Type::UInt(UIntSize::Usize) | Type::Int(IntSize::Isize)
@@ -17561,6 +17570,18 @@ impl<'a> super::TypeChecker<'a> {
                 });
                 self.error_fix_diffs
                     .insert(SpanKey::from_span(&expr.span), edits);
+                if timeout_ms {
+                    self.type_error(
+                        "implicit coercion from 'u64' to 'i64' would change sign: a socket's \
+                         `set_read_timeout` takes `i64` milliseconds, where Rust's \
+                         `Duration::from_millis` took a `u64`, and no timeout reaches \
+                         `i64::MAX` ms, so write `as i64` (library/io.md § Timeouts)"
+                            .to_string(),
+                        expr.span,
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    return;
+                }
                 if duration_unit {
                     self.type_error(
                         "implicit coercion from 'u64' to 'i64' would change sign: Rust's \

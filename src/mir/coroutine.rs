@@ -2421,6 +2421,9 @@ struct Resume<'a> {
     tys: &'a TyInterner,
     locals: Vec<LocalDecl>,
     blocks: Vec<BasicBlockData>,
+    /// The frame-held index locals the last places rewritten indexed with,
+    /// each to be loaded into its own local first (B-2026-11-27-44).
+    index_loads: std::cell::RefCell<Vec<Local>>,
 }
 
 impl<'a> Resume<'a> {
@@ -2438,6 +2441,7 @@ impl<'a> Resume<'a> {
             tys,
             locals: Vec::new(),
             blocks: Vec::new(),
+            index_loads: std::cell::RefCell::new(Vec::new()),
         }
     }
 
@@ -2523,11 +2527,16 @@ impl<'a> Resume<'a> {
             out.projection.push(match e {
                 ProjElem::Index(i) => match self.local(*i)? {
                     Place { local, projection } if projection.is_empty() => ProjElem::Index(local),
+                    // An index the frame holds, the counter of a `for` over
+                    // an `Array` whose body suspends: the place indexes with
+                    // the local's own slot, which `take_index_loads` fills
+                    // from the frame just before (B-2026-11-27-44).
                     _ => {
-                        return Err(format!(
-                            "{}: index {i} is held across a suspension point",
-                            self.body.instance.name
-                        ))
+                        let mut loads = self.index_loads.borrow_mut();
+                        if !loads.contains(i) {
+                            loads.push(*i);
+                        }
+                        ProjElem::Index(Local(i.0 + 2))
                     }
                 },
                 e => *e,
@@ -2565,6 +2574,22 @@ impl<'a> Resume<'a> {
             Rvalue::Len(p) => Rvalue::Len(self.place(p)?),
             Rvalue::NullaryOp(op, t) => Rvalue::NullaryOp(*op, *t),
         })
+    }
+
+    /// `_i = copy frame.i` for each frame-held index the places rewritten
+    /// since the last call indexed with, in their order.
+    fn take_index_loads(&self) -> Result<Vec<Statement>, String> {
+        let loads = std::mem::take(&mut *self.index_loads.borrow_mut());
+        loads
+            .into_iter()
+            .map(|i| {
+                let from = self.local(i)?;
+                Ok(self.assign(
+                    Place::local(Local(i.0 + 2)),
+                    Rvalue::Use(Operand::Copy(from)),
+                ))
+            })
+            .collect()
     }
 
     fn statement(&self, s: &Statement) -> Result<Statement, String> {
@@ -2646,12 +2671,45 @@ impl<'a> Resume<'a> {
         let mut extra: Vec<BasicBlockData> = Vec::new();
         let first_extra = 1 + self.body.blocks.len() as u32;
         for (i, data) in self.body.blocks.iter().enumerate() {
-            let mut statements = data
-                .statements
-                .iter()
-                .map(|s| self.statement(s))
-                .collect::<Result<Vec<_>, _>>()?;
+            let mut statements = Vec::new();
+            for s in &data.statements {
+                let rewritten = self.statement(s)?;
+                statements.extend(self.take_index_loads()?);
+                statements.push(rewritten);
+            }
             let t = &data.terminator;
+            // The terminator's frame-held indices load first: a dry run of
+            // its places records them. A suspending call's destination is
+            // written after the resume, when such a load is gone.
+            let suspends_here = points.contains_key(&BasicBlock(i as u32));
+            match &t.kind {
+                TerminatorKind::Call {
+                    func,
+                    args,
+                    destination,
+                    ..
+                } => {
+                    self.place(destination)?;
+                    if suspends_here && !self.index_loads.borrow().is_empty() {
+                        return Err(format!(
+                            "{name}: a suspending call's destination is indexed by a value held \
+                             across the suspension"
+                        ));
+                    }
+                    self.operand(func)?;
+                    for a in args {
+                        self.operand(a)?;
+                    }
+                }
+                TerminatorKind::SwitchInt { discr, .. } => {
+                    self.operand(discr)?;
+                }
+                TerminatorKind::Drop { place, .. } => {
+                    self.place(place)?;
+                }
+                _ => {}
+            }
+            statements.extend(self.take_index_loads()?);
             let kind = match &t.kind {
                 TerminatorKind::Call {
                     args,
@@ -2864,6 +2922,8 @@ impl<'a> Resume<'a> {
                 },
                 k @ (TerminatorKind::Abort { .. } | TerminatorKind::Unreachable) => k.clone(),
             };
+            // The rewrite repeated the dry run's records; those loads are in.
+            self.index_loads.borrow_mut().clear();
             self.blocks.push(BasicBlockData {
                 statements,
                 terminator: Terminator {

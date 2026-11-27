@@ -1,0 +1,1071 @@
+// A RADIUS server: RFC 2865 authentication, RFC 2866 accounting, RFC 3579
+// Message-Authenticator and RFC 5997 Status-Server, on two loopback UDP
+// ports with one task each over a shared state, and the scripted NAS
+// clients that drive it. MD5 and HMAC-MD5 are written out here, as RADIUS
+// needs them. Every secret and password is obviously fake.
+
+import std.net.UdpSocket;
+import std.sync.{Mutex};
+import std.time.Duration;
+import std.sync.{TaskGroup};
+
+const ACCESS_REQUEST: u8 = 1;
+const ACCESS_ACCEPT: u8 = 2;
+const ACCESS_REJECT: u8 = 3;
+const ACCOUNTING_REQUEST: u8 = 4;
+const ACCOUNTING_RESPONSE: u8 = 5;
+const ACCESS_CHALLENGE: u8 = 11;
+const STATUS_SERVER: u8 = 12;
+
+const USER_NAME: u8 = 1;
+const USER_PASSWORD: u8 = 2;
+const CHAP_PASSWORD: u8 = 3;
+const SERVICE_TYPE: u8 = 6;
+const FRAMED_IP: u8 = 8;
+const REPLY_MESSAGE: u8 = 18;
+const STATE: u8 = 24;
+const CLASS: u8 = 25;
+const VENDOR: u8 = 26;
+const SESSION_TIMEOUT: u8 = 27;
+const ACCT_STATUS: u8 = 40;
+const ACCT_IN: u8 = 42;
+const ACCT_OUT: u8 = 43;
+const ACCT_SESSION_ID: u8 = 44;
+const ACCT_TIME: u8 = 46;
+const ACCT_CAUSE: u8 = 49;
+const CHAP_CHALLENGE: u8 = 60;
+const MESSAGE_AUTH: u8 = 80;
+
+// Vendor 99999, sub-attribute 1, "halt": the admin's stop for a port.
+const HALT: Array[u8, 10] = [0, 1, 0x86, 0x9f, 1, 6, b'h', b'a', b'l', b't'];
+const SHORT_WAIT: u64 = 200;
+const LONG_WAIT: u64 = 5000;
+
+const MD5_K: Array[u32, 64] = [
+    0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee, 0xf57c0faf, 0x4787c62a, 0xa8304613, 0xfd469501,
+    0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be, 0x6b901122, 0xfd987193, 0xa679438e, 0x49b40821,
+    0xf61e2562, 0xc040b340, 0x265e5a51, 0xe9b6c7aa, 0xd62f105d, 0x02441453, 0xd8a1e681, 0xe7d3fbc8,
+    0x21e1cde6, 0xc33707d6, 0xf4d50d87, 0x455a14ed, 0xa9e3e905, 0xfcefa3f8, 0x676f02d9, 0x8d2a4c8a,
+    0xfffa3942, 0x8771f681, 0x6d9d6122, 0xfde5380c, 0xa4beea44, 0x4bdecfa9, 0xf6bb4b60, 0xbebfbc70,
+    0x289b7ec6, 0xeaa127fa, 0xd4ef3085, 0x04881d05, 0xd9d4d039, 0xe6db99e5, 0x1fa27cf8, 0xc4ac5665,
+    0xf4292244, 0x432aff97, 0xab9423a7, 0xfc93a039, 0x655b59c3, 0x8f0ccc92, 0xffeff47d, 0x85845dd1,
+    0x6fa87e4f, 0xfe2ce6e0, 0xa3014314, 0x4e0811a1, 0xf7537e82, 0xbd3af235, 0x2ad7d2bb, 0xeb86d391,
+];
+
+const MD5_S: Array[u32, 64] = [
+    7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
+    5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20,
+    4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
+    6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
+];
+
+fn md5(data: Slice[u8]) -> Array[u8, 16] {
+    let mut msg = data.to_vec();
+    let bits = (data.len() as u64).wrapping_mul(8);
+    msg.push(0x80);
+    while msg.len() % 64 != 56 {
+        msg.push(0);
+    }
+    msg.extend_from_slice(bits.to_le_bytes());
+    let mut h: Array[u32, 4] = [0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476];
+    for chunk in msg.chunks(64) {
+        let mut m = [0u32; 16];
+        for i in 0..16 {
+            m[i] = u32.from_le_bytes([chunk[4 * i], chunk[4 * i + 1], chunk[4 * i + 2], chunk[4 * i + 3]]);
+        }
+        let mut (a, b, c, d) = (h[0], h[1], h[2], h[3]);
+        for i in 0..64 {
+            let (f, g) = match i / 16 {
+                0 => ((b & c) | (~ b & d), i),
+                1 => ((d & b) | (~ d & c), (5 * i + 1) % 16),
+                2 => (b ^ c ^ d, (3 * i + 5) % 16),
+                _ => (c ^ (b | ~ d), (7 * i) % 16),
+            };
+            let x = f.wrapping_add(a).wrapping_add(MD5_K[i]).wrapping_add(m[g]);
+            a = d;
+            d = c;
+            c = b;
+            b = b.wrapping_add(x.rotate_left(MD5_S[i]));
+        }
+        h[0] = h[0].wrapping_add(a);
+        h[1] = h[1].wrapping_add(b);
+        h[2] = h[2].wrapping_add(c);
+        h[3] = h[3].wrapping_add(d);
+    }
+    let mut out = [0u8; 16];
+    for (i, w) in h.iter().enumerate() {
+        out[4 * i..4 * i + 4] = w.to_le_bytes();
+    }
+    out
+}
+
+fn hmac_md5(key: Slice[u8], data: Slice[u8]) -> Array[u8, 16] {
+    let mut k = if key.len() > 64 { md5(key).to_vec() } else { key.to_vec() };
+    k.resize(64, 0);
+    let mut inner: Vec[u8] = k.iter().map(|b| b ^ 0x36).collect();
+    inner.extend_from_slice(data);
+    let mut outer: Vec[u8] = k.iter().map(|b| b ^ 0x5c).collect();
+    outer.extend_from_slice(md5(inner));
+    md5(outer)
+}
+
+fn hex(b: Slice[u8]) -> String {
+    Vec[String].from_iter(b.iter().map(|x| f"{x:02x}")).join("")
+}
+
+fn be32(v: u32) -> Array[u8, 4] {
+    v.to_be_bytes()
+}
+
+fn attr(t: u8, v: Slice[u8]) -> Vec[u8] {
+    let mut out = [t, (v.len() + 2) as u8];
+    out.extend_from_slice(v);
+    out
+}
+
+fn ip_bytes(s: Str) -> Vec[u8] {
+    s.split(".").map(|p| u8.parse(p).unwrap()).collect()
+}
+
+fn ip_text(b: Slice[u8]) -> String {
+    Vec[String].from_iter(b.iter().map(|x| x.to_string())).join(".")
+}
+
+fn text(b: Slice[u8]) -> String {
+    String.from_utf8_lossy(b).to_string()
+}
+
+fn code_name(code: u8) -> Str {
+    match code {
+        ACCESS_REQUEST => "Access-Request",
+        ACCESS_ACCEPT => "Access-Accept",
+        ACCESS_REJECT => "Access-Reject",
+        ACCOUNTING_REQUEST => "Accounting-Request",
+        ACCOUNTING_RESPONSE => "Accounting-Response",
+        ACCESS_CHALLENGE => "Access-Challenge",
+        STATUS_SERVER => "Status-Server",
+        _ => "?",
+    }
+}
+
+fn attr_name(t: u8) -> Str {
+    match t {
+        SERVICE_TYPE => "Service-Type",
+        FRAMED_IP => "Framed-IP-Address",
+        REPLY_MESSAGE => "Reply-Message",
+        STATE => "State",
+        CLASS => "Class",
+        SESSION_TIMEOUT => "Session-Timeout",
+        _ => "?",
+    }
+}
+
+fn cause_name(v: u32) -> Str {
+    match v {
+        1 => "User-Request",
+        2 => "Lost-Carrier",
+        4 => "Idle-Timeout",
+        5 => "Session-Timeout",
+        10 => "NAS-Request",
+        11 => "NAS-Reboot",
+        _ => "?",
+    }
+}
+
+// RFC 2865 section 5.2: the password, padded with NULs to a multiple of 16,
+// each block XORed with MD5(secret + the previous block), the first with
+// MD5(secret + Request Authenticator).
+fn pap_hide(password: Slice[u8], secret: Slice[u8], ra: Slice[u8]) -> Vec[u8] {
+    let mut p = password.to_vec();
+    if p.is_empty() or p.len() % 16 != 0 {
+        let n = (p.len() / 16 + 1) * 16;
+        p.resize(n, 0);
+    }
+    let mut out = Vec.new();
+    let mut prev = ra.to_vec();
+    for chunk in p.chunks(16) {
+        let mut buf = secret.to_vec();
+        buf.extend_from_slice(prev);
+        let b = md5(buf);
+        let c: Vec[u8] = chunk.iter().zip(b.iter()).map(|(x, y)| x ^ y).collect();
+        out.extend_from_slice(c);
+        prev = c;
+    }
+    out
+}
+
+fn pap_reveal(hidden: Slice[u8], secret: Slice[u8], ra: Slice[u8]) -> Vec[u8] {
+    let mut out = Vec.new();
+    let mut prev = ra.to_vec();
+    for c in hidden.chunks(16) {
+        let mut buf = secret.to_vec();
+        buf.extend_from_slice(prev);
+        let b = md5(buf);
+        for (x, y) in c.iter().zip(b.iter()) {
+            out.push(x ^ y);
+        }
+        prev = c.to_vec();
+    }
+    while out.last() == Some(0) {
+        out.pop();
+    }
+    out
+}
+
+struct Attr {
+    t: u8,
+    v: Vec[u8],
+    at: i64,
+}
+
+// The attributes after the 20-byte header, or the offset of the first one
+// whose length is under 2 or runs past the packet.
+fn parse_attrs(pkt: Slice[u8]) -> Result[Vec[Attr], i64] {
+    let mut out = Vec.new();
+    let mut i = 20;
+    while i < pkt.len() {
+        if i + 2 > pkt.len() {
+            return Err(i);
+        }
+        let t = pkt[i];
+        let n = pkt[i + 1] as i64;
+        if n < 2 or i + n > pkt.len() {
+            return Err(i);
+        }
+        out.push(Attr { t, v: pkt[i + 2..i + n].to_vec(), at: i + 2 });
+        i += n;
+    }
+    Ok(out)
+}
+
+fn first(attrs: Slice[Attr], t: u8) -> Option[Slice[u8]] {
+    attrs.iter().find(|a| a.t == t).map(|a| a.v.as_slice())
+}
+
+fn int_of(v: Option[Slice[u8]]) -> u32 {
+    match v {
+        Some(b) if b.len() == 4 => u32.from_be_bytes([b[0], b[1], b[2], b[3]]),
+        _ => 0,
+    }
+}
+
+// A reply: its Message-Authenticator first when the request had one, over
+// the packet with the request's authenticator in place, then the Response
+// Authenticator over the finished attributes and the secret.
+fn finish(code: u8, id: u8, ra: Slice[u8], body: Slice[u8], with_ma: bool, secret: Slice[u8]) -> Vec[u8] {
+    let mut body = body.to_vec();
+    if with_ma {
+        body.extend_from_slice(attr(MESSAGE_AUTH, [0u8; 16]));
+    }
+    let length = (20 + body.len()) as u16;
+    let mut head = [code, id];
+    head.extend_from_slice(length.to_be_bytes());
+    if with_ma {
+        let mut signed = head.clone();
+        signed.extend_from_slice(ra);
+        signed.extend_from_slice(body);
+        let mac = hmac_md5(secret, signed);
+        let k = body.len() - 16;
+        body[k..] = mac;
+    }
+    let mut summed = head.clone();
+    summed.extend_from_slice(ra);
+    summed.extend_from_slice(body);
+    summed.extend_from_slice(secret);
+    let auth = md5(summed);
+    let mut out = head;
+    out.extend_from_slice(auth);
+    out.extend_from_slice(body);
+    out
+}
+
+struct User {
+    password: String,
+    ip: String,
+    timeout: u32,
+    class: String,
+    max_sessions: i64,
+    otp: String,
+    disabled: bool,
+}
+
+fn user(password: Str, ip: Str, timeout: u32, class: Str) -> User {
+    User {
+        password: password.to_string(),
+        ip: ip.to_string(),
+        timeout,
+        class: class.to_string(),
+        max_sessions: 0,
+        otp: String.new(),
+        disabled: false,
+    }
+}
+
+struct Session {
+    user: String,
+    nas: String,
+    ip: String,
+    octets_in: u32,
+    octets_out: u32,
+    time: u32,
+}
+
+struct State {
+    users: Map[String, User],
+    sessions: SortedMap[String, Session],
+    closed: Vec[String],
+    challenges: Map[String, String],
+    next_challenge: u32,
+    counts: SortedMap[String, u32],
+}
+
+impl State {
+    fn new() -> State {
+        let mut users = Map.new();
+        users.insert("alice".to_string(), User { max_sessions: 1, ..user("fake-alice-pw", "10.0.0.11", 3600, "staff") });
+        users.insert("bob".to_string(), user("fake-bob-pw", "10.0.0.12", 1800, "staff"));
+        users.insert("carol".to_string(), User { otp: "424242".to_string(), ..user("fake-carol-pw", "10.0.0.13", 900, "contractor") });
+        users.insert("dave".to_string(), User { disabled: true, ..user("fake-dave-pw", "10.0.0.14", 600, "staff") });
+        users.insert("erin".to_string(), user("fake-erin-a-rather-long-passphrase-0042", "10.0.0.15", 7200, "staff"));
+        State {
+            users,
+            sessions: SortedMap.new(),
+            closed: Vec.new(),
+            challenges: Map.new(),
+            next_challenge: 0,
+            counts: SortedMap.new(),
+        }
+    }
+
+    fn count(mut ref self, k: Str) {
+        *self.counts.entry(k.to_string()).or_insert(0) += 1;
+    }
+
+    fn open_for(self, user: Str) -> i64 {
+        self.sessions.values().filter(|s| s.user == user).count()
+    }
+
+    fn close(mut ref self, key: Str, cause: Str) {
+        let s = self.sessions.remove(key).unwrap();
+        self.closed.push(f"{key} {s.user} in {s.octets_in} out {s.octets_out} {s.time}s {cause}");
+    }
+}
+
+struct Reply {
+    code: u8,
+    body: Vec[u8],
+    what: String,
+}
+
+fn status_request(st: mut ref State, port: Str, requests: u32, attrs: Slice[Attr]) -> (Reply, bool) {
+    let halt = first(attrs, VENDOR) == Some(HALT[..]);
+    let what = if halt { "status, halt" } else { "status" };
+    st.count("status-server");
+    if port == "auth" {
+        let body = attr(REPLY_MESSAGE, f"up, {requests} requests".bytes());
+        (Reply { code: ACCESS_ACCEPT, body, what: f"{what} -> Access-Accept" }, halt)
+    } else {
+        (Reply { code: ACCOUNTING_RESPONSE, body: Vec.new(), what: f"{what} -> Accounting-Response" }, halt)
+    }
+}
+
+fn auth_request(st: mut ref State, secret: Slice[u8], ra: Slice[u8], attrs: Slice[Attr]) -> Result[Reply, String] {
+    let name = first(attrs, USER_NAME);
+    let pw = first(attrs, USER_PASSWORD);
+    let chap = first(attrs, CHAP_PASSWORD);
+    let state = first(attrs, STATE);
+    if pw.is_some() and chap.is_some() {
+        return Err("both User-Password and CHAP-Password".to_string());
+    }
+    if pw.is_none() and chap.is_none() and state.is_none() {
+        return Err("no User-Password, CHAP-Password or State".to_string());
+    }
+    if let Some(p) = pw {
+        if p.len() % 16 != 0 or p.len() < 16 or p.len() > 128 {
+            return Err(f"User-Password of {p.len()} bytes");
+        }
+    }
+    if let Some(c) = chap {
+        if c.len() != 17 {
+            return Err(f"CHAP-Password of {c.len()} bytes");
+        }
+    }
+    let method = if pw.is_some() { "PAP" } else if chap.is_some() { "CHAP" } else { "State" };
+    let uname = name.map(text).unwrap_or_else(|| "(none)".to_string());
+    let head = f"access {uname} by {method}";
+    let reject = |why: Str| Reply {
+        code: ACCESS_REJECT,
+        body: attr(REPLY_MESSAGE, why.bytes()),
+        what: f"{head} -> Access-Reject, {why}",
+    };
+    if name.is_none() {
+        return Ok(reject("No User-Name"));
+    }
+    let u = match st.users.get(uname) {
+        Some(u) => u,
+        None => return Ok(reject("Unknown user")),
+    };
+    if u.disabled {
+        return Ok(reject("Account disabled"));
+    }
+    if let Some(s) = state {
+        let owner = st.challenges.remove(text(s));
+        if owner.as_deref() != Some(uname.as_str()) or pw.is_none() {
+            return Ok(reject("Unknown State"));
+        }
+        if pap_reveal(pw.unwrap(), secret, ra) != u.otp.bytes() {
+            return Ok(reject("Wrong code"));
+        }
+    } else {
+        let ok = if let Some(p) = pw {
+            pap_reveal(p, secret, ra) == u.password.bytes()
+        } else {
+            let c = chap.unwrap();
+            let challenge = first(attrs, CHAP_CHALLENGE).unwrap_or(ra);
+            let mut buf = [c[0]];
+            buf.extend_from_slice(u.password.bytes());
+            buf.extend_from_slice(challenge);
+            md5(buf)[..] == c[1..]
+        };
+        if not ok {
+            return Ok(reject("Wrong password"));
+        }
+        if not u.otp.is_empty() {
+            st.next_challenge += 1;
+            let s = f"otp-{st.next_challenge}";
+            st.challenges.insert(s.clone(), uname.clone());
+            let mut body = attr(STATE, s.bytes());
+            body.extend_from_slice(attr(REPLY_MESSAGE, b"Enter the 6-digit code"));
+            return Ok(Reply { code: ACCESS_CHALLENGE, body, what: f"{head} -> Access-Challenge, {s}" });
+        }
+    }
+    if u.max_sessions > 0 {
+        let n = st.open_for(uname);
+        if n >= u.max_sessions {
+            return Ok(reject(f"Already logged in ({n} of {u.max_sessions})"));
+        }
+    }
+    let mut body = attr(SERVICE_TYPE, be32(2));
+    body.extend_from_slice(attr(FRAMED_IP, ip_bytes(u.ip)));
+    body.extend_from_slice(attr(SESSION_TIMEOUT, be32(u.timeout)));
+    body.extend_from_slice(attr(CLASS, u.class.bytes()));
+    body.extend_from_slice(attr(REPLY_MESSAGE, f"Welcome, {uname}".bytes()));
+    Ok(Reply { code: ACCESS_ACCEPT, body, what: f"{head} -> Access-Accept" })
+}
+
+fn acct_request(st: mut ref State, nas: Str, attrs: Slice[Attr]) -> Result[Reply, String] {
+    let kind = match first(attrs, ACCT_STATUS) {
+        Some(v) => int_of(Some(v)),
+        None => return Err("no Acct-Status-Type".to_string()),
+    };
+    let user = first(attrs, USER_NAME).map(text).unwrap_or_else(|| "(none)".to_string());
+    let key = match first(attrs, ACCT_SESSION_ID) {
+        Some(sid) => f"{nas}/{text(sid)}",
+        None if kind == 1 or kind == 2 or kind == 3 => return Err("no Acct-Session-Id".to_string()),
+        None => String.new(),
+    };
+    let what = match kind {
+        1 => {
+            if st.sessions.contains_key(key) {
+                f"start {key} for {user}: already open"
+            } else {
+                let ip = first(attrs, FRAMED_IP).map(ip_text).unwrap_or_else(|| "-".to_string());
+                st.sessions.insert(
+                    key.clone(),
+                    Session { user: user.clone(), nas: nas.to_string(), ip, octets_in: 0, octets_out: 0, time: 0 },
+                );
+                f"start {key} for {user}"
+            }
+        }
+        2 | 3 => match st.sessions.get_mut(key) {
+            None if kind == 3 => f"interim {key}: unknown session",
+            None => f"stop {key}: unknown session",
+            Some(s) => {
+                s.octets_in = int_of(first(attrs, ACCT_IN));
+                s.octets_out = int_of(first(attrs, ACCT_OUT));
+                s.time = int_of(first(attrs, ACCT_TIME));
+                if kind == 3 {
+                    f"interim {key}: in {s.octets_in} out {s.octets_out} {s.time}s"
+                } else {
+                    let time = s.time;
+                    let cause = cause_name(int_of(first(attrs, ACCT_CAUSE)));
+                    st.close(key, cause);
+                    f"stop {key} for {user}: {time}s, {cause}"
+                }
+            }
+        },
+        7 | 8 => {
+            let keys: Vec[String] = st.sessions.iter().filter(|(_, s)| s.nas == nas).map(|(k, _)| k.clone()).collect();
+            for k in ref keys {
+                st.close(k, "NAS-Reboot");
+            }
+            f"accounting-{if kind == 7 { "on" } else { "off" }}: closed {keys.len()} session(s)"
+        }
+        _ => return Err(f"Acct-Status-Type {kind}"),
+    };
+    Ok(Reply { code: ACCOUNTING_RESPONSE, body: Vec.new(), what: f"{what} -> Accounting-Response" })
+}
+
+struct Port {
+    name: String,
+    sock: UdpSocket,
+    peers: Map[String, (String, Vec[u8])],
+    state: ref Mutex[State],
+    log: Vec[String],
+    cache: Map[(String, u8), (Vec[u8], Vec[u8])],
+    requests: u32,
+    running: bool,
+}
+
+impl Port {
+    fn new(name: Str, sock: own UdpSocket, peers: own Map[String, (String, Vec[u8])], state: Mutex[State]) -> Port {
+        Port {
+            name: name.to_string(),
+            sock,
+            peers,
+            state,
+            log: Vec.new(),
+            cache: Map.new(),
+            requests: 0,
+            running: true,
+        }
+    }
+
+    fn serve(own self) -> Port {
+        let mut buf = [0u8; 4096];
+        while self.running {
+            let (n, addr) = self.sock.recv_from(mut buf).unwrap();
+            self.requests += 1;
+            let (nas, secret) = match self.peers.get(addr.to_string()).cloned() {
+                Some(p) => p,
+                None => {
+                    self.dropped("?", "unknown client".to_string());
+                    continue;
+                }
+            };
+            match self.handle(nas, secret, buf[..n]) {
+                Ok((reply, what)) => {
+                    self.log.push(f"{nas}: {what}");
+                    self.sock.send_to(reply, addr).unwrap();
+                }
+                Err(why) => self.dropped(nas, why),
+            }
+        }
+        self
+    }
+
+    fn dropped(mut ref self, nas: Str, why: String) {
+        self.log.push(f"{nas}: dropped, {why}");
+        self.state.lock().value.count("dropped");
+    }
+
+    fn handle(mut ref self, nas: Str, secret: Slice[u8], data: Slice[u8]) -> Result[(Vec[u8], String), String] {
+        let n = data.len();
+        if n < 20 {
+            return Err(f"short packet of {n} bytes");
+        }
+        let length = u16.from_be_bytes([data[2], data[3]]) as i64;
+        if length < 20 or length > 4096 {
+            return Err(f"length {length} out of range");
+        }
+        if length > n {
+            return Err(f"length {length} beyond the {n}-byte datagram");
+        }
+        let pkt = data[..length];
+        let attrs = parse_attrs(pkt).map_err(|at| f"bad attribute at offset {at}")?;
+        let code = pkt[0];
+        let id = pkt[1];
+        let ra = pkt[4..20].to_vec();
+        let allowed = if self.name == "auth" { [ACCESS_REQUEST, STATUS_SERVER] } else { [ACCOUNTING_REQUEST, STATUS_SERVER] };
+        if not allowed.contains(code) {
+            return Err(f"code {code} on the {self.name} port");
+        }
+        if let Some((seen, reply)) = self.cache.get((nas.to_string(), id)) {
+            if *seen == ra {
+                let reply = reply.clone();
+                self.state.lock().value.count("duplicate");
+                return Ok((reply, f"id {id} again, cached reply resent"));
+            }
+        }
+        let mut ma_at = None;
+        for a in ref attrs {
+            if a.t == MESSAGE_AUTH {
+                if a.v.len() != 16 {
+                    return Err(f"Message-Authenticator of {a.v.len()} bytes");
+                }
+                ma_at = Some(a.at);
+            }
+        }
+        if let Some(at) = ma_at {
+            let mut zeroed = pkt.to_vec();
+            for b in zeroed[at..at + 16].iter_mut() {
+                *b = 0;
+            }
+            if hmac_md5(secret, zeroed)[..] != pkt[at..at + 16] {
+                return Err("bad Message-Authenticator".to_string());
+            }
+        }
+        if code == STATUS_SERVER and ma_at.is_none() {
+            return Err("Status-Server without Message-Authenticator".to_string());
+        }
+        if code == ACCOUNTING_REQUEST {
+            let mut summed = pkt[..4].to_vec();
+            summed.extend_from_slice([0u8; 16]);
+            summed.extend_from_slice(pkt[20..]);
+            summed.extend_from_slice(secret);
+            if md5(summed)[..] != ra[..] {
+                return Err("bad request authenticator".to_string());
+            }
+        }
+        let r = {
+            let mut st = self.state.lock();
+            let r = if code == STATUS_SERVER {
+                let (r, halt) = status_request(mut st.value, self.name, self.requests, attrs);
+                if halt {
+                    self.running = false;
+                }
+                r
+            } else if code == ACCESS_REQUEST {
+                auth_request(mut st.value, secret, ra, attrs)?
+            } else {
+                acct_request(mut st.value, nas, attrs)?
+            };
+            st.value.count(code_name(r.code).to_lowercase());
+            r
+        };
+        let reply = finish(r.code, id, ra, r.body, ma_at.is_some(), secret);
+        self.cache.insert((nas.to_string(), id), (ra, reply.clone()));
+        let mut what = r.what;
+        if n > length {
+            what += f", {n - length} padding bytes ignored";
+        }
+        Ok((reply, what))
+    }
+}
+
+struct Req {
+    code: u8,
+    id: u8,
+    ra: Vec[u8],
+    attrs: Vec[u8],
+}
+
+impl Req {
+    fn add(mut ref self, t: u8, v: Slice[u8]) {
+        self.attrs.extend_from_slice(attr(t, v));
+    }
+
+    fn add_text(mut ref self, t: u8, s: Str) {
+        self.add(t, s.bytes());
+    }
+
+    fn add_int(mut ref self, t: u8, v: u32) {
+        self.add(t, be32(v));
+    }
+}
+
+struct Client {
+    name: String,
+    secret: Vec[u8],
+    auth: String,
+    acct: String,
+    next_id: u8,
+    seq: u32,
+    sock: UdpSocket,
+}
+
+impl Client {
+    fn new(
+        name: Str,
+        secret: Str,
+        auth: Str,
+        acct: Str,
+        peers: mut ref Map[String, (String, Vec[u8])],
+        real: Option[Str],
+    ) -> Client {
+        let sock = UdpSocket.bind("127.0.0.1:0").unwrap();
+        if let Some(real) = real {
+            peers.insert(sock.local_addr().unwrap().to_string(), (name.to_string(), real.bytes().to_vec()));
+        }
+        Client {
+            name: name.to_string(),
+            secret: secret.bytes().to_vec(),
+            auth: auth.to_string(),
+            acct: acct.to_string(),
+            next_id: 250,
+            seq: 0,
+            sock,
+        }
+    }
+
+    // A real NAS draws the Request Authenticator at random; these are an
+    // MD5 of the client's name and a counter, so every run sends the same
+    // bytes.
+    fn start(mut ref self, code: u8) -> Req {
+        let id = self.next_id;
+        self.next_id = self.next_id.wrapping_add(1);
+        self.seq += 1;
+        let ra = md5(f"{self.name}:{self.seq}".bytes()).to_vec();
+        Req { code, id, ra, attrs: Vec.new() }
+    }
+
+    fn pap(self, req: mut ref Req, password: Str) {
+        let hidden = pap_hide(password.bytes(), self.secret, req.ra);
+        req.add(USER_PASSWORD, hidden);
+    }
+
+    fn chap(self, req: mut ref Req, ident: u8, password: Str, challenge: Option[Slice[u8]]) {
+        let c = match challenge {
+            Some(c) => {
+                req.add(CHAP_CHALLENGE, c);
+                c.to_vec()
+            }
+            None => req.ra.clone(),
+        };
+        let mut buf = [ident];
+        buf.extend_from_slice(password.bytes());
+        buf.extend_from_slice(c);
+        let mut v = [ident];
+        v.extend_from_slice(md5(buf));
+        req.add(CHAP_PASSWORD, v);
+    }
+
+    fn encode(self, req: mut ref Req, ma: bool, bad_ma: bool) -> Vec[u8] {
+        let mut body = req.attrs.clone();
+        if ma {
+            body.extend_from_slice(attr(MESSAGE_AUTH, [0u8; 16]));
+        }
+        let length = (20 + body.len()) as u16;
+        let mut head = [req.code, req.id];
+        head.extend_from_slice(length.to_be_bytes());
+        if req.code == ACCOUNTING_REQUEST {
+            let mut summed = head.clone();
+            summed.extend_from_slice([0u8; 16]);
+            summed.extend_from_slice(body);
+            summed.extend_from_slice(self.secret);
+            req.ra = md5(summed).to_vec();
+        }
+        if ma {
+            let mut signed = head.clone();
+            signed.extend_from_slice(req.ra.clone());
+            signed.extend_from_slice(body);
+            let mut mac = hmac_md5(self.secret, signed);
+            if bad_ma {
+                mac[0] ^= 1;
+            }
+            let k = body.len() - 16;
+            body[k..] = mac;
+        }
+        let mut out = head;
+        out.extend_from_slice(req.ra);
+        out.extend_from_slice(body);
+        out
+    }
+
+    fn send(mut ref self, label: Str, req: mut ref Req, port: Str, ma: bool, bad_ma: bool, quiet: bool) -> Vec[u8] {
+        let data = self.encode(req, ma, bad_ma);
+        self.exchange(label, data, req, port, quiet);
+        data
+    }
+
+    fn raw(mut ref self, label: Str, data: Slice[u8], req: ref Req, port: Str, quiet: bool) {
+        self.exchange(label, data, req, port, quiet);
+    }
+
+    fn exchange(mut ref self, label: Str, data: Slice[u8], req: ref Req, port: Str, quiet: bool) {
+        let wait = if quiet { SHORT_WAIT } else { LONG_WAIT };
+        self.sock.set_read_timeout(Some(wait as i64)).unwrap();
+        let to = if port == "auth" { ref self.auth } else { ref self.acct };
+        self.sock.send_to(data, to).unwrap();
+        let mut buf = [0u8; 4096];
+        match self.sock.recv_from(mut buf) {
+            Ok((n, _)) => self.report(label, buf[..n], req),
+            Err(_) => println(f"{self.name}: {label} -> no reply"),
+        }
+    }
+
+    fn report(self, label: Str, reply: Slice[u8], req: ref Req) {
+        let code = reply[0];
+        let id = reply[1];
+        let length = u16.from_be_bytes([reply[2], reply[3]]) as i64;
+        let auth = reply[4..20];
+        let mut summed = reply[..4].to_vec();
+        summed.extend_from_slice(req.ra);
+        summed.extend_from_slice(reply[20..length]);
+        summed.extend_from_slice(self.secret);
+        let verdict = if md5(summed)[..] == auth { "ok" } else { "BAD" };
+        let mut shown = Vec.new();
+        for a in parse_attrs(reply[..length]).unwrap() {
+            match a.t {
+                SERVICE_TYPE | SESSION_TIMEOUT => shown.push(f"{attr_name(a.t)}={int_of(Some(ref a.v))}"),
+                FRAMED_IP => shown.push(f"{attr_name(a.t)}={ip_text(a.v)}"),
+                REPLY_MESSAGE | STATE | CLASS => shown.push(f"{attr_name(a.t)}=\"{text(a.v)}\""),
+                MESSAGE_AUTH => {
+                    let mut zeroed = reply[..length].to_vec();
+                    zeroed[4..20] = req.ra.clone();
+                    for b in zeroed[a.at..a.at + 16].iter_mut() {
+                        *b = 0;
+                    }
+                    let ok = hmac_md5(self.secret, zeroed)[..] == a.v[..];
+                    shown.push(f"Message-Authenticator={if ok { "ok" } else { "BAD" }}");
+                }
+                _ => shown.push(f"Attr-{a.t}={hex(a.v)}"),
+            }
+        }
+        let tail = if shown.is_empty() { String.new() } else { f" | {shown.join(" ")}" };
+        println(f"{self.name}: {label} -> {code_name(code)} id {id} auth {verdict} {hex(auth)[..8]}{tail}");
+    }
+}
+
+fn send_access(c: mut ref Client, label: Str, user: Str, password: Str, ma: bool, bad_ma: bool, quiet: bool) -> Vec[u8] {
+    let mut r = c.start(ACCESS_REQUEST);
+    r.add_text(USER_NAME, user);
+    c.pap(mut r, password);
+    r.add(FRAMED_IP, ip_bytes("127.0.0.1"));
+    c.send(label, mut r, "auth", ma, bad_ma, quiet)
+}
+
+fn send_acct(c: mut ref Client, label: Str, kind: u32, user: Str, sid: Str, extra: Slice[(u8, Vec[u8])], quiet: bool, bad_auth: bool) {
+    let mut r = c.start(ACCOUNTING_REQUEST);
+    if kind != 0 {
+        r.add_int(ACCT_STATUS, kind);
+    }
+    if not user.is_empty() {
+        r.add_text(USER_NAME, user);
+    }
+    if not sid.is_empty() {
+        r.add_text(ACCT_SESSION_ID, sid);
+    }
+    for (t, v) in extra {
+        r.add(t, v);
+    }
+    if bad_auth {
+        let mut data = c.encode(mut r, false, false);
+        data[4] ^= 1;
+        c.raw(label, data, r, "acct", true);
+        return;
+    }
+    c.send(label, mut r, "acct", false, false, quiet);
+}
+
+fn send_status(c: mut ref Client, label: Str, port: Str, halt: bool, ma: bool) {
+    let mut r = c.start(STATUS_SERVER);
+    if halt {
+        r.add(VENDOR, HALT);
+    }
+    c.send(label, mut r, port, ma, false, not ma);
+}
+
+fn main() {
+    let auth_sock = UdpSocket.bind("127.0.0.1:0").unwrap();
+    let acct_sock = UdpSocket.bind("127.0.0.1:0").unwrap();
+    let auth = auth_sock.local_addr().unwrap().to_string();
+    let acct = acct_sock.local_addr().unwrap().to_string();
+    let mut peers = Map.new();
+    let mut nas1 = Client.new("nas1", "fake-secret-nas1", auth, acct, mut peers, Some("fake-secret-nas1"));
+    let mut nas2 = Client.new("nas2", "fake-secret-nas2", auth, acct, mut peers, Some("fake-secret-nas2"));
+    let mut nas3 = Client.new("nas3", "fake-secret-old", auth, acct, mut peers, Some("fake-secret-nas3"));
+    let mut rogue = Client.new("rogue", "fake-secret-rogue", auth, acct, mut peers, None);
+    let state = Mutex.new(State.new());
+    let auth_port = Port.new("auth", auth_sock, peers.clone(), state);
+    let acct_port = Port.new("acct", acct_sock, peers.clone(), state);
+    let group = TaskGroup.new();
+    let auth_task = group.spawn(|| auth_port.serve());
+    let group = TaskGroup.new();
+    let acct_task = group.spawn(|| acct_port.serve());
+
+    println("== pap");
+    send_access(mut nas1, "alice, right password", "alice", "fake-alice-pw", false, false, false);
+    send_access(mut nas1, "alice, wrong password", "alice", "fake-alice-PW", false, false, false);
+    send_access(mut nas1, "erin, a 39-byte password", "erin", "fake-erin-a-rather-long-passphrase-0042", false, false, false);
+    send_access(mut nas1, "erin, cut at 16 bytes", "erin", "fake-erin-a-rath", false, false, false);
+    send_access(mut nas1, "ghost", "ghost", "fake-ghost-pw", false, false, false);
+    send_access(mut nas1, "dave, disabled", "dave", "fake-dave-pw", false, false, false);
+    let mut r = nas1.start(ACCESS_REQUEST);
+    nas1.pap(mut r, "fake-alice-pw");
+    nas1.send("no User-Name", mut r, "auth", false, false, false);
+
+    println("== chap");
+    let tries: Array[(Str, Option[Slice[u8]], Str), 3] = [
+        ("bob, CHAP-Challenge", Some(b"0123456789abcdef"), "fake-bob-pw"),
+        ("bob, authenticator as challenge", None, "fake-bob-pw"),
+        ("bob, wrong password", Some(b"fedcba9876543210"), "fake-bob-PW"),
+    ];
+    for (label, challenge, password) in tries {
+        let mut r = nas2.start(ACCESS_REQUEST);
+        r.add_text(USER_NAME, "bob");
+        nas2.chap(mut r, 7, password, challenge);
+        nas2.send(label, mut r, "auth", false, false, false);
+    }
+    let mut r = nas2.start(ACCESS_REQUEST);
+    r.add_text(USER_NAME, "alice");
+    nas2.chap(mut r, 200, "fake-alice-pw", Some(b"a 24-byte challenge str!"));
+    nas2.send("alice by CHAP, 24-byte challenge", mut r, "auth", false, false, false);
+
+    println("== challenge");
+    send_access(mut nas1, "carol, password", "carol", "fake-carol-pw", false, false, false);
+    let mut r = nas1.start(ACCESS_REQUEST);
+    r.add_text(USER_NAME, "carol");
+    r.add_text(STATE, "otp-1");
+    nas1.pap(mut r, "424242");
+    nas1.send("carol, the code", mut r, "auth", false, false, false);
+    send_access(mut nas1, "carol, password again", "carol", "fake-carol-pw", false, false, false);
+    for label in ["carol, a wrong code", "carol, otp-2 replayed"] {
+        let mut r = nas1.start(ACCESS_REQUEST);
+        r.add_text(USER_NAME, "carol");
+        r.add_text(STATE, "otp-2");
+        nas1.pap(mut r, "000000");
+        nas1.send(label, mut r, "auth", false, false, false);
+    }
+    let mut r = nas1.start(ACCESS_REQUEST);
+    r.add_text(USER_NAME, "bob");
+    r.add_text(STATE, "otp-3");
+    nas1.pap(mut r, "424242");
+    nas1.send("bob, a State never issued", mut r, "auth", false, false, false);
+
+    println("== message-authenticator");
+    send_access(mut nas2, "alice, signed", "alice", "fake-alice-pw", true, false, false);
+    send_access(mut nas2, "alice, signature off by a bit", "alice", "fake-alice-pw", true, true, true);
+
+    println("== accounting");
+    let ip = [(FRAMED_IP, ip_bytes("10.0.0.11"))];
+    send_acct(mut nas1, "start alice s-1", 1, "alice", "s-1", ip, false, false);
+    send_access(mut nas1, "alice, while s-1 is open", "alice", "fake-alice-pw", false, false, false);
+    send_acct(mut nas1, "start alice s-1 again", 1, "alice", "s-1", ip, false, false);
+    send_acct(
+        mut nas1,
+        "interim s-1",
+        3,
+        "alice",
+        "s-1",
+        [(ACCT_IN, be32(1200).to_vec()), (ACCT_OUT, be32(34000).to_vec()), (ACCT_TIME, be32(60).to_vec())],
+        false,
+        false,
+    );
+    send_acct(
+        mut nas1,
+        "stop s-1",
+        2,
+        "alice",
+        "s-1",
+        [
+            (ACCT_IN, be32(5000).to_vec()),
+            (ACCT_OUT, be32(99000).to_vec()),
+            (ACCT_TIME, be32(300).to_vec()),
+            (ACCT_CAUSE, be32(1).to_vec()),
+        ],
+        false,
+        false,
+    );
+    send_access(mut nas1, "alice, after the stop", "alice", "fake-alice-pw", false, false, false);
+    send_acct(mut nas2, "start bob b-1", 1, "bob", "b-1", [(FRAMED_IP, ip_bytes("10.0.0.12"))], false, false);
+    send_acct(mut nas2, "start bob b-2", 1, "bob", "b-2", [], false, false);
+    send_acct(
+        mut nas2,
+        "interim b-2",
+        3,
+        "bob",
+        "b-2",
+        [(ACCT_IN, be32(77).to_vec()), (ACCT_OUT, be32(4096).to_vec()), (ACCT_TIME, be32(15).to_vec())],
+        false,
+        false,
+    );
+    send_acct(mut nas1, "start erin e-1", 1, "erin", "e-1", [(FRAMED_IP, ip_bytes("10.0.0.15"))], false, false);
+    send_acct(mut nas2, "accounting-on (nas2 rebooted)", 7, "", "", [], false, false);
+    send_acct(mut nas2, "interim b-1 after the reboot", 3, "bob", "b-1", [], false, false);
+    send_acct(mut nas1, "stop of an unknown session", 2, "alice", "nope", [(ACCT_CAUSE, be32(4).to_vec())], false, false);
+    send_acct(mut nas1, "start, bad request authenticator", 1, "alice", "s-9", [], false, true);
+    send_acct(mut nas1, "no Acct-Status-Type", 0, "alice", "s-9", [], true, false);
+    send_acct(mut nas1, "start without a session id", 1, "alice", "", [], true, false);
+    send_acct(mut nas1, "Acct-Status-Type 9", 9, "alice", "s-9", [], true, false);
+    send_acct(mut nas1, "start alice s-2", 1, "alice", "s-2", ip, false, false);
+
+    println("== duplicates");
+    let data = send_access(mut nas2, "bob, first send", "bob", "fake-bob-pw", false, false, false);
+    let mut r = nas2.start(ACCESS_REQUEST);
+    r.id = data[1];
+    r.ra = data[4..20].to_vec();
+    nas2.raw("bob, the same bytes again", data, r, "auth", false);
+    nas2.next_id = data[1];
+    send_access(mut nas2, "same id, new authenticator", "bob", "fake-bob-PW", false, false, false);
+
+    println("== broken");
+    send_access(mut rogue, "an unknown client", "alice", "fake-alice-pw", false, false, true);
+    send_access(mut nas3, "nas3 with an old secret", "alice", "fake-alice-pw", false, false, false);
+    send_access(mut nas3, "nas3 with an old secret, signed", "alice", "fake-alice-pw", true, false, true);
+    let mut r = nas1.start(ACCESS_REQUEST);
+    r.add_text(USER_NAME, "bob");
+    nas1.pap(mut r, "fake-bob-pw");
+    let good = nas1.encode(mut r, false, false);
+    nas1.raw("19 bytes", good[..19], r, "auth", true);
+    let mut bad = good.clone();
+    bad[2..4] = 4097u16.to_be_bytes();
+    nas1.raw("length 4097", bad, r, "auth", true);
+    let mut bad = good.clone();
+    bad[2..4] = ((good.len() + 6) as u16).to_be_bytes();
+    nas1.raw("length past the datagram", bad, r, "auth", true);
+    let mut bad = good.clone();
+    bad[21] = 1;
+    nas1.raw("attribute of length 1", bad, r, "auth", true);
+    bad[21] = 60;
+    nas1.raw("attribute past the end", bad, r, "auth", true);
+    let mut padded = good.clone();
+    padded.extend_from_slice([0u8; 8]);
+    nas1.raw("8 bytes of padding", padded, r, "auth", false);
+    let mut bad = good.clone();
+    bad[0] = ACCESS_ACCEPT;
+    nas1.raw("an Access-Accept sent to the server", bad, r, "auth", true);
+    bad[0] = ACCOUNTING_REQUEST;
+    nas1.raw("an Accounting-Request on the auth port", bad, r, "auth", true);
+    bad[0] = ACCESS_REQUEST;
+    nas1.raw("an Access-Request on the acct port", bad, r, "acct", true);
+    let mut r = nas1.start(ACCESS_REQUEST);
+    r.add_text(USER_NAME, "bob");
+    r.add(USER_PASSWORD, [0u8; 20]);
+    nas1.send("a 20-byte User-Password", mut r, "auth", false, false, true);
+    let mut r = nas1.start(ACCESS_REQUEST);
+    r.add_text(USER_NAME, "bob");
+    nas1.pap(mut r, "fake-bob-pw");
+    nas1.chap(mut r, 1, "fake-bob-pw", None);
+    nas1.send("PAP and CHAP together", mut r, "auth", false, false, true);
+    let mut r = nas1.start(ACCESS_REQUEST);
+    r.add_text(USER_NAME, "bob");
+    nas1.send("no credentials", mut r, "auth", false, false, true);
+    let mut r = nas1.start(ACCESS_REQUEST);
+    r.add_text(USER_NAME, "bob");
+    r.add(CHAP_PASSWORD, [0u8; 16]);
+    nas1.send("a 16-byte CHAP-Password", mut r, "auth", false, false, true);
+    let mut r = nas1.start(ACCESS_REQUEST);
+    r.add_text(USER_NAME, "bob");
+    nas1.pap(mut r, "fake-bob-pw");
+    r.add(MESSAGE_AUTH, [0u8; 8]);
+    nas1.send("an 8-byte Message-Authenticator", mut r, "auth", false, false, true);
+    send_status(mut nas1, "Status-Server unsigned", "auth", false, false);
+
+    println("== status");
+    send_status(mut nas2, "Status-Server to auth", "auth", false, true);
+    send_status(mut nas2, "Status-Server to acct", "acct", false, true);
+    send_status(mut nas1, "halt auth", "auth", true, true);
+    send_status(mut nas1, "halt acct", "acct", true, true);
+    let ports = [auth_task.join(), acct_task.join()];
+
+    for p in ref ports {
+        println(f"== {p.name} log ({p.requests} datagrams)");
+        for line in ref p.log {
+            println(f"{line}");
+        }
+    }
+    let st = state.lock();
+    println("== open sessions");
+    for (k, s) in ref st.value.sessions {
+        println(f"{k} {s.user} {s.ip} in {s.octets_in} out {s.octets_out} {s.time}s");
+    }
+    println("== closed sessions");
+    for line in ref st.value.closed {
+        println(f"{line}");
+    }
+    println("== counts");
+    for (k, v) in ref st.value.counts {
+        println(f"{k} {v}");
+    }
+}

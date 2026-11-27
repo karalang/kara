@@ -3482,6 +3482,10 @@ pub struct TypeChecker<'a> {
     /// Rust's `Duration::from_nanos` and its siblings take a `u64`, Kāra's
     /// an `i64`, so a `u64` there gets `as i64` as its fix.
     pub(super) duration_unit_args: std::collections::HashSet<SpanKey>,
+    /// The `x` of a socket's `set_read_timeout(Some(x))`, by span: a `u64`
+    /// there, as Rust's `Duration::from_millis` took it, gets `as i64`
+    /// (B-2026-11-27-42).
+    pub(super) timeout_ms_args: std::collections::HashSet<SpanKey>,
     /// Initializers `x as usize` of unannotated `let`s, whose binding is a
     /// `usize` that then meets `i64` (B-2026-11-06-3's remainder, kata 1058),
     /// and every other `as usize` the program writes: once the written
@@ -5178,6 +5182,7 @@ impl<'a> TypeChecker<'a> {
             pointer_int_mixed: false,
             usize_use_site_fixes: Vec::new(),
             duration_unit_args: std::collections::HashSet::new(),
+            timeout_ms_args: std::collections::HashSet::new(),
             usize_cast_lets: Vec::new(),
             usize_floor_calls: Vec::new(),
             last_mut_writes: Default::default(),
