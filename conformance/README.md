@@ -24,6 +24,8 @@ compiled. Both must give the expected output.
 | `secret_model.py` | secret.md access | Python's `==`: random `Secret[String]` and `Secret[Vec[u8]]` pairs (equal, one byte off at the start, middle or end, a prefix, empty, multibyte) through `ct_eq` both ways and against itself, then after an `expose_mut` push and a clear |
 | `duration_model.py` | time-random-env.md `Duration` | Go's `time.Duration` (`go run`): random spans from every constructor, to the i64 edges, through `+`, `-`, `* k`, `/ k`, the four `as_` readers and the comparisons, each printed with `Display` against Go's `String()` |
 | `strings_model.py` | strings.md | Rust's `str` and `String` (`rustc`), which the page names: random texts with multibyte letters, the page's Unicode whitespace, a lone `\r`, length-changing case pairs and an emoji, patterns from the text, the alphabet and empty, through every reading method and `push`, `push_str`, `pop`, `truncate`, `retain`, `extend` and `+`, results as hex bytes |
+| `int_methods_model.py` | core-types.md numbers | Rust's integer methods (`rustc`) on `i8`..`u64` at the edges and at random: the four overflow families, the `abs` families, bit counts, byte orders, `div_euclid`/`rem_euclid`/`div_ceil`, `isqrt`, `ilog*`, and `parse` of each value's text |
+| `numtext_model.py` | core-types.md parsing and printing | Python: `f64` and `f32` `Display` (random bit patterns, subnormals, ties, the exponent-form edges) against `repr`'s rule and the shortest single-precision digits; `f64.parse` of random texts against `float()` bit for bit; integer `parse` on every type against the page's whitespace, sign and error-kind rules |
 | `precedence.py` | design.md §6 | Every pair of binary operators, alone, around each comparison and under the logical words, against a parser of the page's table, that parser checked against Python's `ast.parse` wherever the two grammars agree (all but `not`); a pair counts only where a tuple tells its two groupings apart |
 | `literals.py` | design.md §3 Numeric literals | Random integer literals in every base and float literals in every notation, with `_` grouping, against Python's `int(text, 0)` and `float(text)`; floats compared by bits, `f32` ones at single precision |
 | `tls_client.py` | io.md HTTP client, HTTPS | A local test PKI (expired, not-yet-valid, wrong-host, CN-only, wildcard and IP-SAN, self-signed, untrusted-root, incomplete, bad-signature, non-CA issuer, clientAuth-only, RSA-1024 and SHA-1 certificates) against `Client.get` through a CONNECT proxy: each verdict against Python `ssl`, each refusal's message in words; SNI and ALPN off the ClientHello, h2 and HTTP/1.1, TLS 1.1 refused, `close_notify` against truncation, `KARAC_HTTP_EXTRA_CA` errors |
@@ -68,6 +70,8 @@ python3 conformance/pool_model.py --seed 1
 python3 conformance/secret_model.py --seed 1
 python3 conformance/duration_model.py --seed 1      # needs go
 python3 conformance/strings_model.py --seed 1       # needs rustc
+python3 conformance/int_methods_model.py --seed 1   # needs rustc
+python3 conformance/numtext_model.py --seed 1
 python3 conformance/precedence.py --seed 1
 python3 conformance/overflow.py
 python3 conformance/layout.py --seed 1
