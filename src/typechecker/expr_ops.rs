@@ -6155,6 +6155,13 @@ impl<'a> super::TypeChecker<'a> {
                     Type::Error
                 } else {
                     let message = self.arithmetic_rejection_message(op, &left_ty, &right_ty);
+                    // `s + t` with `s` a `String` is refused for its right
+                    // operand, so the caret goes there (B-2026-11-26-84).
+                    let blame = if matches!(op, BinOp::Add) && is_string_concat_operand(&left_ty) {
+                        right.span
+                    } else {
+                        left.span
+                    };
                     // Python's `"ab" * 3` is Kāra's `"ab".repeat(3)`
                     // (B-2026-11-22-36).
                     let text_left = is_string_concat_operand(&left_ty)
@@ -6226,7 +6233,7 @@ impl<'a> super::TypeChecker<'a> {
                         // Rust's `s + &w[i..]`: the borrow goes and the view
                         // becomes an owned copy.
                         self.error_fix_diffs
-                            .insert(SpanKey::from_span(&left.span), edits);
+                            .insert(SpanKey::from_span(&blame), edits);
                         let rust = match &right.kind {
                             ExprKind::Unary {
                                 op: UnaryOp::Deref, ..
@@ -6238,7 +6245,7 @@ impl<'a> super::TypeChecker<'a> {
                                 "{message}: a `Str` is a view and `+` appends an owned \
                                  `String`, {rust} (design.md § Operator traits)"
                             ),
-                            left.span,
+                            blame,
                             TypeErrorKind::InvalidBinaryOp,
                         );
                         return Type::Error;
@@ -6250,11 +6257,11 @@ impl<'a> super::TypeChecker<'a> {
                                  `String` (design.md § Operator traits). Take an owned copy \
                                  with `.to_string()`"
                             ),
-                            left.span,
+                            blame,
                             TypeErrorKind::InvalidBinaryOp,
                             fix,
                         ),
-                        None => self.type_error(message, left.span, TypeErrorKind::InvalidBinaryOp),
+                        None => self.type_error(message, blame, TypeErrorKind::InvalidBinaryOp),
                     }
                     Type::Error
                 }

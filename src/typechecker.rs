@@ -11601,14 +11601,12 @@ impl<'a> TypeChecker<'a> {
             elem = Some(inner.clone());
             at = inner;
         }
-        if let Some((name, fix, lit)) =
+        if let Some((_, fix, why)) =
             elem.and_then(|e| self.literal_collection_annotation(&span, &e, depth))
         {
             self.type_error_with_fix_it(
                 format!(
-                    "expected '{}', found '{}': the elements of `{name}` are 'i64' because the \
-                     literal it is filled with took the default, since nothing before this use \
-                     fixed its type (design.md §8 Literals); write that literal {lit}",
+                    "expected '{}', found '{}': {why}",
                     type_display(expected),
                     type_display(found),
                 ),

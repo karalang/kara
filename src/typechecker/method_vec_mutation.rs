@@ -196,7 +196,12 @@ impl<'a> super::TypeChecker<'a> {
                                 ExprKind::Call { callee, .. } => matches!(
                                     &callee.kind,
                                     ExprKind::Identifier(n) if matches!(n.as_str(), "Some" | "Ok" | "Err")
-                                ),
+                                // Or a constructor whose literal arguments
+                                // the slot types, as one pushed alone is:
+                                // `(Vec.filled(n, 20000), 1, 2)` into a
+                                // `Vec[(Vec[i32], i32, i32)]` (kata 1803,
+                                // B-2026-11-26-86).
+                                ) || super::exprs::ctor_with_literal_args(e),
                                 _ => false,
                             }))
                     }

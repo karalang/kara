@@ -4638,6 +4638,18 @@ impl<'a> super::TypeChecker<'a> {
                                 }
                             } else if elem_needs_expected(e, slot) {
                                 self.check_expr(e, slot)
+                            } else if matches!(slot, Type::Int(_) | Type::UInt(_) | Type::Float(_))
+                                && (Self::unsuffixed_int_literal_value(e).is_some()
+                                    || matches!(e.kind, ExprKind::Float(_, None)))
+                            {
+                                // A bare number beside such an element takes
+                                // its slot, as at a `let`: `(Some(1), 2)` or
+                                // `([1, 2], 3)` pushed into a `Vec[(.., i32)]`
+                                // kept the default `i64` (B-2026-11-26-86).
+                                match self.check_expr(e, slot) {
+                                    Type::Error => Type::Error,
+                                    _ => slot.clone(),
+                                }
                             } else {
                                 self.infer_expr(e)
                             }
@@ -15196,9 +15208,21 @@ impl<'a> super::TypeChecker<'a> {
                 element = element.and_then(|el| self.fill_element_type(&el));
                 depth += 1;
             }
-            element
-                .and_then(|el| self.literal_entry(lit, &el, end(lit.span), true, true, name))
-                .map(|e| super::LiteralLet { depth, ..e })
+            element.and_then(|el| {
+                self.literal_entry(lit, &el, end(lit.span), true, true, name)
+                    .map(|e| super::LiteralLet { depth, ..e })
+                    // `let g = Vec.filled(n, f[0] + size)` with `size` a literal
+                    // binding: `g`'s elements are an `i64` only because of it,
+                    // so a refusal of `g` whole is fixed on `size`
+                    // (B-2026-11-26-86).
+                    .or_else(|| {
+                        let e = self.literal_copy(lit, &el)?;
+                        Some(super::LiteralLet {
+                            depth: depth + e.depth,
+                            ..e
+                        })
+                    })
+            })
         } else {
             self.literal_entry(value, ty, end(name_span), false, false, name)
                 .or_else(|| self.literal_copy(value, ty))
@@ -16553,7 +16577,7 @@ impl<'a> super::TypeChecker<'a> {
             .literal_collection_uses
             .get(&SpanKey::from_span(use_span))?;
         let entry = self.literal_lets.get(name.as_str())?;
-        if entry.depth != depth || !entry.suffix {
+        if entry.depth != depth || entry.element && !entry.suffix {
             return None;
         }
         if entry
@@ -16568,16 +16592,38 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
         let t = type_display(elem);
+        let root = &entry.root;
+        // A fill of a value computed from a literal binding: the binding's
+        // annotation types the elements (B-2026-11-26-86).
+        if !entry.suffix {
+            return Some((
+                root.clone(),
+                FixIt {
+                    span: entry.at,
+                    replacement: format!(": {t}"),
+                },
+                format!(
+                    "the elements of `{name}` are 'i64' because `{root}`, which they are \
+                     computed from, is an 'i64': its literal kept the default, since an \
+                     operator or a method does not fix a literal's type (design.md §8 \
+                     Literals); declare it `{root}: {t}`"
+                ),
+            ));
+        }
         let lit = entry
             .value
             .map_or_else(|| format!("with the suffix `{t}`"), |v| format!("`{v}{t}`"));
         Some((
-            entry.root.clone(),
+            root.clone(),
             FixIt {
                 span: entry.at,
                 replacement: t,
             },
-            lit,
+            format!(
+                "the elements of `{root}` are 'i64' because the literal it is filled with \
+                 took the default, since nothing before this use fixed its type (design.md \
+                 §8 Literals); write that literal {lit}"
+            ),
         ))
     }
 
