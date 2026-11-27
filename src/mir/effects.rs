@@ -1861,16 +1861,17 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
             vec![(Writes, "RandomSource", Some(0))]
         }
         ("Atomic" | "Mutex", "new") => vec![HEAP],
-        ("sleep_ms" | "__sleep_ns", "") => vec![(Blocks, "", None)],
+        // A timer wait suspends its task (core-semantics §11.8, B-2026-11-27-72).
+        ("sleep_ms" | "__sleep_ns", "") => vec![(Suspends, "", None)],
         // A `select` (core-semantics §11.11): the count of channel changes
-        // touches nothing, and the wait with no arm ready blocks.
+        // touches nothing, and the wait with no arm ready suspends.
         ("__select_epoch", "") => vec![],
         // A task's teardown (core-semantics §11.9): flags of the running
         // task.
         ("__cancelled" | "__unwinding" | "__unwind", "") => vec![],
         // An `Abort` in a program with an isolating group (§11.12).
         ("__panic", "") => vec![PANICS],
-        ("__select_park", "") => vec![(Blocks, "", None)],
+        ("__select_park", "") => vec![(Suspends, "", None)],
         // The collections the MIR interpreter implements natively: they
         // allocate, and an out-of-range index or a missing key panics.
         // `Option`/`Result` combinators are here too; a closure they take is
@@ -1930,10 +1931,10 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         ("Receiver", "try_recv") => vec![(Receives, "Channel", Some(0))],
         ("Receiver", "__closed") => vec![(Receives, "Channel", Some(0))],
         // A socket wait suspends its task (core-semantics §11.8); binding,
-        // a shutdown and a UDP `connect` do not wait on the peer and keep
-        // `blocks`, as the library declares them.
+        // a shutdown and a UDP `connect` wait on no peer and carry no wait
+        // effect (B-2026-11-27-72).
         ("TlsStream", "write") => vec![(Sends, "Network", Some(0)), (Suspends, "", None)],
-        ("TlsStream", "shutdown_write") => vec![(Sends, "Network", Some(0)), (Blocks, "", None)],
+        ("TlsStream", "shutdown_write") => vec![(Sends, "Network", Some(0))],
         ("TlsStream", "read") => vec![(Receives, "Network", Some(0)), (Suspends, "", None)],
         // Opening a connection or a listener sends and receives on the
         // network; accepting receives on the listener (core semantics
@@ -1951,11 +1952,7 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
             (Receives, "Network", None),
             (Suspends, "", None),
         ],
-        ("TcpListener", "bind") => vec![
-            (Sends, "Network", None),
-            (Receives, "Network", None),
-            (Blocks, "", None),
-        ],
+        ("TcpListener", "bind") => vec![(Sends, "Network", None), (Receives, "Network", None)],
         ("TcpListener", "accept") => vec![(Receives, "Network", Some(0)), (Suspends, "", None)],
         ("TcpStream", "shutdown_write") => vec![(Sends, "Network", Some(0))],
         ("TcpStream", "write" | "write_all" | "flush") => {
@@ -1967,7 +1964,7 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         ("UdpSocket", "send_to" | "send") => {
             vec![(Sends, "Network", Some(0)), (Suspends, "", None)]
         }
-        ("UdpSocket", "connect") => vec![(Sends, "Network", Some(0)), (Blocks, "", None)],
+        ("UdpSocket", "connect") => vec![(Sends, "Network", Some(0))],
         ("UdpSocket", "recv_from" | "recv") => {
             vec![(Receives, "Network", Some(0)), (Suspends, "", None)]
         }

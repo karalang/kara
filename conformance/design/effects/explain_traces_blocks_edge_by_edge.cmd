@@ -1,4 +1,4 @@
 explain {}.f
 blocks
 f calls g
-g calls sleep, which declares blocks
+g calls FileSystem.read_to_string, which has blocks

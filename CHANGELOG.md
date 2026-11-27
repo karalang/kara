@@ -1096,9 +1096,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   the promise that it never holds its worker while it waits; it was refused
   E0400 "performs blocks". A declared `blocks` still admits them, so no
   existing declaration has to change, but the fix E0400 suggests for an
-  undeclared one now says `suspends`. File I/O, process waits, `sleep`,
-  binding a listener, `shutdown_write`, UDP `connect` and
-  `TaskGroup.spawn` keep `blocks` (B-2026-11-27-10).
+  undeclared one now says `suspends`. `sleep`, `std.time.timeout` and
+  `TaskGroup.spawn` (whose wait for a slot under `limit` frees only when a
+  sibling task finishes) carry `suspends` too, and binding a listener,
+  `shutdown_write` and a UDP `connect`, which wait on no peer, carry
+  neither verb. File I/O and process waits keep `blocks`
+  (B-2026-11-27-10, B-2026-11-27-72).
 
 - A function's effects are listed in the order of their text
   (`allocates(Heap)`, `panics`, `writes(Stderr)`, `writes(Stdout)`) in

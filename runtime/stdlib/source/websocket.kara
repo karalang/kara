@@ -47,7 +47,7 @@ impl WsConn {
         }
     }
 
-    fn shutdown_write(ref self) -> Result[(), NetError] with sends(Network) blocks {
+    fn shutdown_write(ref self) -> Result[(), NetError] with sends(Network) {
         match self {
             WsConn.Plain(s) => s.shutdown_write(),
             WsConn.Tls(s) => s.shutdown_write(),

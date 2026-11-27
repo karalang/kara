@@ -1,4 +1,4 @@
-// std.time.sleep is reads(Clock) blocks suspends
+// std.time.sleep is reads(Clock) suspends (B-2026-11-27-72)
 
 import std.time.{Duration, sleep};
 fn nap() { sleep(Duration.ms(1)); }

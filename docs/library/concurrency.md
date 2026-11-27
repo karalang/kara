@@ -140,7 +140,7 @@ import std.sync.{TaskGroup, TaskHandle};
 
 impl TaskGroup {
     fn new(; limit: i64 = i64.MAX) -> TaskGroup
-    fn spawn[T: CrossTask](self, f: own OnceFn() -> T) -> TaskHandle[T] with blocks
+    fn spawn[T: CrossTask](self, f: own OnceFn() -> T) -> TaskHandle[T] with suspends
 }
 
 impl[T] TaskHandle[T] {
@@ -149,8 +149,8 @@ impl[T] TaskHandle[T] {
 ```
 
 - **`new`** makes an empty group. `TaskGroup.new(limit: n)` lets at most `n` of its tasks run at once. Without `limit` the group is unbounded: the default, `i64.MAX`, is never reached.
-- **`spawn`** starts `f` as a task that runs concurrently with the caller, and waits first while the group already runs `limit` tasks; that wait is its `blocks`. Its receiver is a borrowed `self`, so the functions and tasks that spawn into a group, such as a server's request handlers, take it as an ordinary borrowed parameter; spawns on one group are synchronized. `f` is not escaping: its captures are inferred place by place, so a task may borrow from the enclosing scope, and the group holds those borrows until it drops. The borrowing rules, including what a task spawned from inside another task may capture, are [core-semantics.md §9.5](../core-semantics.md#9-closures).
-- **Dropping a group joins every task it started**, so every task finishes before the scope that owns the group ends, and the drop waits (`blocks`).
+- **`spawn`** starts `f` as a task that runs concurrently with the caller, and waits first while the group already runs `limit` tasks; that wait is its `suspends`, since a slot frees only when a sibling task finishes. Its receiver is a borrowed `self`, so the functions and tasks that spawn into a group, such as a server's request handlers, take it as an ordinary borrowed parameter; spawns on one group are synchronized. `f` is not escaping: its captures are inferred place by place, so a task may borrow from the enclosing scope, and the group holds those borrows until it drops. The borrowing rules, including what a task spawned from inside another task may capture, are [core-semantics.md §9.5](../core-semantics.md#9-closures).
+- **Dropping a group joins every task it started**, so every task finishes before the scope that owns the group ends, and the drop waits as a join does (`suspends`).
 - **`TaskHandle[T]`** owns its task's result and borrows nothing, so it may outlive its group. `join` waits for the task and returns its result; the wait suspends the caller's task (`suspends`). After the group has dropped, every task is done, and `join` returns the stored result at once. A result that is never joined drops with its handle, or with the group if the handle dropped first.
 - **Tasks are not checked against each other for effect conflicts.** The borrow rules and `CrossTask` keep them from racing on memory, but two tasks may both print, or both write to one database, and their order is not fixed ([design.md §13](../design.md#taskgroup)). `par {}` and `par for` are the deterministic constructs.
 - **Failure.** A task that returns `Err` does not affect its siblings; the error reaches whoever joins its handle. A panic in any task ends the process ([core-semantics.md §11.4](../core-semantics.md#11-concurrency-c9)), except in an isolating group (below).

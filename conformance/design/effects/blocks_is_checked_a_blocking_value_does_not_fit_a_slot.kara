@@ -1,5 +1,5 @@
 // blocks is checked: a blocking value does not fit a slot without blocks
+// (a file read blocks; a sleep suspends, B-2026-11-27-72)
 
-import std.time.{Duration, sleep};
-struct B { hs: Vec[Fn() with reads(Clock) suspends] }
-fn main() { let mut b = B { hs: [] }; b.hs.push(|| sleep(Duration.ms(1))); }
+struct B { hs: Vec[Fn() -> bool with reads(FileSystem) suspends] }
+fn main() { let mut b = B { hs: [] }; b.hs.push(|| fs.read_to_string("x").is_ok()); }

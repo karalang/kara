@@ -27,9 +27,9 @@ fn check(tag: &str, src: &str) -> String {
 fn a_blocking_closure_in_a_slot_names_blocks_bare() {
     let err = check(
         "field",
-        "import std.time.{Duration, sleep};\n\
-         struct H { f: Fn() with reads(Clock) writes(Stdout) }\n\
-         fn main() {\n    let h = H { f: || { sleep(Duration.ms(1)); println(\"x\"); } };\n    (h.f)();\n}\n",
+        // A file read blocks (a sleep suspends, B-2026-11-27-72).
+        "struct H { f: Fn() with reads(FileSystem) writes(Stdout) }\n\
+         fn main() {\n    let h = H { f: || { let _ = fs.read_to_string(\"x\"); println(\"x\"); } };\n    (h.f)();\n}\n",
     );
     assert!(
         err.contains("has effect blocks not declared in slot"),
@@ -42,9 +42,8 @@ fn a_blocking_closure_in_a_slot_names_blocks_bare() {
 fn a_blocking_argument_to_a_slot_names_blocks_bare() {
     let err = check(
         "arg",
-        "import std.time.{Duration, sleep};\n\
-         fn run(f: Fn() with writes(Stdout)) {\n    f();\n}\n\
-         pub fn main() with blocks writes(Stdout) {\n    run(|| { sleep(Duration.ms(1)); println(\"x\"); });\n}\n",
+        "fn run(f: Fn() with reads(FileSystem) writes(Stdout)) {\n    f();\n}\n\
+         pub fn main() with blocks reads(FileSystem) writes(Stdout) {\n    run(|| { let _ = fs.read_to_string(\"x\"); println(\"x\"); });\n}\n",
     );
     assert!(
         err.contains("has effect blocks not declared in slot"),

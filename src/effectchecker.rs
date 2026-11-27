@@ -3116,11 +3116,12 @@ impl<'a> EffectChecker<'a> {
         // covers a socket wait. The verb is added to every seed above that
         // carries a `FileSystem` (`blocks`) or `Network` (`suspends`) effect
         // rather than listed again; the seeds without one (constructors,
-        // `BufReader.new`) touch nothing. A server also binds its listener,
-        // which does not suspend, so `Server.serve*` carry both. `try_send`
-        // and `try_recv` never wait and get neither. `TaskGroup.spawn` waits
-        // for a slot under the group's limit and keeps `blocks`
-        // (library/concurrency.md), which §11.8's list does not name.
+        // `BufReader.new`) touch nothing. `try_send` and `try_recv` never
+        // wait and get neither. `TaskGroup.spawn` waits for a slot under the
+        // group's limit, which frees only when a sibling task finishes, so
+        // that wait suspends too; binding a listener, `shutdown_write` and a
+        // UDP `connect` wait on no peer and carry neither (review rulings,
+        // B-2026-11-27-72).
         {
             let blocks = Effect {
                 verb: EffectVerbKind::Blocks,
@@ -3143,18 +3144,15 @@ impl<'a> EffectChecker<'a> {
                     .map(|(k, _)| *k)
                     .collect::<Vec<Symbol>>()
             };
-            let mut blocking = resource_seeds(&self.inferred_effects, "FileSystem");
+            let blocking = resource_seeds(&self.inferred_effects, "FileSystem");
             let mut suspending = resource_seeds(&self.inferred_effects, "Network");
             for name in [
+                "Sender.send",
+                "Receiver.recv",
+                "TaskHandle.join",
                 "TaskGroup.spawn",
                 "IsolatingGroup.spawn",
-                "Server.serve",
-                "Server.serve_tls",
-                "Server.serve_static",
             ] {
-                blocking.push(self.interner.intern(name));
-            }
-            for name in ["Sender.send", "Receiver.recv", "TaskHandle.join"] {
                 suspending.push(self.interner.intern(name));
             }
             for key in blocking {

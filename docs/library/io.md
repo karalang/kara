@@ -1,6 +1,6 @@
 # Input and output
 
-**File I/O blocks, and socket waits suspend** ([core semantics §11.8](../core-semantics.md)). A file read or write, a write to a child's stdin and a `BufReader` over a pipe hold the worker they run on until they complete, so they have `blocks`. The socket, TLS and WebSocket waits (`accept`, `connect`, `read`, `write`, UDP `send` and `recv`) and the HTTP client's requests have `suspends` instead: a call that would wait suspends its task, and the program's other tasks run until it can go on. Binding a listener and `shutdown_write` do not wait on a peer and keep `blocks`; a server, which binds and then accepts, has both. `Child.wait` and reads of a child's output pipes suspend inside a task too, but they are process waits and keep `blocks` as well. A function that declares `blocks` may call a `suspends` callee, since `blocks` admits `suspends`.
+**File I/O blocks, and socket waits suspend** ([core semantics §11.8](../core-semantics.md)). A file read or write, a write to a child's stdin and a `BufReader` over a pipe hold the worker they run on until they complete, so they have `blocks`. The socket, TLS and WebSocket waits (`accept`, `connect`, `read`, `write`, UDP `send` and `recv`) and the HTTP client's requests have `suspends` instead: a call that would wait suspends its task, and the program's other tasks run until it can go on. Binding a listener, `shutdown_write` and a UDP `connect` wait on no peer, so they have neither verb; a server, which binds and then accepts, has `suspends`. `Child.wait` and reads of a child's output pipes suspend inside a task too, but they are process waits and keep `blocks` as well. A function that declares `blocks` may call a `suspends` callee, since `blocks` admits `suspends`.
 
 **Effects.** Each function lists its effects ([design.md §12](../design.md#resources)):
 - **`FileSystem` and `Network` are capabilities**, not conflict keys: `reads(FileSystem)` means "may read files" and `sends(Network)` "may use the network". Path-taking functions such as `fs.write(path, content)` carry `writes(FileSystem)` (and `blocks`, like all I/O) and do not conflict with each other, so two `par` branches that write the same path by name are not detected.
@@ -281,7 +281,7 @@ The library also provides `impl From[NetError] for IoError` (B-2026-11-11-25), s
 import std.net.{TcpListener, TcpStream};
 
 impl TcpListener {
-    fn bind(addr: Str) -> Result[TcpListener, NetError] with sends(Network) receives(Network) blocks
+    fn bind(addr: Str) -> Result[TcpListener, NetError] with sends(Network) receives(Network)
     fn accept(self) -> Result[TcpStream, NetError] with receives(self) suspends
     fn local_addr(self) -> Result[String, NetError]
 }
@@ -294,15 +294,15 @@ impl TcpStream {
     fn write(self, buf: Slice[u8]) -> Result[i64, NetError] with sends(self) suspends
     fn write_all(self, buf: Slice[u8]) -> Result[i64, NetError] with sends(self) suspends
     fn try_clone(self) -> Result[TcpStream, NetError]
-    fn shutdown_write(self) -> Result[(), NetError] with sends(self) blocks
+    fn shutdown_write(self) -> Result[(), NetError] with sends(self)
     fn set_read_timeout(self, ms: Option[i64]) -> Result[(), NetError]
 }
 
 impl UdpSocket {
-    fn bind(addr: Str) -> Result[UdpSocket, NetError] with sends(Network) receives(Network) blocks
+    fn bind(addr: Str) -> Result[UdpSocket, NetError] with sends(Network) receives(Network)
     fn send_to(self, buf: Slice[u8], addr: Str) -> Result[i64, NetError] with sends(self) suspends
     fn recv_from(self, buf: mut Slice[u8]) -> Result[(i64, String), NetError] with receives(self) suspends
-    fn connect(self, addr: Str) -> Result[(), NetError] with sends(self) blocks
+    fn connect(self, addr: Str) -> Result[(), NetError] with sends(self)
     fn send(self, buf: Slice[u8]) -> Result[i64, NetError] with sends(self) suspends
     fn recv(self, buf: mut Slice[u8]) -> Result[i64, NetError] with receives(self) suspends
     fn local_addr(self) -> Result[String, NetError]
@@ -375,7 +375,7 @@ Inside `with_provider[Network](fake, || ..)` (or a `providers { Network => fake 
 import std.net.{TlsListener, TlsStream};
 
 impl TlsListener {
-    fn bind_tls(addr: Str, cert_pem: Str, key_pem: Str) -> Result[TlsListener, NetError] with sends(Network) receives(Network) blocks
+    fn bind_tls(addr: Str, cert_pem: Str, key_pem: Str) -> Result[TlsListener, NetError] with sends(Network) receives(Network)
     fn accept(self) -> Result[TlsStream, NetError] with receives(self) suspends
     fn local_addr(self) -> Result[String, NetError]
 }
@@ -386,7 +386,7 @@ impl TlsStream {
     fn read_to_end(self, buf: mut ref Vec[u8]) -> Result[i64, NetError] with receives(self) suspends
     fn write(self, buf: Slice[u8]) -> Result[i64, NetError] with sends(self) suspends
     fn write_all(self, buf: Slice[u8]) -> Result[i64, NetError] with sends(self) suspends
-    fn shutdown_write(self) -> Result[(), NetError] with sends(self) blocks
+    fn shutdown_write(self) -> Result[(), NetError] with sends(self)
     fn set_read_timeout(self, ms: Option[i64]) -> Result[(), NetError]
 }
 ```
@@ -438,10 +438,10 @@ The servers speak HTTP/1.1 with keep-alive (and WebSocket through `serve_ws`); H
 import std.net.{HttpError, Request, Response, WebSocket};
 
 impl Server {
-    fn serve(addr: own String, handler: Fn(Request) -> Response + CrossTask) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends
-    fn serve_tls(addr: own String, cert_pem: own String, key_pem: own String, handler: Fn(Request) -> Response + CrossTask) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends
-    fn serve_ws(addr: own String, handler: Fn(Request) -> Response + CrossTask, ws_handler: Fn(own WebSocket) + CrossTask) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends
-    fn serve_ws_tls(addr: own String, cert_pem: own String, key_pem: own String, handler: Fn(Request) -> Response + CrossTask, ws_handler: Fn(own WebSocket) + CrossTask) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends
+    fn serve(addr: own String, handler: Fn(Request) -> Response + CrossTask) -> Result[(), HttpError] with sends(Network) receives(Network) suspends
+    fn serve_tls(addr: own String, cert_pem: own String, key_pem: own String, handler: Fn(Request) -> Response + CrossTask) -> Result[(), HttpError] with sends(Network) receives(Network) suspends
+    fn serve_ws(addr: own String, handler: Fn(Request) -> Response + CrossTask, ws_handler: Fn(own WebSocket) + CrossTask) -> Result[(), HttpError] with sends(Network) receives(Network) suspends
+    fn serve_ws_tls(addr: own String, cert_pem: own String, key_pem: own String, handler: Fn(Request) -> Response + CrossTask, ws_handler: Fn(own WebSocket) + CrossTask) -> Result[(), HttpError] with sends(Network) receives(Network) suspends
 }
 
 impl Request {

@@ -1,0 +1,5 @@
+// #[no_effect(blocks)] rejects a file read below it
+fn load() -> bool { fs.read_to_string("x").is_ok() }
+#[no_effect(blocks)]
+fn f() -> bool { load() }
+fn main() { println(f()); }

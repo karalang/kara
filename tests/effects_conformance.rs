@@ -50,9 +50,17 @@ const NAP: &str =
 
 #[test]
 fn effects_explain_writes_resource_less_verbs_bare() {
+    // A sleep suspends, and a file read blocks (B-2026-11-27-72): both verbs name
+    // no resource.
+    let dir = file(
+        "bare-blocks",
+        "fn load() -> bool { fs.read_to_string(\"x\").is_ok() }\nfn main() { println(load()); }\n",
+    );
+    let out = text(&karac(&dir, &["explain", "main.kara.load"], &[]).stdout);
+    assert!(out.contains("\n  blocks\n"), "{out}");
+    assert!(!out.contains("()"), "{out}");
     let dir = file("bare", NAP);
     let out = text(&karac(&dir, &["explain", "main.kara.nap"], &[]).stdout);
-    assert!(out.contains("\n  blocks\n"), "{out}");
     assert!(out.contains("\n  suspends\n"), "{out}");
     assert!(!out.contains("()"), "{out}");
     let q = text(&karac(&dir, &["query", "effects", "main.kara.nap"], &[]).stdout);
@@ -64,10 +72,10 @@ fn effects_explain_writes_resource_less_verbs_bare() {
         .map(|s| s["reason"].as_str().unwrap())
         .collect();
     assert!(
-        reasons.contains(&"nap calls sleep, which declares blocks"),
+        reasons.contains(&"nap calls sleep, which declares suspends"),
         "{q}"
     );
-    assert!(!q.contains("blocks()"), "{q}");
+    assert!(!q.contains("suspends()"), "{q}");
 }
 
 #[test]

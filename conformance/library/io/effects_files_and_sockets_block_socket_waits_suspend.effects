@@ -1,6 +1,7 @@
 read_file has reads(FileSystem), blocks
 read_file lacks suspends
 write_file has writes(FileSystem), blocks
-listen has sends(Network), receives(Network), blocks
+listen has sends(Network), receives(Network)
+listen lacks blocks, suspends
 dial has sends(Network), receives(Network), suspends
 dial lacks blocks

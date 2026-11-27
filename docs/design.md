@@ -5060,7 +5060,7 @@ impl Counter {
 
 **Crossing tasks.** `sync` handles enter `par` branches, `par for` iterations and `TaskGroup` tasks freely ([core-semantics.md §11.3](core-semantics.md#11-concurrency-c9)). That is the reason the type exists: safety is enforced where the type is defined, so nothing more is checked where it crosses.
 
-**Effects.** A `sync` type adds no effects. Atomic operations have none. `Mutex.lock` has `blocks`, because it may wait. Effects of code that runs while a guard is held belong to the enclosing function as usual.
+**Effects.** A `sync` type adds no effects. Atomic operations have none. `Mutex.lock` has `suspends`, because it may wait, and a wait suspends its task ([core-semantics.md §11.8](core-semantics.md#11-concurrency-c9)). Effects of code that runs while a guard is held belong to the enclosing function as usual.
 
 **From `shared` to `sync`.** A type that started in one task and must now be mutated across tasks is converted by renaming the keyword and replacing each `mut` field with an `Atomic[T]` or `Mutex[T]` field, without `mut`:
 
@@ -5321,7 +5321,7 @@ fn calculate(x: f64, y: f64) -> f64 { ... }    // no effects
 
 `reads`, `writes`, `sends` and `receives` are the conflict verbs. `allocates` and `panics` are capabilities that never conflict, and both are [default-permitted](#default-permitted-effects). `blocks` is an [execution effect](#blocks): it says where a function may wait, not what it touches.
 
-`suspends` is the second execution effect: the task may yield cooperatively, so its thread runs other tasks while it waits (a socket read, `time.sleep` on the task pool). Like `blocks` it takes no resource, never conflicts, is inferred for private functions and declared on public ones; a declared `blocks` admits a `suspends` effect, never the reverse ([core-semantics.md §11.8](core-semantics.md#11-concurrency-c9)). The channel and socket waits, `join` and `Mutex.lock` declare `suspends` alone (B-2026-11-27-10); `time.sleep` (`reads(Clock) blocks suspends`) and a process wait, which also suspend inside a task, declare `blocks` too. (Review-thread rulings 2026-11-16 and 2026-11-27.)
+`suspends` is the second execution effect: the task may yield cooperatively, so its thread runs other tasks while it waits (a socket read, `time.sleep` on the task pool). Like `blocks` it takes no resource, never conflicts, is inferred for private functions and declared on public ones; a declared `blocks` admits a `suspends` effect, never the reverse ([core-semantics.md §11.8](core-semantics.md#11-concurrency-c9)). The channel and socket waits, `join`, `spawn`, `Mutex.lock` and `time.sleep` (`reads(Clock) suspends`) declare `suspends` alone (B-2026-11-27-10, B-2026-11-27-72); a process wait, which also suspends inside a task, declares `blocks` too. (Review-thread rulings 2026-11-16 and 2026-11-27.)
 
 **Syntax.** An effect clause follows the return type: `fn f(x: T) -> U with reads(A) writes(B)`. Effects are written side by side, and a verb may list several resources: `reads(UserDb, OrderDb)`. Every effect word, `with` excepted, is a contextual keyword: `reads`, `writes`, `sends`, `receives`, `allocates`, `panics`, `blocks` and `suspends` are ordinary identifiers outside an effect clause ([§3](#3-lexical-structure)).
 
@@ -5635,7 +5635,7 @@ The bare form must be the broad one. `panics` and `blocks` take no resource, so 
 
 ### `blocks`
 
-`blocks` means a call may park the OS thread in a kernel wait: while it waits, the thread does no other work. Examples: sleeping, synchronous file I/O, a process wait, and a foreign function that waits on a condition variable. `Mutex.lock` under contention, channel `send` and `recv`, a join and the socket waits carry `suspends` instead ([Effect verbs](#effect-verbs), [core-semantics.md §11.8](core-semantics.md#11-concurrency-c9)), which a declared `blocks` admits.
+`blocks` means a call may park the OS thread in a kernel wait: while it waits, the thread does no other work. Examples: synchronous file I/O, a process wait, and a foreign function that waits on a condition variable. Sleeping, `Mutex.lock` under contention, channel `send` and `recv`, a join, a spawn waiting for a slot and the socket waits carry `suspends` instead ([Effect verbs](#effect-verbs), [core-semantics.md §11.8](core-semantics.md#11-concurrency-c9)), which a declared `blocks` admits.
 
 - **No resource.** A function either may block or it may not.
 - **Never conflicts.** Two blocking branches may run in parallel.
@@ -5643,13 +5643,13 @@ The bare form must be the broad one. `panics` and `blocks` take no resource, so 
 - **Forbidden where waiting is unacceptable**, with `#[no_effect(blocks)]`.
 
 **Where `blocks` comes from:**
-1. **Standard library declarations.** Primitives such as `time.sleep`, synchronous file reads, process waits and binding a listener declare `blocks`.
+1. **Standard library declarations.** Primitives such as synchronous file reads and process waits declare `blocks`.
 2. **`extern` functions.** A foreign function has the effects it declares, or every effect, `blocks` included ([§15](#15-unsafe-ffi-and-layout-control)).
 3. **Nothing else.** A loop that burns CPU is not blocking: it uses the thread rather than parking it.
 
 **Why `blocks` is not a resource verb.** Occupying a thread is not reading or writing a named resource. Modeling it as `writes(Thread)` would push a scheduling fact into conflict checking and produce misleading diagnostics. Resource verbs answer "can these conflict?"; `blocks` answers "may this wait?".
 
-**Diagnostics.** `karac explain f` traces `blocks` like any other effect, edge by edge: `f → g → time.sleep (declared blocks)`.
+**Diagnostics.** `karac explain f` traces `blocks` like any other effect, edge by edge: `f → g → fs.read_to_string (declared blocks)`.
 
 ### Observability
 
@@ -5842,7 +5842,7 @@ Concurrency in Kāra is explicit and verified. Three constructs start tasks, and
 - `par for x in it { body }` runs one branch per element and gives a `Vec` of their values;
 - `TaskGroup` runs a dynamic number of tasks, such as one per accepted connection, and joins them when it drops.
 
-There is no free `spawn`, no `async fn` and no `.await`. A function that waits looks like one that computes; waiting is the [`blocks`](#blocks) effect.
+There is no free `spawn`, no `async fn` and no `.await`. A function that waits looks like one that computes; waiting is the [`suspends`](#effect-verbs) effect, or [`blocks`](#blocks) for a wait that holds its worker.
 
 The compiler verifies that the branches of a `par` block and the iterations of a `par for` do not conflict, using places and the effect system. A conflict is a compile error, not something the compiler quietly runs in order: running conflicting branches one after another without saying so would hide that the parallelism the programmer wrote did not happen. `TaskGroup` tasks are checked by the borrow rules and `CrossTask`, so they cannot race on memory, but they are not checked for effect conflicts and they run in no fixed order ([`TaskGroup`](#taskgroup)). The rules are [core-semantics.md §11](core-semantics.md#11-concurrency-c9); this section gives the surface and the examples.
 
@@ -6061,7 +6061,7 @@ fn add(totals: Mutex[Totals], n: i64) {
 
 - **`m.lock()` returns a guard**, `MutexGuard[T]`, whose `value` field is a `mut ref T` to the protected value. The guard is a view of the mutex, and the lock is released when the guard drops at the end of its scope ([core-semantics.md §7](core-semantics.md#7-destruction-c6-supersedes-the-drop-judgment-0)). Discarding a guard is a [`#[must_use]`](#must_use) warning, because the lock would be released at once.
 - **No poisoning.** A panic ends the process ([§10](#10-errors-and-panics)), so no task ever finds a lock left held by a failed one.
-- **Effects.** `lock` has `blocks`, because it may wait. Code run while holding the guard has its ordinary effects. Atomic operations have no effects.
+- **Effects.** `lock` has `suspends`, because it may wait. Code run while holding the guard has its ordinary effects. Atomic operations have no effects.
 
 ### Channels
 

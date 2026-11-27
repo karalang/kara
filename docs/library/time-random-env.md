@@ -13,9 +13,9 @@ In `std.time`:
 | `Instant.now()` | `reads(Clock)` | An `Instant`: a reading of the monotonic clock, which never goes backwards |
 | `Clock.now()` | `reads(Clock)` | An `i64`: whole seconds since the Unix epoch, read from the wall clock, so it can jump when the system clock is set. It is for protocols that count epoch seconds, such as a JWT `exp` claim |
 | `SystemTime.now()` | `reads(Clock)` | A `SystemTime`: the current wall-clock time |
-| `sleep(d: Duration)` | `blocks suspends reads(Clock)` | Nothing; parks the calling task for `d`. In a task it suspends, so its thread runs other tasks meanwhile |
+| `sleep(d: Duration)` | `suspends reads(Clock)` | Nothing; parks the calling task for `d`. It suspends, so its thread runs other tasks meanwhile |
 
-`timeout(d: Duration, f: OnceFn() -> T + CrossTask) -> Result[T, TimedOut]` (`blocks suspends reads(Clock)`) runs `f` as a task and returns its value, or cancels it once `d` has passed and returns `Err(TimedOut {})`; the task's drops and `defer`s run at the wait it was cancelled in, before `timeout` returns ([core-semantics.md §11.10](../core-semantics.md#11-concurrency-c9)). `TimedOut` is a unit struct, so it is built and matched as `TimedOut {}`; it implements `Display` (`timed out`) and `Error`, so `timeout(d, f)?` converts into `AnyError`.
+`timeout(d: Duration, f: OnceFn() -> T + CrossTask) -> Result[T, TimedOut]` (`suspends reads(Clock)`) runs `f` as a task and returns its value, or cancels it once `d` has passed and returns `Err(TimedOut {})`; the task's drops and `defer`s run at the wait it was cancelled in, before `timeout` returns ([core-semantics.md §11.10](../core-semantics.md#11-concurrency-c9)). `TimedOut` is a unit struct, so it is built and matched as `TimedOut {}`; it implements `Display` (`timed out`) and `Error`, so `timeout(d, f)?` converts into `AnyError`.
 
 Never measure elapsed time with `Clock.now()`: a wall-clock reading can jump, and whole seconds are too coarse. Use `Instant.now()`.
 

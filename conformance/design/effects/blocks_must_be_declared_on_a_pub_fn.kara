@@ -1,4 +1,4 @@
-// blocks must be declared on a pub fn
-import std.time.{Duration, sleep};
-pub fn nap() with reads(Clock) suspends { sleep(Duration.ms(1)); }
-fn main() { nap(); }
+// blocks must be declared on a pub fn (a file read blocks; `suspends` alone
+// does not cover it)
+pub fn load() -> bool with reads(FileSystem) suspends { fs.read_to_string("x").is_ok() }
+fn main() { println(load()); }

@@ -59,9 +59,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 809 |
-| false-positive | 411 |
+| false-positive | 412 |
 | missing-feature | 271 |
-| perf | 206 |
+| perf | 207 |
 | other | 165 |
 | soundness | 145 |
 | miscompile | 114 |
@@ -77,14 +77,14 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | surface | total |
 |---|---|
 | typecheck | 988 |
-| mir | 358 |
+| mir | 359 |
 | mir-llvm | 342 |
 | cli | 328 |
 | parser | 170 |
 | ownership | 148 |
 | runtime | 121 |
 | interp | 119 |
-| effect | 73 |
+| effect | 74 |
 | resolver | 60 |
 | other | 59 |
 | codegen | 22 |
@@ -123,6 +123,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-27-67 | 2026-11-27 | mir | medium | MIR lowering moves every capture of a closure assigned to an existing function-typed local (`f = || s.len()`), even a place declared before `f` that outlives it, so `println(s)` afterwards passes `karac check` and stops every lane in the MIR move check | — |
 | B-2026-11-27-68 | 2026-11-27 | typecheck | medium | A closure handed to a generic parameter that its callee stores into the call's own result (`fn hold[F](f: own F) -> Hold[F] { Hold { f: f } }`) is treated as escaping, so its captures move: `let h = hold(|| s.len() + t); println((h.f)()); println(s);` is refused E0500, where the cs.670 ruling makes `h` borrow `s` | — |
 | B-2026-11-27-69 | 2026-11-27 | typecheck | low | Passing an `OnceFn` closure to an `own MutFn()` slot is refused with "cannot pass once-callable closure where 'Fn()' is expected": the message names the slot `Fn()` because the resolved function type carries no `MutFn` kind | — |
+| B-2026-11-27-71 | 2026-11-27 | mir | medium | `karac check` time grows as the cube of the number of borrowing loops in one function: 200 blocks of `for (i, m) in s.match_indices(",") { out.push_str(m); }` check in 0.9 s, 400 in 5.4 s, 800 in 43 s, all in borrowck's origins_dataflow / LoanSet.union | — |
+| B-2026-11-27-72 | 2026-11-27 | effect | low | After B-2026-11-27-10, `sleep`, `std.time.timeout` and `TaskGroup.spawn` still carried `blocks` and binding a listener, `shutdown_write` and a UDP `connect` carried `blocks` though they wait on no peer, so `pub fn nap() with reads(Clock) suspends { sleep(..) }` and `pub fn open(a: Str) -> bool with sends(Network) receives(Network) { TcpListener.bind(a).is_ok() }` were refused E0400 "performs blocks" | — |
 
 ### Relocated
 

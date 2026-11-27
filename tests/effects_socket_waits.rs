@@ -2,8 +2,8 @@
 //! execution verbs `docs/library/io.md` gives them (`docs/core-semantics.md`
 //! §11.8): `accept`, `connect`, `read`, `write` and UDP `send` and `recv`
 //! are `suspends` (B-2026-11-27-10), `Child.wait` is `blocks suspends`, and
-//! the binds `blocks`. A public caller has to declare them, and a declared
-//! `blocks` covers `suspends`.
+//! the binds, which wait on no peer, carry neither verb (B-2026-11-27-72). A public
+//! caller has to declare them, and a declared `blocks` covers `suspends`.
 
 use std::path::PathBuf;
 use std::process::{Command, Output};
@@ -89,14 +89,14 @@ fn undeclared_tcp_read_asks_for_suspends_alone() {
 }
 
 #[test]
-fn undeclared_bind_asks_for_its_network_effects_and_blocks() {
+fn undeclared_bind_asks_for_its_network_effects_alone() {
     refused(
         "bind-undeclared",
         "pub fn open(addr: Str) -> bool {
              TcpListener.bind(addr).is_ok()
          }
          fn main() {}",
-        &["Add: with blocks receives(Network) sends(Network)"],
+        &["Add: with receives(Network) sends(Network) to"],
     );
 }
 
@@ -263,16 +263,29 @@ pub fn pull(s: ref TcpStream) -> i64 with sends(Network) receives(Network) suspe
     );
 }
 
-/// Binding does not wait on a peer and keeps `blocks`, so `suspends` alone
-/// does not cover it.
+/// Binding, `shutdown_write` and a UDP `connect` wait on no peer, so they
+/// carry neither execution verb: a clause with only their resource effects
+/// covers them (B-2026-11-27-72).
 #[test]
-fn declared_suspends_alone_does_not_cover_a_bind() {
-    refused(
-        "bind-suspends",
-        "pub fn open(addr: Str) -> bool with sends(Network) receives(Network) suspends {
-             TcpListener.bind(addr).is_ok()
+fn bind_shutdown_and_udp_connect_carry_no_wait_verb() {
+    let out = check(
+        "bind-no-wait",
+        "import std.net.{TcpListener, TcpStream, UdpSocket};
+
+pub fn open(addr: Str) -> bool with sends(Network) receives(Network) {
+             TcpListener.bind(addr).is_ok() and UdpSocket.bind(addr).is_ok()
+         }
+         pub fn half(s: ref TcpStream) -> bool with sends(Network) {
+             s.shutdown_write().is_ok()
+         }
+         pub fn aim(s: ref UdpSocket, addr: Str) -> bool with sends(Network) {
+             s.connect(addr).is_ok()
          }
          fn main() {}",
-        &["performs blocks but does not declare it (via call to 'TcpListener.bind'"],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
     );
 }

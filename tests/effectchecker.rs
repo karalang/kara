@@ -12859,7 +12859,10 @@ fn channel_send_and_recv_carry_suspends_not_blocks() {
 }
 
 #[test]
-fn task_group_spawn_and_join_carry_blocks() {
+fn task_group_spawn_and_join_carry_suspends() {
+    // A spawn waits for a slot under the group's limit, which frees only
+    // when a sibling finishes, and a join waits for its task: both suspend
+    // (core-semantics §11.8; B-2026-11-27-72).
     let result = effectcheck_full_pipeline(
         "pub fn run_one() -> i64 {
              let g = TaskGroup.new();
@@ -12869,8 +12872,20 @@ fn task_group_spawn_and_join_carry_blocks() {
     );
     let errs = real_errors(&result);
     assert!(
-        errs.iter().any(|m| m.contains("blocks")),
-        "spawn and join without `blocks` must be refused, got: {errs:?}"
+        errs.iter().any(|m| m.contains("suspends")),
+        "spawn and join without `suspends` must be refused, got: {errs:?}"
+    );
+    let result = effectcheck_full_pipeline(
+        "pub fn run_one() -> i64 with suspends {
+             let g = TaskGroup.new();
+             let h = g.spawn(|| 1);
+             h.join()
+         }",
+    );
+    let errs = real_errors(&result);
+    assert!(
+        errs.is_empty(),
+        "`suspends` alone covers spawn and join, got: {errs:?}"
     );
 }
 

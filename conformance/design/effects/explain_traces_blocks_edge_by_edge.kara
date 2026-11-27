@@ -1,4 +1,3 @@
-import std.time.{Duration, sleep};
-fn g() { sleep(Duration.ms(1)); }
-fn f() { g(); }
-fn main() { f(); }
+fn g() -> bool { fs.read_to_string("x").is_ok() }
+fn f() -> bool { g() }
+fn main() { println(f()); }

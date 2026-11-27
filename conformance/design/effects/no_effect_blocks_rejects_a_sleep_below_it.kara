@@ -1,6 +1,0 @@
-// #[no_effect(blocks)] rejects a sleep below it
-import std.time.{Duration, sleep};
-fn nap() { sleep(Duration.ms(1)); }
-#[no_effect(blocks)]
-fn f() { nap(); }
-fn main() { f(); }

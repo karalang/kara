@@ -145,7 +145,7 @@ struct TlsStream {
 
 impl TcpListener {
     #[compiler_builtin]
-    fn bind(addr: Str) -> Result[TcpListener, NetError] with sends(Network) receives(Network) blocks {
+    fn bind(addr: Str) -> Result[TcpListener, NetError] with sends(Network) receives(Network) {
         Err(NetError.Other(-1))
     }
 
@@ -174,7 +174,7 @@ impl TcpStream {
     }
 
     #[compiler_builtin]
-    fn shutdown_write(ref self) -> Result[(), NetError] with sends(Network) blocks {
+    fn shutdown_write(ref self) -> Result[(), NetError] with sends(Network) {
         Err(NetError.Other(-1))
     }
 
@@ -261,7 +261,7 @@ impl TcpStream {
 
 impl UdpSocket {
     #[compiler_builtin]
-    fn bind(addr: Str) -> Result[UdpSocket, NetError] with sends(Network) receives(Network) blocks {
+    fn bind(addr: Str) -> Result[UdpSocket, NetError] with sends(Network) receives(Network) {
         Err(NetError.Other(-1))
     }
 
@@ -281,7 +281,7 @@ impl UdpSocket {
     // Sets the peer `send` sends to; `recv` then takes datagrams from it
     // only.
     #[compiler_builtin]
-    fn connect(ref self, addr: Str) -> Result[(), NetError] with sends(Network) blocks {
+    fn connect(ref self, addr: Str) -> Result[(), NetError] with sends(Network) {
         Err(NetError.Other(-1))
     }
 
@@ -318,7 +318,7 @@ impl TlsListener {
     // private key `key_pem` (PEM text, not paths). A chain or key that does
     // not parse, or a key that does not match, is `InvalidInput`.
     #[compiler_builtin]
-    fn bind_tls(addr: Str, cert_pem: Str, key_pem: Str) -> Result[TlsListener, NetError] with sends(Network) receives(Network) blocks {
+    fn bind_tls(addr: Str, cert_pem: Str, key_pem: Str) -> Result[TlsListener, NetError] with sends(Network) receives(Network) {
         Err(NetError.Other(-1))
     }
 
@@ -336,7 +336,7 @@ impl TlsListener {
 impl TlsStream {
     // Sends `close_notify`: the peer reads the end of the stream.
     #[compiler_builtin]
-    fn shutdown_write(ref self) -> Result[(), NetError] with sends(Network) blocks {
+    fn shutdown_write(ref self) -> Result[(), NetError] with sends(Network) {
         Err(NetError.Other(-1))
     }
 

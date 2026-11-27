@@ -54,7 +54,7 @@ struct Answering {
 impl Server {
     // Answers every request with a 200 and `body`.
     #[unstable(note: "serve_static is a fixed-body convenience subsumed by Server.serve(handler); use serve(handler) for real servers")]
-    fn serve_static(addr: own String, body: own String) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends {
+    fn serve_static(addr: own String, body: own String) -> Result[(), HttpError] with sends(Network) receives(Network) suspends {
         match TcpListener.bind(addr) {
             Ok(l) => {
                 let l = HttpListener.Plain(l);
@@ -71,7 +71,7 @@ impl Server {
     // (core-semantics.md §4.1). The library's own signatures are not
     // rewritten that way, so they spell the borrow `ref Request`; with a
     // bare `Request` a closure handler took it by value (B-2026-10-25-48).
-    fn serve(addr: own String, handler: own Fn(ref Request) -> Response + CrossTask) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends {
+    fn serve(addr: own String, handler: own Fn(ref Request) -> Response + CrossTask) -> Result[(), HttpError] with sends(Network) receives(Network) suspends {
         match TcpListener.bind(addr) {
             Ok(l) => Server.__serve(HttpListener.Plain(l), handler, Server.__no_session, false),
             Err(e) => Err(Server.__failed(f"{addr}: bind failed", e)),
@@ -81,7 +81,7 @@ impl Server {
     // `serve` over TLS, with the certificate chain `cert_pem` and the
     // private key `key_pem` (PEM text, as `TlsListener.bind_tls` takes).
     // A connection whose handshake fails is dropped.
-    fn serve_tls(addr: own String, cert_pem: own String, key_pem: own String, handler: own Fn(ref Request) -> Response + CrossTask) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends {
+    fn serve_tls(addr: own String, cert_pem: own String, key_pem: own String, handler: own Fn(ref Request) -> Response + CrossTask) -> Result[(), HttpError] with sends(Network) receives(Network) suspends {
         match TlsListener.bind_tls(addr, cert_pem, key_pem) {
             Ok(l) => Server.__serve(HttpListener.Tls(l), handler, Server.__no_session, false),
             Err(e) => Err(Server.__failed(f"{addr}: bind failed", e)),
@@ -92,7 +92,7 @@ impl Server {
     // with status 101 upgrades the connection: the server sends the
     // handshake's own 101 and runs `ws_handler` on the connection, in the
     // connection's task.
-    fn serve_ws(addr: own String, handler: own Fn(ref Request) -> Response + CrossTask, ws_handler: own Fn(own WebSocket) + CrossTask) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends {
+    fn serve_ws(addr: own String, handler: own Fn(ref Request) -> Response + CrossTask, ws_handler: own Fn(own WebSocket) + CrossTask) -> Result[(), HttpError] with sends(Network) receives(Network) suspends {
         match TcpListener.bind(addr) {
             Ok(l) => Server.__serve(HttpListener.Plain(l), handler, ws_handler, true),
             Err(e) => Err(Server.__failed(f"{addr}: bind failed", e)),
@@ -100,7 +100,7 @@ impl Server {
     }
 
     // `serve_ws` over TLS.
-    fn serve_ws_tls(addr: own String, cert_pem: own String, key_pem: own String, handler: own Fn(ref Request) -> Response + CrossTask, ws_handler: own Fn(own WebSocket) + CrossTask) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends {
+    fn serve_ws_tls(addr: own String, cert_pem: own String, key_pem: own String, handler: own Fn(ref Request) -> Response + CrossTask, ws_handler: own Fn(own WebSocket) + CrossTask) -> Result[(), HttpError] with sends(Network) receives(Network) suspends {
         match TlsListener.bind_tls(addr, cert_pem, key_pem) {
             Ok(l) => Server.__serve(HttpListener.Tls(l), handler, ws_handler, true),
             Err(e) => Err(Server.__failed(f"{addr}: bind failed", e)),
@@ -109,7 +109,7 @@ impl Server {
 
     // Serves the connections `l` accepts. The accept loop is a task of its
     // own, so the connections' tasks run while it waits.
-    fn __serve(l: own HttpListener, handler: own Fn(ref Request) -> Response + CrossTask, ws_handler: own Fn(own WebSocket) + CrossTask, upgrades: bool) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends {
+    fn __serve(l: own HttpListener, handler: own Fn(ref Request) -> Response + CrossTask, ws_handler: own Fn(own WebSocket) + CrossTask, upgrades: bool) -> Result[(), HttpError] with sends(Network) receives(Network) suspends {
         let group = TaskGroup.new();
         let accepting = group.spawn(|| Server.__connections(l, handler, ws_handler, upgrades));
         accepting.join()
@@ -122,7 +122,7 @@ impl Server {
     // before the retry starts at 5 ms and doubles up to 1 s, reset by the
     // next connection accepted, as Go's net/http does; it suspends, so the
     // connections' tasks run meanwhile.
-    fn __connections(l: own HttpListener, handler: own Fn(ref Request) -> Response + CrossTask, ws_handler: own Fn(own WebSocket) + CrossTask, upgrades: bool) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends {
+    fn __connections(l: own HttpListener, handler: own Fn(ref Request) -> Response + CrossTask, ws_handler: own Fn(own WebSocket) + CrossTask, upgrades: bool) -> Result[(), HttpError] with sends(Network) receives(Network) suspends {
         let connections = TaskGroup.isolating();
         let mut pause = 0;
         loop {
@@ -139,7 +139,7 @@ impl Server {
         }
     }
 
-    fn __fixed_connections(l: own HttpListener, body: own String) -> Result[(), HttpError] with sends(Network) receives(Network) blocks suspends {
+    fn __fixed_connections(l: own HttpListener, body: own String) -> Result[(), HttpError] with sends(Network) receives(Network) suspends {
         let connections = TaskGroup.isolating();
         let mut pause = 0;
         loop {
@@ -181,7 +181,7 @@ impl Server {
     // when no byte of its response has gone out (review-thread ruling,
     // B-2026-11-20-10). One task per connection, not per request: a
     // request pays nothing for it.
-    fn __connection(conn: own WsConn, handler: Fn(ref Request) -> Response + CrossTask, ws_handler: Fn(own WebSocket) + CrossTask, upgrades: bool) with sends(Network) receives(Network) blocks suspends {
+    fn __connection(conn: own WsConn, handler: Fn(ref Request) -> Response + CrossTask, ws_handler: Fn(own WebSocket) + CrossTask, upgrades: bool) with sends(Network) receives(Network) suspends {
         let mut state = Answering { req: Request { __id: 0 }, handling: false };
         match Server.__answer_all(conn, handler, upgrades, mut state) {
             Ok(None) => {}
@@ -217,7 +217,7 @@ impl Server {
 
     // `__requests` in a task of an isolating group of its own: its value,
     // or how it failed.
-    fn __answer_all(conn: WsConn, handler: Fn(ref Request) -> Response + CrossTask, upgrades: bool, state: mut ref Answering) -> Result[Option[Vec[u8]], TaskFailed] with sends(Network) receives(Network) blocks suspends {
+    fn __answer_all(conn: WsConn, handler: Fn(ref Request) -> Response + CrossTask, upgrades: bool, state: mut ref Answering) -> Result[Option[Vec[u8]], TaskFailed] with sends(Network) receives(Network) suspends {
         let group = TaskGroup.isolating();
         let requests = group.spawn(|| Server.__requests(conn, handler, upgrades, mut state));
         requests.join()
@@ -227,7 +227,7 @@ impl Server {
     // done, or the bytes after the request a WebSocket upgrade answered.
     // `state` holds the request being answered and whether its handler is
     // running, for `__connection` to read when this task panics.
-    fn __requests(conn: WsConn, handler: Fn(ref Request) -> Response + CrossTask, upgrades: bool, state: mut ref Answering) -> Option[Vec[u8]] with sends(Network) receives(Network) blocks suspends {
+    fn __requests(conn: WsConn, handler: Fn(ref Request) -> Response + CrossTask, upgrades: bool, state: mut ref Answering) -> Option[Vec[u8]] with sends(Network) receives(Network) suspends {
         let mut buf: Vec[u8] = Vec.new();
         loop {
             let used = Server.__next(conn, mut buf);
@@ -283,7 +283,7 @@ impl Server {
     }
 
     // `__connection` with a 200 and `body` as every answer.
-    fn __fixed_connection(conn: own WsConn, body: String) with sends(Network) receives(Network) blocks suspends {
+    fn __fixed_connection(conn: own WsConn, body: String) with sends(Network) receives(Network) suspends {
         let mut buf: Vec[u8] = Vec.new();
         loop {
             let used = Server.__next(conn, mut buf);
@@ -317,7 +317,7 @@ impl Server {
     // (B-2026-11-17-51). A client that asks `Expect: 100-continue` gets
     // the interim `100 Continue` once, before its body is read
     // (B-2026-11-17-53).
-    fn __next(conn: WsConn, buf: mut ref Vec[u8]) -> i64 with sends(Network) receives(Network) blocks suspends {
+    fn __next(conn: WsConn, buf: mut ref Vec[u8]) -> i64 with sends(Network) receives(Network) suspends {
         let mut chunk = [0u8; 8192];
         let mut continued = false;
         let mut used = Server.__install(buf, false);

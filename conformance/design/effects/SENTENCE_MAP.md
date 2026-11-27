@@ -31,9 +31,9 @@ Run with `python3 conformance/cases.py conformance/design/effects` and, for the 
 | 5304 | `allocates` and `panics` never conflict and are default-permitted | covered | allocates_panics_blocks_never_conflict (new), pub_fn_need_not_declare_allocates_heap_or_panics |
 | 5304 | `blocks` says where a function may wait, not what it touches | covered | allocates_panics_blocks_never_conflict (new) |
 | 5306 | `suspends` takes no resource and never conflicts | covered | allocates_panics_blocks_never_conflict (new: both branches sleep, so both suspend) |
-| 5306 | `suspends` is inferred for private functions and declared on public ones | covered | std_time_sleep_is_reads_clock_blocks_suspends; tests/effects_blocks_admits_suspends.rs |
+| 5306 | `suspends` is inferred for private functions and declared on public ones | covered | std_time_sleep_is_reads_clock_suspends; tests/effects_blocks_admits_suspends.rs |
 | 5306 | A declared `blocks` admits `suspends`, never the reverse | covered | declared_blocks_admits_suspends, blocks_must_be_declared_on_a_pub_fn (declares `suspends`, refused for `blocks`) |
-| 5306 | `time.sleep` is `reads(Clock) blocks suspends` | covered | std_time_sleep_is_reads_clock_blocks_suspends |
+| 5306 | `time.sleep` is `reads(Clock) suspends` | covered | std_time_sleep_is_reads_clock_suspends (B-2026-11-27-72) |
 | 5308 | A clause follows the return type; effects are written side by side | covered | one_verb_lists_several_resources (new) |
 | 5308 | A verb may list several resources: `reads(UserDb, OrderDb)` | covered | one_verb_lists_several_resources (new) |
 | 5308 | Every effect word but `with` is an ordinary identifier outside a clause | covered | effect_words_are_ordinary_identifiers_outside_a_clause (new) |
@@ -229,10 +229,10 @@ Run with `python3 conformance/cases.py conformance/design/effects` and, for the 
 
 | Line | Sentence | Status | Cells |
 |---|---|---|---|
-| 5620 | No resource | covered | std_time_sleep_is_reads_clock_blocks_suspends |
+| 5620 | No resource | covered | builtin_resource_verbs (file I/O) |
 | 5621 | Never conflicts | covered | allocates_panics_blocks_never_conflict (new) |
-| 5622 | Declared on public functions; private ones infer it | covered | blocks_must_be_declared_on_a_pub_fn, std_time_sleep_is_reads_clock_blocks_suspends |
-| 5623 | Forbidden with `#[no_effect(blocks)]` | covered | no_effect_blocks_rejects_a_sleep_below_it |
+| 5622 | Declared on public functions; private ones infer it | covered | blocks_must_be_declared_on_a_pub_fn |
+| 5623 | Forbidden with `#[no_effect(blocks)]` | covered | no_effect_blocks_rejects_a_file_read_below_it |
 | 5626 | The library's `sleep`, file reads, process waits and binds declare it (`Mutex.lock` and the channel operations `suspends`, B-2026-11-27-10) | covered | waits_on_mutex_and_channels_suspend_cpu_loops_do_not (lock, send and recv suspend, not block), builtin_resource_verbs (new: file and stdin I/O) |
 | 5627 | A foreign function without a clause has `blocks` | covered | extern_fn_with_neither_has_every_effect_blocks |
 | 5628 | A CPU loop is not blocking | covered | waits_on_mutex_and_channels_suspend_cpu_loops_do_not |
