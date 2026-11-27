@@ -399,7 +399,11 @@ impl<'a> Validator<'a> {
                             TyKind::Fn { params: p, ret: r, kind: k },
                             TyKind::Fn { params: q, ret: s, kind: l },
                         ) if p == q && r == s && k <= l
-                    ) || self.weak_cast(*kind, from, *t)
+                    ) || (matches!(
+                        kind,
+                        CastKind::VolatileRead | CastKind::VolatileWrite
+                    ) && from == *t)
+                        || self.weak_cast(*kind, from, *t)
                         || self.dyn_cast(*kind, from, *t);
                     if !ok {
                         self.err(format!(

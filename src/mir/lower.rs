@@ -25242,13 +25242,17 @@ impl<'l, 'a> Bx<'l, 'a> {
         };
         if let Some(pp) = through_ref {
             match (method, args) {
-                ("read" | "read_unaligned" | "read_volatile", []) => {
+                ("read_volatile", []) => self.volatile_read(pp.project(ProjElem::Deref), dest),
+                ("write_volatile", [v]) => {
+                    self.volatile_write(pp.project(ProjElem::Deref), v, dest)?
+                }
+                ("read" | "read_unaligned", []) => {
                     self.assign(
                         dest,
                         Rvalue::Use(Operand::Copy(pp.project(ProjElem::Deref))),
                     );
                 }
-                ("write" | "write_unaligned" | "write_volatile", [v]) => {
+                ("write" | "write_unaligned", [v]) => {
                     self.expr_into(&v.value, pp.project(ProjElem::Deref))?;
                     self.assign(dest, Rvalue::Use(unit_const(self.unit())));
                 }
@@ -25266,7 +25270,15 @@ impl<'l, 'a> Bx<'l, 'a> {
             return Ok(true);
         }
         match (method, args) {
-            ("read" | "read_unaligned" | "read_volatile", []) => {
+            ("read_volatile", []) => {
+                let pp = self.expr_place(object, false)?.project(ProjElem::Deref);
+                self.volatile_read(pp, dest);
+            }
+            ("write_volatile", [v]) => {
+                let pp = self.expr_place(object, false)?.project(ProjElem::Deref);
+                self.volatile_write(pp, v, dest)?;
+            }
+            ("read" | "read_unaligned", []) => {
                 // A bitwise copy whatever the pointee: `p.read()` hands out
                 // the value and leaves the bits behind, as Rust's
                 // `ptr::read` does, so it is never a move out of `*p` (which
@@ -25275,7 +25287,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let pp = self.expr_place(object, false)?.project(ProjElem::Deref);
                 self.assign(dest, Rvalue::Use(Operand::Copy(pp)));
             }
-            ("write" | "write_unaligned" | "write_volatile", [v]) => {
+            ("write" | "write_unaligned", [v]) => {
                 let pp = self.expr_place(object, false)?.project(ProjElem::Deref);
                 self.expr_into(&v.value, pp)?;
                 self.assign(dest, Rvalue::Use(unit_const(self.unit())));
@@ -25295,24 +25307,40 @@ impl<'l, 'a> Bx<'l, 'a> {
         Ok(true)
     }
 
-    /// `volatile_read(p)` is `*p`, and `volatile_write(p, v)` is `*p = v`.
+    /// `volatile_read(p)` is `p.read_volatile()`, and `volatile_write(p, v)`
+    /// is `p.write_volatile(v)`.
     fn volatile_call(&mut self, name: &str, args: &'a [CallArg], dest: Place) -> R<bool> {
         match (name, args) {
             ("volatile_read", [p]) => {
                 let pp = self.expr_place(&p.value, false)?.project(ProjElem::Deref);
-                let t = self.place_type(&pp);
-                let op = self.use_place(pp, t);
-                self.assign(dest, Rvalue::Use(op));
+                self.volatile_read(pp, dest);
                 Ok(true)
             }
             ("volatile_write", [p, v]) => {
                 let pp = self.expr_place(&p.value, false)?.project(ProjElem::Deref);
-                self.expr_into(&v.value, pp)?;
-                self.assign(dest, Rvalue::Use(unit_const(self.unit())));
+                self.volatile_write(pp, v, dest)?;
                 Ok(true)
             }
             _ => Ok(false),
         }
+    }
+
+    /// `dest = *p` as one volatile load: a bitwise copy, as `p.read()` is,
+    /// that a compiled backend may neither drop nor merge (B-2026-11-26-97).
+    fn volatile_read(&mut self, pointee: Place, dest: Place) {
+        let t = self.place_type(&pointee);
+        let rv = Rvalue::Cast(CastKind::VolatileRead, Operand::Copy(pointee), t);
+        self.assign(dest, rv);
+    }
+
+    /// `*p = v` as one volatile store, with the old value left undropped as
+    /// `p.write(v)` leaves it (B-2026-11-26-97).
+    fn volatile_write(&mut self, pointee: Place, v: &'a CallArg, dest: Place) -> R<()> {
+        let t = self.place_type(&pointee);
+        let op = self.operand_at(&v.value, t)?;
+        self.assign(pointee, Rvalue::Cast(CastKind::VolatileWrite, op, t));
+        self.assign(dest, Rvalue::Use(unit_const(self.unit())));
+        Ok(())
     }
 
     /// Whether `x.cmp(y)` is the `Ordering` variant `variant`.

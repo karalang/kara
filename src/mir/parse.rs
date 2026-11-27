@@ -1170,6 +1170,8 @@ impl Parser {
                     "PtrToPtr" => CastKind::PtrToPtr,
                     "PtrToInt" => CastKind::PtrToInt,
                     "IntToPtr" => CastKind::IntToPtr,
+                    "VolatileRead" => CastKind::VolatileRead,
+                    "VolatileWrite" => CastKind::VolatileWrite,
                     other => return Err(format!("unknown cast kind `{other}`")),
                 };
                 c.expect(")")?;

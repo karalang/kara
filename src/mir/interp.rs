@@ -16990,6 +16990,10 @@ impl<'a> Interp<'a> {
             }
             // A raw pointer is the address the reference held.
             Rvalue::Cast(CastKind::RefToPtr, o, _) => Ok(self.operand(body, o)?.0),
+            // Volatile only to a compiled backend: here, the value as it is.
+            Rvalue::Cast(CastKind::VolatileRead | CastKind::VolatileWrite, o, _) => {
+                Ok(self.operand(body, o)?.0)
+            }
             // A cast to another pointee views the same place as that type.
             Rvalue::Cast(CastKind::PtrToPtr, o, to) => {
                 let (v, from) = self.operand(body, o)?;

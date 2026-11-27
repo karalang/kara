@@ -553,6 +553,18 @@ pub enum CastKind {
     /// is `Dyn`), or a `ref`/`mut ref` to one as a view (the target is
     /// `Ref(Dyn)` / `MutRef(Dyn)`), which allocates nothing.
     ToDyn(u32),
+    /// Not a conversion: the operand's value as it is, at its own type,
+    /// read with a volatile load. The operand is the place behind a raw
+    /// pointer (`p.read_volatile()`, `volatile_read(p)`); a compiled
+    /// backend reads it with one volatile load at the type's alignment,
+    /// which the optimizer neither drops nor merges with another access.
+    /// The interpreter copies it (B-2026-11-26-97).
+    VolatileRead,
+    /// Not a conversion either: the value as it is, and the assignment this
+    /// rvalue sits in, into the place behind a raw pointer
+    /// (`p.write_volatile(v)`, `volatile_write(p, v)`), is a volatile store
+    /// (B-2026-11-26-97).
+    VolatileWrite,
 }
 
 #[derive(Debug, Clone, PartialEq)]

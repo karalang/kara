@@ -1721,7 +1721,62 @@ impl<'ctx> Cx<'ctx, '_> {
         }
     }
 
+    /// `VolatileRead` / `VolatileWrite` (B-2026-11-26-97): the value copied
+    /// as it is, with the access behind the raw pointer volatile: the load
+    /// of the operand when `read`, the store into `dst` otherwise. A scalar
+    /// moves as one load and one store, the volatile one at the type's
+    /// alignment (an access split into bytes is no register access); a
+    /// wider value as one volatile `llvm.memcpy`. The other side stays an
+    /// ordinary access to a local, so it still promotes to a register.
+    fn volatile_copy(&mut self, dst: PointerValue<'ctx>, read: bool, a: &Operand, ty: Ty) -> R<()> {
+        let lay = self.layout(ty)?;
+        if lay.size == 0 {
+            return Ok(());
+        }
+        let src = self.operand_ptr(a)?;
+        let lt = self.llvm_ty(ty)?;
+        let align = u32::try_from(lay.align.max(1)).unwrap_or(1);
+        if lt.is_int_type() || lt.is_float_type() || lt.is_pointer_type() {
+            let v = self.builder.build_load(lt, src, "").map_err(e)?;
+            let li = v
+                .as_instruction_value()
+                .ok_or("MIR to LLVM: a volatile load that is no instruction")?;
+            let si = self.builder.build_store(dst, v).map_err(e)?;
+            let (vol, plain) = if read { (li, si) } else { (si, li) };
+            vol.set_volatile(true).map_err(|m| m.to_string())?;
+            vol.set_alignment(align).map_err(|m| m.to_string())?;
+            plain.set_alignment(1).map_err(|m| m.to_string())?;
+            return Ok(());
+        }
+        let i = inkwell::intrinsics::Intrinsic::find("llvm.memcpy")
+            .ok_or("no intrinsic llvm.memcpy")?;
+        let pt = self.ptr_ty();
+        let f = i
+            .get_declaration(
+                &self.module,
+                &[pt.into(), pt.into(), self.llcx.i64_type().into()],
+            )
+            .ok_or("llvm.memcpy has no declaration")?;
+        let volatile = self.llcx.bool_type().const_int(1, false);
+        self.builder
+            .build_call(
+                f,
+                &[
+                    dst.into(),
+                    src.into(),
+                    self.i64(lay.size).into(),
+                    volatile.into(),
+                ],
+                "",
+            )
+            .map_err(e)?;
+        Ok(())
+    }
+
     fn cast(&mut self, dst: PointerValue<'ctx>, kind: CastKind, a: &Operand, to: Ty) -> R<()> {
+        if let CastKind::VolatileRead | CastKind::VolatileWrite = kind {
+            return self.volatile_copy(dst, kind == CastKind::VolatileRead, a, to);
+        }
         let from = self.operand_type(a)?;
         if self.narrow_float(from).is_some() || self.narrow_float(to).is_some() {
             return self.narrow_cast(dst, kind, a, from, to);
