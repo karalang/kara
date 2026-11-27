@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 795 |
+| diagnostics | 796 |
 | false-positive | 406 |
 | missing-feature | 268 |
 | perf | 206 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 975 |
+| typecheck | 976 |
 | mir | 350 |
 | mir-llvm | 341 |
 | cli | 326 |
@@ -125,6 +125,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-27-22 | 2026-11-27 | ownership | medium | A closure returned over a local closure that captures an owned value (`fn mk(pre: own String) -> Fn(String) -> String { let c = || pre.clone(); |s| f"{c()}{s}" }`, or a Copy local `let n = 1; let c = || n + 1; || c()`) is refused E0509 "the result borrows `pre`, which this function owns": the local closure captures by reference though it moves into the escaping one | — |
 | B-2026-11-27-24 | 2026-11-27 | typecheck | high | A closure that moves a captured FIELD or tuple path out (`|| take(o.a)`, `|| take(t.0)`, `|| o.a`) is typed as a repeatable `Fn`, not `OnceFn`, so `karac check` accepts it in a `Vec[Fn() -> i64]`; called twice there, the compiled program reads freed memory (ASan heap-use-after-free), where moving the whole capture (`|| take(s)`) is refused with E0235 | — |
 | B-2026-11-27-23 | 2026-11-27 | runtime | low | Over HTTP/2 the HTTP client refused any response whose header list was over 16 KiB (hyper's default SETTINGS_MAX_HEADER_LIST_SIZE), with the unnamed Err 'request failed: http2 error', where the same response over HTTP/1.1 is read up to 408 KiB; and it had no field-count limit there, where HTTP/1.1 refuses a 101st field | — |
+| B-2026-11-27-25 | 2026-11-27 | typecheck | low | `coins.iter().scan(0, |reach, c| if c > reach + 1 { None } else { Some((reach + c, reach + c)) }).last().unwrap_or(0)` used as an `i32` is refused "Write an explicit 'as i32'" with no fix: the seed's suffix that the plain `Some((s, s))` scan gets (B-2026-11-20-47) is not offered when the closure stops on a branch, writes its state as an expression twice, or is read through `unwrap_or` | — |
 
 ### Relocated
 
