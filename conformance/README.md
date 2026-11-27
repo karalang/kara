@@ -22,6 +22,7 @@ compiled. Both must give the expected output.
 | `select_model.py` | concurrency.md `select` | Random single-task scripts of `select` (recv and send arms, `default`, a far `after`), `try_send`, `try_recv` and dropping either end, on a `Drop` type, against a model of the page's rules: first ready arm in source order wins, only its operation happens, a losing send's value drops, closed channels make arms ready, a dropped receiver drops its buffer |
 | `pool_model.py` | pool.md | Random single-task scripts over two pools of a `Drop` type (acquire, release into its own pool or the other, drop a loan, close, a failing factory, a health check), the reused idle value read from the output and held to the page's rules: passing idle values reused first, only failing ones dropped, `CreateFailed` and `Timeout` at the right counts, one return per loan, `close` and pool drop dropping idle values and later returns |
 | `secret_model.py` | secret.md access | Python's `==`: random `Secret[String]` and `Secret[Vec[u8]]` pairs (equal, one byte off at the start, middle or end, a prefix, empty, multibyte) through `ct_eq` both ways and against itself, then after an `expose_mut` push and a clear |
+| `duration_model.py` | time-random-env.md `Duration` | Go's `time.Duration` (`go run`): random spans from every constructor, to the i64 edges, through `+`, `-`, `* k`, `/ k`, the four `as_` readers and the comparisons, each printed with `Display` against Go's `String()` |
 | `precedence.py` | design.md §6 | Every pair of binary operators, alone, around each comparison and under the logical words, against a parser of the page's table, that parser checked against Python's `ast.parse` wherever the two grammars agree (all but `not`); a pair counts only where a tuple tells its two groupings apart |
 | `literals.py` | design.md §3 Numeric literals | Random integer literals in every base and float literals in every notation, with `_` grouping, against Python's `int(text, 0)` and `float(text)`; floats compared by bits, `f32` ones at single precision |
 | `tls_client.py` | io.md HTTP client, HTTPS | A local test PKI (expired, not-yet-valid, wrong-host, CN-only, wildcard and IP-SAN, self-signed, untrusted-root, incomplete, bad-signature, non-CA issuer, clientAuth-only, RSA-1024 and SHA-1 certificates) against `Client.get` through a CONNECT proxy: each verdict against Python `ssl`, each refusal's message in words; SNI and ALPN off the ClientHello, h2 and HTTP/1.1, TLS 1.1 refused, `close_notify` against truncation, `KARAC_HTTP_EXTRA_CA` errors |
@@ -64,6 +65,7 @@ python3 conformance/atomics_model.py --seed 1
 python3 conformance/select_model.py --seed 1
 python3 conformance/pool_model.py --seed 1
 python3 conformance/secret_model.py --seed 1
+python3 conformance/duration_model.py --seed 1      # needs go
 python3 conformance/precedence.py --seed 1
 python3 conformance/overflow.py
 python3 conformance/layout.py --seed 1
