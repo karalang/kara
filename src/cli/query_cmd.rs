@@ -157,11 +157,33 @@ pub(super) fn cmd_query(kind: QueryKind, filename: &str, function: &str) {
             // the parsed program). Single-file mode infers the
             // test-file flag from the filename suffix per the same
             // `*_test.kara` heuristic the resolver uses.
-            let is_test_file = filename.ends_with("_test.kara");
-            let graph = crate::call_graph::build(&own_program(&pipeline), filename, is_test_file);
+            // The seed file's own `test` blocks are tests, and so are its
+            // sibling `<stem>_test.kara`'s, the file `karac test` runs
+            // with it as one module (B-2026-11-26-92).
+            let own = own_program(&pipeline);
+            let sibling = sibling_test_file(filename).and_then(|path| {
+                let src = std::fs::read_to_string(&path).ok()?;
+                Some((path, crate::parse(&src).program))
+            });
+            let mut parts: Vec<(&crate::ast::Program, &str)> = vec![(&own, filename)];
+            if let Some((path, program)) = &sibling {
+                parts.push((program, path.as_str()));
+            }
+            let graph = crate::call_graph::build_with_tests(&parts);
             query_affected_by(&graph, &target, tests_only, direction, filename);
         }
     }
+}
+
+/// `src/lib.kara`'s `src/lib_test.kara`, when it exists; none for a file
+/// that is itself a `_test.kara`.
+fn sibling_test_file(filename: &str) -> Option<String> {
+    let stem = filename.strip_suffix(".kara")?;
+    if stem.ends_with("_test") {
+        return None;
+    }
+    let path = format!("{stem}_test.kara");
+    std::path::Path::new(&path).is_file().then_some(path)
 }
 
 pub(super) fn query_affected_by(

@@ -14242,7 +14242,7 @@ fn test_affected_by_direction_callees_suppresses_callers() {
 }
 
 #[test]
-fn test_affected_by_tests_only_filters_to_test_fns() {
+fn test_affected_by_tests_only_filters_to_test_blocks() {
     let parent = std::env::temp_dir();
     let unique = format!(
         "karac-cli-affby-tests-{}-{}",
@@ -14253,7 +14253,9 @@ fn test_affected_by_tests_only_filters_to_test_fns() {
             .unwrap_or(0)
     );
     let test_path = parent.join(format!("{unique}_test.kara"));
-    let src = "fn helper() -> i64 { 0 }\nfn test_helper_baseline() { let _ = helper(); }\nfn non_test_caller() -> i64 { helper() }\n";
+    // A `test` block is a test; a `test_*`-named function is a helper like
+    // any other (design.md § Test blocks, B-2026-11-26-92).
+    let src = "fn helper() -> i64 { 0 }\ntest \"helper baseline\" { let _ = helper(); }\nfn test_named_helper() -> i64 { helper() }\n";
     std::fs::write(&test_path, src).unwrap();
     let target = format!("{}:helper", test_path.to_str().unwrap());
     let out = karac_bin()
@@ -14268,12 +14270,12 @@ fn test_affected_by_tests_only_filters_to_test_fns() {
     assert!(!line.contains("\"callees\""), "got: {line}");
     assert!(line.contains("\"tests\":["), "got: {line}");
     assert!(
-        line.contains("\"fn\":\"test_helper_baseline\""),
+        line.contains("\"fn\":\"test \\\"helper baseline\\\"\""),
         "got: {line}"
     );
     assert!(
-        !line.contains("\"fn\":\"non_test_caller\""),
-        "non-test caller must not appear in --tests-only output; got: {line}",
+        !line.contains("\"fn\":\"test_named_helper\""),
+        "a test_*-named helper must not appear in --tests-only output; got: {line}",
     );
 }
 

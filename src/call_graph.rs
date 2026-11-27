@@ -40,9 +40,8 @@ pub struct NodeInfo {
     pub offset: usize,
     /// Byte length of the function definition span.
     pub length: usize,
-    /// True when this node is a discovered test function — name
-    /// starts with `test_` AND the source file is a `_test.kara`
-    /// file (the discovery rule [`crate::cli`] already uses).
+    /// True when this node is a `test "name" { }` block
+    /// ([`build_with_tests`]); a function never is.
     pub is_test: bool,
 }
 
@@ -58,47 +57,68 @@ pub struct CallGraph {
 }
 
 /// Build the call graph for `program`. `filename` is recorded on
-/// every node's `file` field; `is_test_file` controls whether
-/// `test_*`-prefixed nodes carry `is_test = true`.
-pub fn build(program: &Program, filename: &str, is_test_file: bool) -> CallGraph {
+/// every node's `file` field. Functions only: a `test` block is not a
+/// node here ([`build_with_tests`] adds them), so the effect and
+/// concurrency reports, which list every node, list functions alone.
+pub fn build(program: &Program, filename: &str, _is_test_file: bool) -> CallGraph {
+    build_parts(&[(program, filename)], false)
+}
+
+/// [`build`] over several files, with every `test "name" { }` block a
+/// test node (`is_test`), keyed `test "name"`, whose calls are edges:
+/// what `karac query affected-by` reads (B-2026-11-26-92). A `test`
+/// block is the only test in v1 (design.md § Test blocks); a function is
+/// a helper whatever its name.
+pub fn build_with_tests(parts: &[(&Program, &str)]) -> CallGraph {
+    build_parts(parts, true)
+}
+
+fn build_parts(parts: &[(&Program, &str)], with_tests: bool) -> CallGraph {
     let mut nodes: BTreeMap<String, NodeInfo> = BTreeMap::new();
     let mut bodies: Vec<(String, &Block)> = Vec::new();
 
-    for item in &program.items {
-        match item {
-            Item::Function(f) => {
-                let key = f.name.clone();
-                nodes.insert(
-                    key.clone(),
-                    make_node(&key, &f.span, filename, is_test_file_test(f, is_test_file)),
-                );
-                bodies.push((key, &f.body));
-            }
-            Item::ImplBlock(b) => {
-                let receiver = render_target_type(&b.target_type);
-                for inner in &b.items {
-                    if let ImplItem::Method(m) = inner {
-                        let key = format!("{receiver}.{}", m.name);
-                        nodes.insert(
-                            key.clone(),
-                            make_node(&key, &m.span, filename, is_test_file_test(m, is_test_file)),
-                        );
-                        bodies.push((key, &m.body));
-                    }
+    for &(program, filename) in parts {
+        for item in &program.items {
+            match item {
+                Item::Function(f) => {
+                    let key = f.name.clone();
+                    nodes
+                        .entry(key.clone())
+                        .or_insert_with(|| make_node(&key, &f.span, filename, false));
+                    bodies.push((key, &f.body));
                 }
-            }
-            Item::TraitDef(t) => {
-                for inner in &t.items {
-                    if let TraitItem::Method(m) = inner {
-                        if let Some(body) = &m.body {
-                            let key = format!("{}.{}", t.name, m.name);
-                            nodes.insert(key.clone(), make_node(&key, &m.span, filename, false));
-                            bodies.push((key, body));
+                Item::TestCase(t) if with_tests => {
+                    let key = format!("test {}", json_quote(&t.name));
+                    nodes.insert(key.clone(), make_node(&key, &t.span, filename, true));
+                    bodies.push((key, &t.body));
+                }
+                Item::ImplBlock(b) => {
+                    let receiver = render_target_type(&b.target_type);
+                    for inner in &b.items {
+                        if let ImplItem::Method(m) = inner {
+                            let key = format!("{receiver}.{}", m.name);
+                            nodes
+                                .entry(key.clone())
+                                .or_insert_with(|| make_node(&key, &m.span, filename, false));
+                            bodies.push((key, &m.body));
                         }
                     }
                 }
+                Item::TraitDef(t) => {
+                    for inner in &t.items {
+                        if let TraitItem::Method(m) = inner {
+                            if let Some(body) = &m.body {
+                                let key = format!("{}.{}", t.name, m.name);
+                                nodes
+                                    .entry(key.clone())
+                                    .or_insert_with(|| make_node(&key, &m.span, filename, false));
+                                bodies.push((key, body));
+                            }
+                        }
+                    }
+                }
+                _ => {}
             }
-            _ => {}
         }
     }
 
@@ -138,8 +158,19 @@ pub fn build(program: &Program, filename: &str, is_test_file: bool) -> CallGraph
     }
 }
 
-fn is_test_file_test(f: &Function, is_test_file: bool) -> bool {
-    is_test_file && f.name.starts_with("test_")
+/// `name` as a double-quoted string, `"` and `\` escaped, as the case
+/// name is written in source.
+fn json_quote(name: &str) -> String {
+    let mut s = String::with_capacity(name.len() + 2);
+    s.push('"');
+    for c in name.chars() {
+        if c == '"' || c == '\\' {
+            s.push('\\');
+        }
+        s.push(c);
+    }
+    s.push('"');
+    s
 }
 
 fn make_node(key: &str, span: &Span, filename: &str, is_test: bool) -> NodeInfo {
@@ -644,22 +675,24 @@ mod tests {
 
     #[test]
     fn reaching_tests_filters_by_is_test_flag() {
+        // A `test` block is a test; a `test_*`-named function is a helper
+        // (B-2026-11-26-92).
         let p = parse(
-            "fn helper() -> i64 { 0 }\nfn test_helper_returns_zero() { let _ = helper(); }\nfn non_test_caller() -> i64 { helper() }\n",
+            "fn helper() -> i64 { 0 }\ntest \"helper returns zero\" { let _ = helper(); }\nfn test_named_caller() -> i64 { helper() }\n",
         );
-        let g = build(&p, "m.kara", true);
+        let g = build_with_tests(&[(&p, "m_test.kara")]);
         let tests: Vec<_> = g
             .reaching_tests("helper")
             .into_iter()
             .map(|n| n.key.clone())
             .collect();
-        assert_eq!(tests, vec!["test_helper_returns_zero".to_string()]);
+        assert_eq!(tests, vec!["test \"helper returns zero\"".to_string()]);
     }
 
     #[test]
-    fn reaching_tests_empty_when_file_is_not_test_file() {
-        let p = parse("fn helper() -> i64 { 0 }\nfn test_helper() { let _ = helper(); }\n");
-        let g = build(&p, "m.kara", false);
+    fn reaching_tests_empty_in_the_plain_build() {
+        let p = parse("fn helper() -> i64 { 0 }\ntest \"h\" { let _ = helper(); }\n");
+        let g = build(&p, "m_test.kara", true);
         assert!(g.reaching_tests("helper").is_empty());
     }
 

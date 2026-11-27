@@ -6162,7 +6162,7 @@ The exit code is `0` on success (file written or appended); non-zero on any of t
 
 ### `karac query affected-by` — Call-Graph Reach Query
 
-**Shipped in v1.** The targets, flags and output are specified in [design.md § Compiler query API](design.md#compiler-query-api). In 0.8 its `tests` array lists no `test` block (B-2026-11-26-92). The construction rules and the entries that build on it stay here.
+**Shipped in v1.** The targets, flags and output are specified in [design.md § Compiler query API](design.md#compiler-query-api). The construction rules and the entries that build on it stay here.
 
 **Call-graph construction subtleties** (well-understood engineering, not research):
 
