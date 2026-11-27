@@ -273,7 +273,7 @@ fn step(
 }
 
 /// The one place `l` is written, as a whole local and by nothing else.
-fn only_write(body: &Body, l: Local) -> Option<(usize, usize)> {
+pub(super) fn only_write(body: &Body, l: Local) -> Option<(usize, usize)> {
     let mut found = None;
     for (bi, b) in body.blocks.iter().enumerate() {
         for (si, s) in b.statements.iter().enumerate() {

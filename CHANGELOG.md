@@ -2668,6 +2668,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Performance
 
+- A loop that moves a vector's elements one place along from a place the
+  same vector was just indexed at (`let x = p[at]; let mut i = at; while
+  i > 0 { p[i] = p[i - 1]; i -= 1; }`) checks no index against the length
+  inside the loop, and compiles to one `memmove`: kata 1409's bench went
+  from 0.088 s to 0.054 s (B-2026-11-26-79).
 - A compiled `SortedMap` or `SortedSet` with `i64` keys past 16 KiB of
   entries finds a key about twice as fast and inserts a new one about 1.5
   times as fast. Its searches halve with a select rather than a branch,

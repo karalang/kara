@@ -18,6 +18,7 @@ pub mod counters;
 pub mod cut_views;
 pub mod effects;
 pub mod elaborate;
+pub mod entry_bounds;
 pub mod flags;
 #[cfg(all(unix, not(target_arch = "wasm32")))]
 pub mod foreign;

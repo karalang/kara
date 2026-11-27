@@ -47,14 +47,20 @@ pub fn upper_proven_indexes(body: &Body, tys: &TyInterner) -> Vec<usize> {
             out.push(bi);
         }
     }
+    // A counter falling from a start already checked (B-2026-11-26-79).
+    for bi in super::entry_bounds::upper_proven_indexes(body, tys) {
+        if !out.contains(&bi) {
+            out.push(bi);
+        }
+    }
     if std::env::var("KARAC_MIR_RANGE_BOUNDS").as_deref() != Ok("0") {
         for bi in super::range_bounds::upper_proven_indexes(body, tys) {
             if !out.contains(&bi) {
                 out.push(bi);
             }
         }
-        out.sort_unstable();
     }
+    out.sort_unstable();
     out
 }
 
@@ -391,7 +397,7 @@ fn through_copies(b: &BasicBlockData, k: usize, h: Local) -> Option<Local> {
 /// written at most once, or a local vector written
 /// once, whole, and never borrowed mutably (kata 459's `let cs: Vec[char]
 /// = s.chars().collect()`, B-2026-11-08-61).
-fn frozen(body: &Body, tys: &TyInterner, x: &Place) -> bool {
+pub(super) fn frozen(body: &Body, tys: &TyInterner, x: &Place) -> bool {
     let r = x.local;
     let param = (1..=body.arg_count).contains(&r.index());
     let once = assigns(body, r) == usize::from(!param);
@@ -441,7 +447,7 @@ fn assigns(body: &Body, l: Local) -> usize {
 
 /// The last statement of `b` before `k` that assigns `l` whole, with what
 /// `pick` makes of its value.
-fn defining<T>(
+pub(super) fn defining<T>(
     b: &BasicBlockData,
     k: usize,
     l: Local,
@@ -464,7 +470,7 @@ fn defining<T>(
 }
 
 /// Whether `s` writes `l`, whole, through a projection or by `&mut`.
-fn writes(s: &Statement, l: Local) -> bool {
+pub(super) fn writes(s: &Statement, l: Local) -> bool {
     match &s.kind {
         StatementKind::Assign(p, rv) => {
             p.local == l || matches!(rv, Rvalue::Ref(BorrowKind::Mut, q) if q.local == l)
@@ -474,14 +480,14 @@ fn writes(s: &Statement, l: Local) -> bool {
     }
 }
 
-fn operand_local(o: &Operand) -> Option<Local> {
+pub(super) fn operand_local(o: &Operand) -> Option<Local> {
     match o {
         Operand::Copy(p) | Operand::Move(p) if p.projection.is_empty() => Some(p.local),
         _ => None,
     }
 }
 
-fn fn_name(func: &Operand) -> Option<&str> {
+pub(super) fn fn_name(func: &Operand) -> Option<&str> {
     match func {
         Operand::Const(Const {
             kind: ConstKind::FnDef(inst),

@@ -55,7 +55,7 @@ const NARROW_PASSES: usize = 16;
 const MAX_ROUNDS: usize = 64;
 
 /// The `&mut v` methods that leave `v`'s length as it is.
-const KEEPS_LENGTH: &[&str] = &[
+pub(super) const KEEPS_LENGTH: &[&str] = &[
     "index_mut",
     "get_mut",
     "presize",
