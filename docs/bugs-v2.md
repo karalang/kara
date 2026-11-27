@@ -58,12 +58,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 792 |
+| diagnostics | 793 |
 | false-positive | 404 |
 | missing-feature | 268 |
 | perf | 206 |
 | other | 163 |
-| soundness | 140 |
+| soundness | 141 |
 | miscompile | 112 |
 | run-vs-build | 80 |
 | crash | 71 |
@@ -76,10 +76,10 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 971 |
+| typecheck | 972 |
 | mir | 350 |
 | mir-llvm | 341 |
-| cli | 323 |
+| cli | 324 |
 | parser | 166 |
 | ownership | 147 |
 | runtime | 120 |
@@ -118,7 +118,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-79 | 2026-11-26 | mir-llvm | low | A hand-written element shift down a slice (`while i > 0 { p[i] = p[i - 1]; i -= 1; }`) compiles to a scalar copy with a bounds check per element, where rustc and clang turn the same loop into one `memmove` | — |
 | B-2026-11-26-81 | 2026-11-26 | typecheck | low | After "no method 'fold' on type 'Slice'" (`s.bytes().fold(0, |c, b| c * 31 + b as i64)`, the `.iter()` left out), the closure's parameter stays an open type and its cast adds a second error naming an internal variable, "cannot cast '?T1' to 'i64'" | — |
 | B-2026-11-26-82 | 2026-11-26 | typecheck | low | The fix for `a + b.as_str()` (a `String` plus a `Str`, as Rust writes it) appends `.to_string()`, giving `a + b.as_str().to_string()`, a view copied back into a new `String`, where `a + ref b` checks with no copy and is what `karac fix` makes of Rust's `a + &b` | — |
-| B-2026-11-26-96 | 2026-11-26 | typecheck+mir | medium | `VolatileCell[T]` (prelude) checks but runs on neither lane: `VolatileCell.new(1)` is `native VolatileCell[i64].new is not lowered yet` on the LLVM lane and `call of unknown function` under --interp | — |
 | B-2026-11-26-97 | 2026-11-26 | mir+mir-llvm | medium | `p.read_volatile()` / `p.write_volatile(v)` (and the stdlib's volatile_read/write intrinsics) lower to plain loads and stores: three volatile writes to one pointer emit no `store volatile`, so LLVM may merge or drop them | — |
 | B-2026-11-26-98 | 2026-11-26 | effect | low | `p.read_volatile()` / `p.write_volatile(v)` carry no effect: a `pub fn` doing one declares nothing, and `karac query effects` shows none, where VolatileCell's read/write declare reads/writes(Hardware) | — |
 | B-2026-11-27-2 | 2026-11-27 | typecheck | medium | `f([][..])`, with `f` taking a `Slice[T]` of a concrete `T`, is refused: a range of an empty list literal does not take the slot's element type (E0516 "a type that failed to check is not lowered yet" at 83c1fcea2c; at e723cc81b8 E_EMPTY_PREFIX_LITERAL_NEEDS_ANNOTATION, which says nothing gives the type), where a bare `[]` into a `Vec[T]` slot passes | — |
@@ -131,6 +130,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-27-11 | 2026-11-27 | typecheck | low | A binding of a diverging block, `let a = { return 7; }; a + 1`, is refused E0208 "type 'Never' does not implement trait Add": code after a diverging `let` is unreachable, and `Never` should coerce to any operand type (or the diagnostic should say the code is unreachable) | — |
 | B-2026-11-27-12 | 2026-11-27 | runtime | low | The HTTP client refuses a response whose header block uses obs-fold (a header line continued on the next line that starts with a space or tab): `Client.get` returns Err 'request failed: invalid HTTP header parsed', where RFC 9112 §5.2 requires a user agent that receives obs-fold in a response to replace each fold with SP and read the value | — |
 | B-2026-11-27-13 | 2026-11-27 | runtime | low | The HTTP client refuses any response with more than 100 header fields, or a head over about 400 KiB, with Err 'request failed: message head is too large'; neither limit is documented, and 100 fields is low for real responses (many Set-Cookie, CDN and tracing headers) | — |
+| B-2026-11-27-16 | 2026-11-27 | cli | low | In a package, the E0520 import fix-it for a library name used only in a test file (src/main_test.kara) is labelled src/main.kara at offset 0, so `karac fix` applies nothing and the error stays | — |
 
 ### Relocated
 
@@ -2408,10 +2408,12 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-93 | interp | low | `std.runtime.list_tasks()` lists no suspended task under `karac run --interp`, where `karac run` and `karac build` list the task suspended on its `re… | 6dfd430b01 |
 | B-2026-11-26-94 | interp+mir-llvm+runtime | low | The HTTP server answers 400 to a request whose header value holds a byte that is not UTF-8 (obs-text such as Latin-1 `caf\xe9`), which RFC 9110 §5.5… | c874d5b637 |
 | B-2026-11-26-95 | typecheck | high | A write through a `*const T` is accepted and writes: `*p = v`, `*p += v`, `(*p).f = v` and `p.write(v)` / `write_unaligned` / `write_volatile`, even… | 6c7f2f430f |
+| B-2026-11-26-96 | typecheck+mir | medium | `VolatileCell[T]` (prelude) checks but runs on neither lane: `VolatileCell.new(1)` is `native VolatileCell[i64].new is not lowered yet` on the LLVM l… | c6e916707c |
 | B-2026-11-27-1 | typecheck | medium | Regression from the B-2026-11-26-1 fix (293934a062): a literal left open past an `as` cast is refused as a tensor index (`t[i, j] = (i * 3 + j) as f3… | 1a7d6a29e6 |
 | B-2026-11-27-7 | typecheck | medium | A collection's `.clone()` and `to_vec` of an unbounded type parameter pass `karac check`: `fn f[T](v: Vec[T]) -> Vec[T] { v.clone() }` clones a `Vec[… | b7e16eae6c |
 | B-2026-11-27-9 | typecheck | medium | A type-qualified call on a type with `const` parameters drops the const argument: `Buf[i64, 3].fill(7)` over `impl[T, const N: i64] Buf[T, N] { fn fi… | afb988da49 |
 | B-2026-11-27-14 | interp+mir-llvm | medium | `text_backend` wrote a record's message as it was, so a message holding a line end split one record over two lines (and a crafted one could forge a s… | 59c73d71d5 |
+| B-2026-11-27-15 | typecheck | medium | The compiler's prelude held library names README keeps in modules: Server, Request, Response, Client, Channel, Sender, TaskGroup, Mutex, File, Durati… | 9172fa1572 |
 
 </details>
 
