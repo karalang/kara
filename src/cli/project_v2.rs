@@ -105,6 +105,24 @@ impl Amalgam {
         config.inferred_imports = self.inferred_imports.clone();
         config.shown_names = self.names.clone();
         config.module_ranges = self.module_ranges.clone();
+        config.import_points = self
+            .bytes
+            .iter()
+            .map(|(first, len, file)| {
+                // The copy blanks the file's imports in place, so an offset
+                // in the file's import lines is the same offset in its copy.
+                let (at, has) = self
+                    .originals
+                    .get(file)
+                    .map_or((0, false), |own| crate::library_imports::import_point(own));
+                crate::library_imports::FileCopy {
+                    start: *first,
+                    end: first + len,
+                    insert_at: first + at.min(*len),
+                    has_imports: has,
+                }
+            })
+            .collect();
     }
 
     /// Hand the line map to the MIR interpreter and to codegen, which report

@@ -2209,7 +2209,10 @@ impl Pipeline {
         ) {
             typed
                 .errors
-                .extend(crate::library_imports::missing_library_imports(&source));
+                .extend(crate::library_imports::missing_library_imports_in(
+                    &source,
+                    &self.profile_config.import_points,
+                ));
         }
     }
 

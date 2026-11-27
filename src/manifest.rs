@@ -278,6 +278,10 @@ pub struct ProfileConfig {
     /// (B-2026-11-25-52).
     pub shown_names: Vec<(String, String)>,
     pub module_ranges: Vec<(usize, usize, String)>,
+    /// Each copied file of a package's combined source, as
+    /// [`crate::library_imports::FileCopy`]: an import a use in that file
+    /// needs goes into that file, after its own imports (B-2026-11-27-16).
+    pub import_points: Vec<crate::library_imports::FileCopy>,
 }
 
 /// One package's code in a program of several: the span offsets
@@ -327,6 +331,7 @@ impl ProfileConfig {
             inferred_imports: Vec::new(),
             shown_names: Vec::new(),
             module_ranges: Vec::new(),
+            import_points: Vec::new(),
         }
     }
 

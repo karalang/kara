@@ -775,22 +775,24 @@ fn package_member_fixes(
     }
     let platform = super::build_cmds::walk_platform_for_target(crate::target::active_target());
     let this = std::path::Path::new(filename);
-    // A test companion is not in the package check, so its import fixes come
-    // from the check with the companions merged in (B-2026-11-13-42).
-    if filename.ends_with("_test.kara") {
+    // A test companion is not in the package check, so its fixes come from
+    // the check with the companions merged in (B-2026-11-13-42): its import
+    // fixes from the module check, and the rest (a library import its use
+    // lacks, B-2026-11-27-16) from the combined source with the tests in.
+    let tests = filename.ends_with("_test.kara");
+    let pc = if tests {
         let pc = super::build_cmds::package_check_with_tests(&root, &lints, platform).ok()?;
-        let mut fixes = FixSet::default();
-        if pc.parse_errors.is_empty() && !pc.refuses_only_by_type() {
-            let (singles, groups) = pc.resolve_fixes_of(this);
-            fixes.singles(singles);
-            fixes.groups(groups.iter());
+        if !pc.parse_errors.is_empty() {
+            return Some(FixSet::default());
         }
-        return Some(fixes);
-    }
-    let pc = super::build_cmds::package_check_on(&root, &lints, platform).ok()?;
-    if pc.lone_entry(&root).is_some() || !pc.parse_errors.is_empty() {
-        return None;
-    }
+        pc
+    } else {
+        let pc = super::build_cmds::package_check_on(&root, &lints, platform).ok()?;
+        if pc.lone_entry(&root).is_some() || !pc.parse_errors.is_empty() {
+            return None;
+        }
+        pc
+    };
     let mut fixes = FixSet::default();
     if !pc.refuses_only_by_type() {
         let (singles, groups) = pc.resolve_fixes_of(this);
@@ -799,9 +801,15 @@ fn package_member_fixes(
         return Some(fixes);
     }
     fixes.singles(pc.boundary_type_fixes_of(this));
-    let files = super::project_v2::source_files(&pc.tree, false).ok()?;
+    let files = super::project_v2::source_files(&pc.tree, tests).ok()?;
     let a = super::project_v2::amalgamate(&pc.tree, &files, |_, _| Vec::new(), "").ok()?;
-    let entry = super::project_v2::shown(&pc.tree.modules[pc.tree.root].file);
+    // With the companions merged in, the check is named as the test file
+    // it fixes, so its `test` blocks are where `karac test` reads them.
+    let entry = if tests {
+        filename.to_string()
+    } else {
+        super::project_v2::shown(&pc.tree.modules[pc.tree.root].file)
+    };
     let mut pipeline = Pipeline::new(&entry, &a.text)
         .with_lint_overrides(lints)
         .strict_core()

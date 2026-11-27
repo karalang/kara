@@ -1304,7 +1304,9 @@ fn removed_encoding_call(src: &[u8], at: usize, ty: &str, method: &str) -> Optio
         }
         edits.push(edit(last_import_end + 1, 0, &line));
     } else {
-        edits.push(edit(0, 0, &format!("{line}\n")));
+        // Below the file's opening comment, as the import fix-it places one.
+        let at = crate::library_imports::above_first_item(std::str::from_utf8(src).ok()?);
+        edits.push(edit(at, 0, &format!("{line}\n")));
     }
     Some(edits)
 }

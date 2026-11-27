@@ -202,6 +202,50 @@ pub fn is_import_required(name: &str) -> bool {
 /// nor a bare use of such a variant's name (a pattern `Match(n)`), and
 /// neither is a field or method of that name.
 pub fn missing_library_imports(src: &str) -> Vec<TypeError> {
+    missing_library_imports_in(src, &[])
+}
+
+/// One file copied into a package's combined source: its byte range there,
+/// the offset there an import it needs goes at, and whether the file has
+/// imports of its own (an import then follows them; otherwise a blank line
+/// parts it from the first item).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileCopy {
+    pub start: usize,
+    pub end: usize,
+    pub insert_at: usize,
+    pub has_imports: bool,
+}
+
+/// Where an import goes in a file: just past the line of its last import,
+/// or above its first item; and whether it has imports.
+pub fn import_point(src: &str) -> (usize, bool) {
+    let parsed = crate::parse_shared(src);
+    let last = parsed
+        .program
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Import(imp) => Some(line_end(src, imp.span.offset + imp.span.length)),
+            _ => None,
+        })
+        .max();
+    match last {
+        Some(at) => (at, true),
+        None => (above_first_item(src), false),
+    }
+}
+
+/// A module a program's uses lack: the file of the uses (an index into
+/// [`missing_library_imports_in`]'s `files`), the module, its first name,
+/// that name's span, and every name used.
+type Missing<'a> = (Option<usize>, &'a str, &'a str, Span, BTreeSet<&'a str>);
+
+/// [`missing_library_imports`] over a package's combined source: a use in a
+/// copied file (`files`, empty for a single file) has its fix-it add the
+/// import to that file, after that file's own imports, rather than after
+/// the combined source's import header (B-2026-11-27-16).
+pub fn missing_library_imports_in(src: &str, files: &[FileCopy]) -> Vec<TypeError> {
     let parsed = crate::parse_shared(src);
     let mut declared: HashSet<String> = HashSet::new();
     let mut imported: HashSet<(String, String)> = HashSet::new();
@@ -279,7 +323,9 @@ pub fn missing_library_imports(src: &str) -> Vec<TypeError> {
         })
         .collect();
     // Each module, its first use (name and span), and every item used.
-    let mut missing: Vec<(&str, &str, Span, BTreeSet<&str>)> = Vec::new();
+    // `(file, module, first name, its span, every name)`: `file` indexes
+    // `files`, `None` for a use outside them (or a single file).
+    let mut missing: Vec<Missing> = Vec::new();
     let mut internal: Vec<TypeError> = Vec::new();
     let mut in_import = false;
     for (i, t) in tokens.iter().enumerate() {
@@ -337,11 +383,17 @@ pub fn missing_library_imports(src: &str) -> Vec<TypeError> {
                 let Some(name) = names.iter().find(|n| **n == name.as_str()).copied() else {
                     continue;
                 };
-                match missing.iter_mut().find(|(m, _, _, _)| m == module) {
-                    Some((_, _, _, used)) => {
+                let file = files
+                    .iter()
+                    .position(|f| (f.start..f.end).contains(&t.span.offset));
+                match missing
+                    .iter_mut()
+                    .find(|(f, m, _, _, _)| *f == file && m == module)
+                {
+                    Some((_, _, _, _, used)) => {
                         used.insert(name);
                     }
-                    None => missing.push((module, name, t.span, BTreeSet::from([name]))),
+                    None => missing.push((file, module, name, t.span, BTreeSet::from([name]))),
                 }
             }
             _ => {}
@@ -350,49 +402,66 @@ pub fn missing_library_imports(src: &str) -> Vec<TypeError> {
     if missing.is_empty() {
         return internal;
     }
-    let imports: Vec<String> = missing
-        .iter()
-        .map(|(module, _, _, used)| {
-            let used: Vec<&str> = used.iter().copied().collect();
-            format!("import {module}.{{{}}};", used.join(", "))
-        })
-        .collect();
-    let (insert_at, replacement) = match after_imports {
-        Some(at) => (at, format!("{}\n", imports.join("\n"))),
-        None => (above_first_item(src), format!("{}\n\n", imports.join("\n"))),
+    let import_of = |module: &str, used: &BTreeSet<&str>| {
+        let used: Vec<&str> = used.iter().copied().collect();
+        format!("import {module}.{{{}}};", used.join(", "))
     };
-    let (line, column) = line_column(src, insert_at);
-    let fix_it = FixIt {
-        span: Span {
-            line,
-            column,
-            offset: insert_at,
-            length: 0,
-        },
-        replacement,
+    // One edit per file, adding every import that file's uses lack.
+    let fix_for = |file: Option<usize>| {
+        let imports: Vec<String> = missing
+            .iter()
+            .filter(|(f, ..)| *f == file)
+            .map(|(_, module, _, _, used)| import_of(module, used))
+            .collect();
+        let (insert_at, has_imports) = match file.and_then(|i| files.get(i)) {
+            Some(f) => (f.insert_at, f.has_imports),
+            None => match after_imports {
+                Some(at) => (at, true),
+                None => (above_first_item(src), false),
+            },
+        };
+        let replacement = if has_imports {
+            format!("{}\n", imports.join("\n"))
+        } else {
+            format!("{}\n\n", imports.join("\n"))
+        };
+        let (line, column) = line_column(src, insert_at);
+        FixIt {
+            span: Span {
+                line,
+                column,
+                offset: insert_at,
+                length: 0,
+            },
+            replacement,
+        }
     };
     missing
-        .into_iter()
-        .zip(imports)
-        .map(|((module, first, span, _), import)| TypeError {
-            message: format!(
-                "`{first}` is in the library module `{module}`, which a program \
-                     imports before it uses it: `{import}` ({})",
-                if module == "std.cli" {
-                    "deferred.md § std.cli"
-                } else {
-                    "docs/library/README.md"
-                }
-            ),
-            span,
-            kind: TypeErrorKind::RemovedInCore,
-            lint_name: None,
-            fix_it: Some(fix_it.clone()),
-            class: None,
-            expected: None,
-            got: None,
-            help: None,
+        .iter()
+        .map(|(file, module, first, span, used)| {
+            let import = import_of(module, used);
+            TypeError {
+                message: format!(
+                    "`{first}` is in the library module `{module}`, which a program \
+                         imports before it uses it: `{import}` ({})",
+                    if *module == "std.cli" {
+                        "deferred.md § std.cli"
+                    } else {
+                        "docs/library/README.md"
+                    }
+                ),
+                span: *span,
+                kind: TypeErrorKind::RemovedInCore,
+                lint_name: None,
+                fix_it: Some(fix_for(*file)),
+                class: None,
+                expected: None,
+                got: None,
+                help: None,
+            }
         })
+        .collect::<Vec<_>>()
+        .into_iter()
         .chain(internal)
         .collect()
 }
