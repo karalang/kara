@@ -1,0 +1,18 @@
+import std.sync.{channel, Sender, Receiver, TaskFailed, Mutex};
+import std.time.{Duration, sleep};
+fn main() {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1);
+    let m = Mutex.new(0);
+    let guard = m.lock();
+    let g = TaskGroup.new();
+    let a = g.spawn(|| { sleep(Duration.ms(10000)); 1 });
+    let b = g.spawn(|| rx.recv().unwrap_or(0));
+    let c = g.spawn(|| { let x = m.lock(); let v = x.value; v });
+    sleep(Duration.ms(50));
+    g.cancel();
+    match a.try_join() { Err(TaskFailed.Cancelled) => println("sleep cancelled"), other => println(f"sleep {other}") }
+    match b.try_join() { Err(TaskFailed.Cancelled) => println("recv cancelled"), other => println(f"recv {other}") }
+    match c.try_join() { Err(TaskFailed.Cancelled) => println("mutex cancelled"), other => println(f"mutex {other}") }
+    drop(guard);
+    drop(tx);
+}

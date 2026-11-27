@@ -1,0 +1,7 @@
+import std.time.{Duration, sleep, timeout};
+fn main() {
+    let a = timeout(Duration.ms(2000), || 5);
+    println(f"{a}");
+    let b = timeout(Duration.ms(30), || { defer println("torn down"); sleep(Duration.ms(10000)); 6 });
+    println(f"{b.is_err()}");
+}

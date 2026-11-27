@@ -1,0 +1,16 @@
+import std.sync.{TaskFailed};
+import std.time.{Duration, sleep};
+fn main() {
+    let g = TaskGroup.new();
+    let h = g.spawn(|| {
+        let inner = TaskGroup.new();
+        let ih = inner.spawn(|| { defer println("inner task torn down"); sleep(Duration.ms(10000)); 1 });
+        ih.join()
+    });
+    sleep(Duration.ms(50));
+    g.cancel();
+    match h.try_join() {
+        Err(TaskFailed.Cancelled) => println("cancelled"),
+        other => println(f"{other}"),
+    }
+}

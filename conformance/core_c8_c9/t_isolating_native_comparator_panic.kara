@@ -1,0 +1,19 @@
+import std.sync.{TaskFailed};
+fn main() {
+    let g = TaskGroup.isolating();
+    let h = g.spawn(|| {
+        let mut v: Vec[i64] = [5, 3, 1, 4];
+        v.sort_by(|a, b| {
+            if a == 3 or b == 3 {
+                panic("comparator saw 3");
+            }
+            a.cmp(b)
+        });
+        v.len()
+    });
+    match h.join() {
+        Err(TaskFailed.Panicked { message, location }) => println(f"panicked: {message}"),
+        other => println(f"{other}"),
+    }
+    println("group goes on");
+}

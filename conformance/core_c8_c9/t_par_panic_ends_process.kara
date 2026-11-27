@@ -1,0 +1,4 @@
+fn main() {
+    let (a, b) = par { 1, { let v: Vec[i64] = []; v[env.args().len()] } };
+    println(f"{a} {b}");
+}

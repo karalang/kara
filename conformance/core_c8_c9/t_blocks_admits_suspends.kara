@@ -1,0 +1,8 @@
+import std.time.{Duration, sleep};
+pub fn nap() with blocks reads(Clock) {
+    sleep(Duration.ms(1));
+}
+fn main() {
+    nap();
+    println("napped");
+}

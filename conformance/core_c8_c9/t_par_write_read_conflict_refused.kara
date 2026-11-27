@@ -1,0 +1,5 @@
+fn main() {
+    let mut x = 1;
+    let (a, b) = par { { x = 2; 0 }, x + 1 };
+    println(f"{a} {b}");
+}

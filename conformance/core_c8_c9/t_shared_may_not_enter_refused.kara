@@ -1,0 +1,7 @@
+shared struct C { n: i64 }
+fn main() {
+    let c = C { n: 1 };
+    let g = TaskGroup.new();
+    let h = g.spawn(|| c.n);
+    println(f"{h.join()}");
+}

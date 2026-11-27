@@ -1,0 +1,13 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.id}"); } }
+fn inner() -> Result[i64, String] {
+    let _r = R { id: 2 };
+    defer println("inner defer");
+    errdefer println("inner errdefer");
+    panic("boom");
+}
+fn main() {
+    let _a = R { id: 1 };
+    defer println("main defer");
+    println(f"{inner()}");
+}

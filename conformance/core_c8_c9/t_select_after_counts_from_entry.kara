@@ -1,0 +1,13 @@
+import std.sync.{channel, Sender, Receiver};
+import std.time.{Duration, Instant};
+fn main() {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1);
+    let t0 = Instant.now();
+    let v = select {
+        x = rx.recv() => f"recv {x}",
+        _ = after(Duration.ms(40)) => "after".to_string(),
+    };
+    println(v);
+    println(f"{t0.elapsed().as_ms() >= 40}");
+    drop(tx);
+}

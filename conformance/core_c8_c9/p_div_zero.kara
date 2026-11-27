@@ -1,0 +1,5 @@
+fn main() {
+    let d = env.args().len() as i64 - 1;
+    println("before");
+    println(f"{10 / d}");
+}

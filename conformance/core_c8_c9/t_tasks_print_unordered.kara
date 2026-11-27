@@ -1,0 +1,6 @@
+fn main() {
+    let g = TaskGroup.new();
+    for i in 0..4 {
+        let _h = g.spawn(|| { println(f"task {i}"); 0 });
+    }
+}

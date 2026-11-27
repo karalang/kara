@@ -1,0 +1,7 @@
+import std.time.{Duration, sleep};
+fn main() {
+    let g = TaskGroup.new();
+    let _h = g.spawn(|| { sleep(Duration.ms(2000)); println("sibling finished"); 1 });
+    sleep(Duration.ms(20));
+    panic("main panics");
+}

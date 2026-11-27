@@ -1,0 +1,11 @@
+import std.time.{Duration, Instant, sleep, timeout};
+fn main() {
+    let t0 = Instant.now();
+    let r = timeout(Duration.ms(5000), || timeout(Duration.ms(40), || { sleep(Duration.ms(10000)); 1 }));
+    match r {
+        Ok(Err(_)) => println("the inner deadline fired"),
+        Ok(Ok(v)) => println(f"finished {v}"),
+        Err(_) => println("the outer deadline fired"),
+    }
+    println(f"{t0.elapsed().as_ms() < 4000}");
+}

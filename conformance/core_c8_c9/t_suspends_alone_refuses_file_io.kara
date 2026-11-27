@@ -1,0 +1,6 @@
+pub fn load() -> Result[String, IoError] with suspends reads(FileSystem) {
+    fs.read_to_string("x.txt")
+}
+fn main() {
+    println(f"{load().is_err()}");
+}

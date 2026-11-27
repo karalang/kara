@@ -1,0 +1,16 @@
+import std.sync.{channel, Sender, Receiver};
+struct Loud { n: i64 }
+impl Drop for Loud { fn drop(mut ref self) { println(f"drop {self.n}"); } }
+fn main() {
+    let (ta, ra): (Sender[i64], Receiver[i64]) = channel(1);
+    let (tl, rl): (Sender[Loud], Receiver[Loud]) = channel(1);
+    let _ = tl.send(Loud { n: 0 });
+    let _ = ta.send(5);
+    let v = select {
+        x = ra.recv() => f"recv {x}",
+        r = tl.send(Loud { n: 9 }) => "sent",
+    };
+    println(v);
+    println("after");
+    drop(rl);
+}

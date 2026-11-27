@@ -1,0 +1,10 @@
+import std.time.{Duration, sleep};
+fn first() -> Result[i64, String] { sleep(Duration.ms(60)); Err("first".to_string()) }
+fn second() -> Result[i64, String] { Err("second".to_string()) }
+fn run() -> Result[i64, String] {
+    let (x, y) = par { first()?, second()? };
+    Ok(x + y)
+}
+fn main() {
+    println(f"{run()}");
+}

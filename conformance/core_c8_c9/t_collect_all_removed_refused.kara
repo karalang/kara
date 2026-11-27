@@ -1,0 +1,3 @@
+fn main() {
+    let r = collect_all([1, 2]);
+}

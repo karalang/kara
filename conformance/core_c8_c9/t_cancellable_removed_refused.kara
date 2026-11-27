@@ -1,0 +1,3 @@
+#[derive(Cancellable)]
+struct S { n: i64 }
+fn main() {}

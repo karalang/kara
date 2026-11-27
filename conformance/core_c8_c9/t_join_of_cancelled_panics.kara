@@ -1,0 +1,11 @@
+import std.sync.{channel, Sender, Receiver};
+import std.time.{Duration, sleep};
+fn main() {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1);
+    let g = TaskGroup.new();
+    let h = g.spawn(|| rx.recv().unwrap_or(0));
+    sleep(Duration.ms(30));
+    g.cancel();
+    println(f"{h.join()}");
+    drop(tx);
+}

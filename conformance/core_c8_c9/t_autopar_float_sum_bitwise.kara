@@ -1,0 +1,7 @@
+fn main() {
+    let mut s = 0.0;
+    for i in 0..2000000 {
+        s = s + 1.0 / ((i as f64) + 1.0);
+    }
+    println(f"{s}");
+}

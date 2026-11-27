@@ -58,8 +58,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 791 |
-| false-positive | 403 |
+| diagnostics | 792 |
+| false-positive | 404 |
 | missing-feature | 268 |
 | perf | 206 |
 | other | 160 |
@@ -76,7 +76,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 970 |
+| typecheck | 971 |
 | mir | 350 |
 | mir-llvm | 340 |
 | cli | 323 |
@@ -84,7 +84,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | ownership | 147 |
 | runtime | 118 |
 | interp | 117 |
-| effect | 71 |
+| effect | 72 |
 | resolver | 59 |
 | other | 56 |
 | codegen | 22 |
@@ -130,6 +130,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-27-5 | 2026-11-27 | ownership | medium | `let mut sorted = costs; sorted.sort();` with `costs` a bare parameter: `karac fix` declares `costs: mut ref` and marks every call site `mut`, sorting the caller's list (and writing `mut [1, 3, 2, 4, 1]` on literals), where E0517 also offers `own` or `.clone()` for a copy of the function's own; the same-name `let mut s = s;` is given `own` (B-2026-11-17-146) | — |
 | B-2026-11-27-6 | 2026-11-27 | typecheck | medium | a `fold` closure with its accumulator pattern annotated, `|(prev, total): (i64, i64), x| (x, total + x.max(prev))` over `nums.iter()`, is refused "expected 'i64', found 'ref i64'" at the tuple's `x`, where the same closure unannotated and `let p: (i64, i64) = (x, 1)` pass | — |
 | B-2026-11-27-8 | 2026-11-27 | runtime | low | The HTTP server skips a whitespace-only line before the request line (` \r\n`, `\t\r\n`, `\r \n` with its bare CR) as if it were an empty line, and serves the request after it; RFC 9112 §2.2 lets a server ignore only empty lines (CRLF) there, and h11 refuses each as an illegal request line | — |
+| B-2026-11-27-10 | 2026-11-27 | effect | medium | §11.8 says `send`, `recv`, a join and a `Mutex` lock carry `suspends`, but the checker (and docs/library/concurrency.md) give them `blocks` only, so a public `fn take(rx: ref Receiver[i64]) -> Option[i64] with suspends receives(rx) { rx.recv() }` is refused E0400 "performs blocks": §11.8's `suspends`-alone promise (cs.843, cs.851) cannot be written | — |
+| B-2026-11-27-11 | 2026-11-27 | typecheck | low | A binding of a diverging block, `let a = { return 7; }; a + 1`, is refused E0208 "type 'Never' does not implement trait Add": code after a diverging `let` is unreachable, and `Never` should coerce to any operand type (or the diagnostic should say the code is unreachable) | — |
 
 ### Relocated
 

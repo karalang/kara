@@ -1,0 +1,5 @@
+errdefer(e) bad
+errdefer
+defer
+drop 1
+Err(bad)

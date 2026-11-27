@@ -1,0 +1,12 @@
+// §11.8 cs.851: `suspends` alone admits a channel wait. Today the checker
+// infers `blocks` for `recv`, so this is refused: PREDICTS B-2026-11-27-10
+// (once fixed, replace the .refused with a .out holding "Some(3)").
+import std.sync.{channel, Sender, Receiver};
+pub fn take(rx: ref Receiver[i64]) -> Option[i64] with suspends receives(rx) {
+    rx.recv()
+}
+fn main() {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1);
+    tx.send(3).unwrap();
+    println(f"{take(rx)}");
+}

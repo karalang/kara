@@ -1,0 +1,3 @@
+errdefer
+defer
+drop 1

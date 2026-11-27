@@ -1,0 +1,5 @@
+fn main() {
+    let x = env.args().len() as i64;
+    println("before");
+    assert(x == 5);
+}

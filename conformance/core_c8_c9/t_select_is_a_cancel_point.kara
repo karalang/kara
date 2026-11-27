@@ -1,0 +1,19 @@
+import std.sync.{channel, Sender, Receiver, TaskFailed};
+import std.time.{Duration, sleep};
+fn main() {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1);
+    let g = TaskGroup.new();
+    let h = g.spawn(|| {
+        defer println("select task torn down");
+        select {
+            v = rx.recv() => v.unwrap_or(0),
+        }
+    });
+    sleep(Duration.ms(50));
+    g.cancel();
+    match h.try_join() {
+        Err(TaskFailed.Cancelled) => println("cancelled"),
+        other => println(f"{other}"),
+    }
+    drop(tx);
+}

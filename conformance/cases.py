@@ -46,7 +46,7 @@ is static: it is not run.
     python3 conformance/cases.py conformance/log conformance/pool
 
 `CONF_LANES` names the backends a running case is held to, comma-separated:
-`interp,build` by default; `asan` and `tsan` add the sanitizer builds
+`interp,build` by default; `jit` adds `karac run`, and `asan` and `tsan` add the sanitizer builds
 (`karac __mir-llvm-asan` / `__mir-llvm-tsan`, TSan on four workers and at
 least three runs), and a sanitizer report fails the run with its first line.
 """

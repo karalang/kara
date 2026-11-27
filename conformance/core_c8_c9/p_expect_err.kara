@@ -1,0 +1,5 @@
+fn f() -> Result[i64, String] { Err("bad".to_string()) }
+fn main() {
+    println("before");
+    println(f"{f().expect("wanted a value")}");
+}

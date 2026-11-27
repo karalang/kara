@@ -1,0 +1,32 @@
+import std.sync.{channel, Sender, Receiver, TaskFailed};
+import std.time.{Duration, sleep};
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.id}"); } }
+fn inner(rx: ref Receiver[i64]) -> Result[i64, String] {
+    let _r = R { id: 2 };
+    defer println("inner defer");
+    errdefer println("inner errdefer");
+    errdefer(e) println(f"inner errdefer(e) {e}");
+    let v = rx.recv();
+    println("inner resumed");
+    Ok(v.unwrap_or(0))
+}
+fn outer(rx: own Receiver[i64]) -> Result[i64, String] {
+    let _r = R { id: 1 };
+    defer println("outer defer");
+    let v = inner(rx)?;
+    println("outer resumed");
+    Ok(v)
+}
+fn main() {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1);
+    let g = TaskGroup.new();
+    let h = g.spawn(|| outer(rx));
+    sleep(Duration.ms(50));
+    g.cancel();
+    match h.try_join() {
+        Err(TaskFailed.Cancelled) => println("cancelled"),
+        other => println(f"{other}"),
+    }
+    drop(tx);
+}

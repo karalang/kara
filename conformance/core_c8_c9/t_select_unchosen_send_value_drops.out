@@ -1,0 +1,4 @@
+drop 9
+recv Some(5)
+after
+drop 0

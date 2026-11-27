@@ -1,0 +1,8 @@
+#[panic_handler]
+fn on_panic(info: PanicInfo) {
+    eprintln(f"handler saw: {info.message}");
+}
+fn main() {
+    println("before");
+    panic("boom");
+}

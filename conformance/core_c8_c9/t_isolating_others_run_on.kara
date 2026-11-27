@@ -1,0 +1,8 @@
+import std.sync.{TaskFailed};
+import std.time.{Duration, sleep};
+fn main() {
+    let g = TaskGroup.isolating();
+    let bad = g.spawn(|| { panic("bad"); 0 });
+    let good = g.spawn(|| { sleep(Duration.ms(30)); 42 });
+    println(f"{bad.join().is_err()} {good.join()}");
+}

@@ -1,0 +1,23 @@
+import std.sync.{Atomic, TaskFailed};
+import std.time.{Duration, sleep};
+fn main() {
+    let started = Atomic.new(false);
+    let g = TaskGroup.new();
+    let h = g.spawn(|| {
+        started.store(true);
+        let mut s: i64 = 0;
+        for i in 0..30000000 {
+            s = (s + i) % 1000003;
+        }
+        s
+    });
+    while not started.load() {
+        sleep(Duration.ms(1));
+    }
+    g.cancel();
+    match h.try_join() {
+        Ok(v) => println(f"completed {v}"),
+        Err(TaskFailed.Cancelled) => println("cancelled"),
+        Err(e) => println(f"{e}"),
+    }
+}

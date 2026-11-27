@@ -1,0 +1,6 @@
+import std.sync.{TaskFailed};
+fn main() {
+    let g = TaskGroup.new();
+    let h = g.spawn(|| 3);
+    println(f"{h.try_join()}");
+}

@@ -1,0 +1,17 @@
+import std.sync.{channel, Sender, Receiver};
+fn main() {
+    let (ta, ra): (Sender[i64], Receiver[i64]) = channel(1);
+    let (tb, rb): (Sender[i64], Receiver[i64]) = channel(1);
+    let _ = tb.send(2);
+    let _ = ta.send(1);
+    let v = select {
+        x = rb.recv() => f"b {x}",
+        y = ra.recv() => f"a {y}",
+    };
+    println(v);
+    let w = select {
+        x = rb.recv() => f"b {x}",
+        y = ra.recv() => f"a {y}",
+    };
+    println(w);
+}

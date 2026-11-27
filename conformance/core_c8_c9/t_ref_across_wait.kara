@@ -1,0 +1,11 @@
+import std.time.{Duration, sleep};
+fn main() {
+    let v: Vec[i64] = [1, 2, 3];
+    let g = TaskGroup.new();
+    let h = g.spawn(|| {
+        let r = v.first();
+        sleep(Duration.ms(20));
+        r ?? 0
+    });
+    println(f"{h.join()}");
+}

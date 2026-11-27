@@ -1,0 +1,8 @@
+import std.sync.{channel, Sender, Receiver};
+fn main() {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1);
+    println("before");
+    let v = rx.recv();
+    println(f"{v}");
+    drop(tx);
+}

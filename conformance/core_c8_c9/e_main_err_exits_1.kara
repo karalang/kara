@@ -1,0 +1,8 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.id}"); } }
+fn main() -> Result[(), String] {
+    let _r = R { id: 1 };
+    defer println("defer");
+    errdefer println("errdefer");
+    Err("it failed".to_string())
+}

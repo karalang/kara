@@ -1,0 +1,6 @@
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m["a"] = 1;
+    println("before");
+    println(f"{m["b"]}");
+}

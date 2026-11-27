@@ -1,0 +1,20 @@
+fn heavy(i: i64) -> i64 {
+    let mut s = 0;
+    for k in 0..200 {
+        s = (s + i * k) % 1000003;
+    }
+    s
+}
+fn main() {
+    let mut acc: Vec[i64] = Vec.new();
+    #[par_order_free]
+    for i in 0..20000 {
+        acc.push(heavy(i));
+    }
+    acc.sort();
+    let mut h = 0;
+    for x in acc.iter() {
+        h = (h * 31 + *x) % 1000000007;
+    }
+    println(f"{acc.len()} {h}");
+}

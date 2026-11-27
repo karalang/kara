@@ -1,0 +1,4 @@
+extern "C-unwind" {
+    fn f();
+}
+fn main() {}

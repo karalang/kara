@@ -1,0 +1,6 @@
+fn main() {
+    let v: Vec[i64] = [1, 2, 3];
+    let i = v.len() + 2;
+    println("before");
+    println(f"{v[i]}");
+}

@@ -1,0 +1,13 @@
+import std.time.{Duration, sleep};
+import std.sync.{TaskFailed};
+fn main() {
+    let g = TaskGroup.new();
+    let h = g.spawn(|| 5);
+    sleep(Duration.ms(50));
+    g.cancel();
+    match h.try_join() {
+        Ok(v) => println(f"kept {v}"),
+        Err(TaskFailed.Cancelled) => println("cancelled"),
+        Err(e) => println(f"{e}"),
+    }
+}

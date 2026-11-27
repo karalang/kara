@@ -1,0 +1,11 @@
+#[panic_handler]
+fn on_panic(info: PanicInfo) {
+    eprintln("handler start");
+    let v: Vec[i64] = [];
+    let i = env.args().len();
+    eprintln(f"{v[i]}");
+    eprintln("handler end");
+}
+fn main() {
+    panic("first");
+}

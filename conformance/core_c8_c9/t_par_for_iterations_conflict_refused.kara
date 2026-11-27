@@ -1,0 +1,6 @@
+fn main() {
+    let mut total = 0;
+    let xs: Vec[i64] = [1, 2, 3];
+    let _ = par for x in xs.iter() { total = total + *x; 0 };
+    println(f"{total}");
+}

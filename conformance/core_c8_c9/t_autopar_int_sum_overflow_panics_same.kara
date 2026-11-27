@@ -1,0 +1,9 @@
+fn main() {
+    let mut s: i64 = 0;
+    let n = 4000000;
+    for i in 0..n {
+        let big = if i == n - 1 { i64.MAX } else { 1 };
+        s = s + big;
+    }
+    println(f"{s}");
+}

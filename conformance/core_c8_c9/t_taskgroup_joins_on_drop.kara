@@ -1,0 +1,12 @@
+import std.time.{Duration, sleep};
+import std.sync.{Atomic};
+fn main() {
+    let n = Atomic.new(0);
+    {
+        let g = TaskGroup.new();
+        for i in 0..4 {
+            let _h = g.spawn(|| { sleep(Duration.ms(20)); n.fetch_add(1); 0 });
+        }
+    }
+    println(f"{n.load()}");
+}

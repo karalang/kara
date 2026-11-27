@@ -73,6 +73,9 @@ def run(src: str, backends=("interp", "build"), stdin: str = "", timeout: int = 
         if "interp" in backends:
             cmd = [KARAC, "run", "--interp", str(path), "--", *argv] if args is not None else [KARAC, "__mir-run", str(path)]
             out["interp"] = [once(cmd) for _ in range(repeat)]
+        # `karac run`: the JIT, through karac_jit_runner (CONF_LANES=jit).
+        if "jit" in backends and has_backend():
+            out["jit"] = [once([KARAC, "run", str(path), "--", *argv]) for _ in range(repeat)]
         # The sanitizer lanes (CONF_LANES=asan,tsan in cases.py): the same IR
         # built with AddressSanitizer or ThreadSanitizer, as the corpus runner's
         # mir-llvm-asan and mir-llvm-tsan backends build it. A report exits 86.

@@ -1,0 +1,9 @@
+import std.sync.{channel, Sender, Receiver};
+fn main() {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1);
+    drop(tx);
+    let v = select {
+        x = rx.recv() => f"recv {x}",
+    };
+    println(v);
+}

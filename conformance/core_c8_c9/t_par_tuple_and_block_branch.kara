@@ -1,0 +1,6 @@
+import std.time.{Duration, sleep};
+fn slow(n: i64) -> i64 { sleep(Duration.ms(30)); n }
+fn main() {
+    let (a, b, c) = par { slow(1), { let x = 2; x * 10 }, slow(3) };
+    println(f"{a} {b} {c}");
+}

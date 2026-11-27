@@ -1,0 +1,15 @@
+import std.time.{Duration, sleep};
+fn early() -> Result[i64, String] { Err("early".to_string()) }
+fn later() -> Result[i64, String] {
+    defer println("later defer");
+    sleep(Duration.ms(5000));
+    println("later finished");
+    Ok(2)
+}
+fn run() -> Result[i64, String] {
+    let (x, y) = par { early()?, later()? };
+    Ok(x + y)
+}
+fn main() {
+    println(f"{run()}");
+}

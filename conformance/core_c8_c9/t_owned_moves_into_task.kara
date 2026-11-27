@@ -1,0 +1,6 @@
+fn main() {
+    let s = "hello".to_string();
+    let g = TaskGroup.new();
+    let h = g.spawn(|| s.len());
+    println(f"{h.join()}");
+}

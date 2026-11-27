@@ -1,0 +1,6 @@
+import std.time.{Duration, sleep};
+fn main() {
+    let xs: Vec[i64] = [5, 1, 4, 2, 3];
+    let ys = par for x in xs.iter() { sleep(Duration.ms(*x * 5)); *x * 2 };
+    println(f"{ys}");
+}

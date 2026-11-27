@@ -1,0 +1,6 @@
+inner errdefer
+inner defer
+drop 2
+outer defer
+drop 1
+cancelled

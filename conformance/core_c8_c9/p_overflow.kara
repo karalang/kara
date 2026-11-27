@@ -1,0 +1,7 @@
+fn main() {
+    let mut x: i64 = i64.MAX - 1;
+    let n = env.args().len() as i64;
+    println("before");
+    x = x + n + 1;
+    println(f"{x}");
+}
