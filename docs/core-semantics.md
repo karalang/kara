@@ -640,6 +640,8 @@ Shared handles may not.
 
 It applies only where the compiler proves all of that. In particular, it does not reassociate floating-point reductions. It does not parallelise a checked integer reduction whose prefix sums could overflow where the parallel partial sums would not.
 
+The one opt-in exception is experimental: a loop marked `#[par_order_free]` leaves unspecified the order in which it adds elements to a collection, and nothing else ([design.md § Automatic parallelism](design.md#automatic-parallelism)).
+
 **11.6 Data races** cannot happen in a program that compiles: §11.2–§11.3 plus the field rules of `sync` types guarantee it.
 
 **11.7 Failure in `par {}`** (2026-10-07, D4).

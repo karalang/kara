@@ -6203,6 +6203,22 @@ There is no dependence solver: indirect indexing (`out[idx[i]]`), overlapping wi
 
 **What declines even when the work is independent.** A body that writes to the console (parallel workers would interleave the output), one with a resource effect two iterations would reorder, one that touches a `shared` value, and one too small or too memory-bound for dispatch to pay, which the cost model judges. A build with one worker runs the in-order form ([Runtime](#runtime)).
 
+**`#[par_order_free]` lets a collecting loop fan out (experimental).** It is the one opt-in exception to [core-semantics.md §11.5](core-semantics.md#11-concurrency-c9). Written directly before a `for`, `while` or `loop`, it declares that the order in which the loop adds elements to a collection is not part of the result, so automatic parallelism may collect them in any order. The resulting `Vec`'s order is then unspecified, as `Map` iteration order is. It permits nothing else: the output, the panics, the order of every other effect and floating-point reductions stay bound by §11.5, and a body that prints or folds into a second accumulator declines as it would without the attribute.
+
+```kara,fragment
+let mut hits: Vec[Hit] = Vec.new();
+#[par_order_free]
+for i in 0..n {
+    let h = trace(rays[i]);
+    if h.found { hits.push(h); }
+}
+```
+
+- The shapes it admits are `acc.push(e)` and `if cond { acc.push(e); }` into one `Vec`. Without the attribute such a loop runs in order.
+- 0.8 hands each worker a contiguous chunk and joins the chunks in chunk order, so today's `Vec` comes out in iteration order. The attribute is the promise that the program does not depend on that, and a later release may collect in another order.
+- `#[par_unordered]` is accepted as another spelling. On a `fn` or any other item the attribute is `E_UNKNOWN_ATTRIBUTE`, and before a labeled loop it is a parse error in 0.8.
+- `karac query concurrency` lists an annotated loop that did not fan out under `declined_par_loops`, with the reason.
+
 **`seq { }` keeps code in order.** When an ordering requirement is invisible to the effect system (a protocol step, a hardware register sequence), a `seq { }` block runs its statements in source order and suppresses automatic parallelism inside it. It is an ordinary block expression, scoped like any other: `let handle = seq { init_hardware() };`. Prefer making the dependency visible through data flow when a step returns a value. Normal builds never warn about `seq { }`.
 
 **Every decision is queryable.** `karac query concurrency` reports each group, reduction and loop: whether it fans out, and when it does not, which analysis or cost gate declined it and why ([Compiler query API](#compiler-query-api)).
@@ -6450,6 +6466,7 @@ fn header_field_addr(h: Header) -> *const u32 {   // `Header` is not `Copy`, so 
 **`ptr.const(place)` and `ptr.mut(place)` take a place expression, not a value.** The argument is parsed as an expression but typechecked as a place: a binding, field access, index expression or dereference. The operation evaluates to the address of that place, with the place's type as `T`. No reference is constructed and no temporary is materialised.
 - If the argument is not a place: `error[E_PTR_CONST_REQUIRES_PLACE]: ptr.const requires a place expression (a binding, field, or index); the argument here is a value expression`.
 - `ptr.mut` also requires the place to be mutably reachable: `error[E_PTR_MUT_REQUIRES_MUTABLE_PLACE]: ptr.mut requires a mutably-reachable place`.
+- Only a `*mut T` writes. An assignment through a `*const T` (`*p = v`, `*p += v`, `(*p).f = v`) and its `write`, `write_unaligned` and `write_volatile` methods are `error[E_PTR_WRITE_THROUGH_CONST]`; the cast `p as *mut T`, inside `unsafe`, is the way to add the capability.
 
 **Casting a reference to a raw pointer is rejected.** The cast `r as *const T`, where `r` is a `ref T`, is well-formed syntax and a type error at the `as` operator: `error[E_REF_TO_RAW_PTR_CAST_FORBIDDEN]: cannot cast a reference to a raw pointer; use ptr.const(...) or ptr.mut(...) to construct a raw pointer directly without creating a reference`. The diagnostic carries a fix replacing the cast with `ptr.const(...)`. Only the origin casts `ref T` → `*const T` and `mut ref T` → `*mut T` are forbidden outright.
 
@@ -7805,6 +7822,8 @@ Tests are `test "name" { }` blocks, not an attribute ([§14](#14-testing)); `#[t
 | `#[link_name("sym")]` | Bind a foreign function to a symbol of another name. | [§15](#15-unsafe-ffi-and-layout-control) |
 | `#[used]` | Keep a symbol that nothing in the program references. | [deferred.md](deferred.md#linker-control-attributes) |
 | `#[gpu]` | A GPU kernel. On the later track: the kernel draws a later-track note and its dispatch is `E_ARCHIVED`. | [deferred.md](deferred.md#gpu) |
+
+**A loop takes one attribute, experimental in 0.8:** `#[par_order_free]` (also spelled `#[par_unordered]`), written directly before a `for`, `while` or `loop`. It declares that the order in which the loop adds elements to a `Vec` is not part of the result, so automatic parallelism may collect in any order: the one opt-in exception to core-semantics §11.5 ([Automatic parallelism](#automatic-parallelism)). It is not an item attribute, and on a `fn` or any other item it is `E_UNKNOWN_ATTRIBUTE`; any other attribute before a loop is a parse error.
 
 **Deferred attributes are refused.** An attribute that [deferred.md](deferred.md) specifies and 0.8 does not have is `error[E_ATTRIBUTE_DEFERRED]`, naming its section: `#[unsafe(no_mangle)]`, `#[unsafe(link_section(..))]`, `#[profile(..)]`, `#[interrupt]`, `#[max_stack]`, `#[thread_local]`, `#[property]`, `#[snapshot]`, `#[likely]`, `#[unlikely]`, `#[tailrec]`, `#[should_panic]`, `#[zeroize]`, `#[no_std]`, `#[checked]` and `#[example]`. `@name` is not attribute syntax: it is an error whose fix writes `#[name]`.
 
