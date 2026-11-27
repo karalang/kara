@@ -126,7 +126,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-27-50 | 2026-11-27 | typecheck | low | A `mut ref` binding declared without `let mut` can be rebound: `let up = mut ref a; up = mut ref b;` is accepted, where core-semantics §5.1 says only `let mut` lets it be rebound | — |
 | B-2026-11-27-51 | 2026-11-27 | typecheck | low | A function returning a view with no parameter it could borrow from is accepted (`fn mk(n: i64) -> Vec[ref String] { Vec.new() }`), where the core-semantics §5.4 signature rule makes it an error | — |
 | B-2026-11-27-52 | 2026-11-27 | typecheck | low | E0509 for a generic instance that stores a view where a view may not go is reported at the generic body's line only; core-semantics §5.8 puts it at the instantiation site with a note at the body | — |
-| B-2026-11-27-60 | 2026-11-27 | parser | low | `karac fix` had no group for a Rust `thread::spawn` inside a loop: `handles.push(thread::spawn(move || serve(conn, shared)))` in an accept loop kept its E0001 with no fix | — |
 
 ### Relocated
 
@@ -2442,6 +2441,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-27-55 | other | medium | Editor completion offered no library type names at all, prelude or import-only, so after the prelude shrink typing `Mute` offered nothing and accepti… | 0ba7490af3 |
 | B-2026-11-27-56 | other | low | Go-to-definition on a library type went to the `import` line (or nowhere on the import itself, or for a prelude type), and hover on an imported name… | 0ba7490af3 |
 | B-2026-11-27-57 | parser | medium | `for P { x, y } in ps { . | 49e265ce46 |
+| B-2026-11-27-60 | parser | low | `karac fix` had no group for a Rust `thread::spawn` inside a loop: `handles.push(thread::spawn(move \|\| serve(conn, shared)))` in an accept loop kept… | 57bea61001 |
 
 </details>
 
