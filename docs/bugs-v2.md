@@ -79,7 +79,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 973 |
 | mir | 350 |
 | mir-llvm | 341 |
-| cli | 325 |
+| cli | 326 |
 | parser | 166 |
 | ownership | 147 |
 | runtime | 120 |
@@ -90,7 +90,6 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | codegen | 22 |
 | autopar | 7 |
 | lexer | 2 |
-| repl | 1 |
 ## Current state
 
 _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-11-27). Do not edit this block by hand; edit the ledger and regenerate._
@@ -119,7 +118,6 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-79 | 2026-11-26 | mir-llvm | low | A hand-written element shift down a slice (`while i > 0 { p[i] = p[i - 1]; i -= 1; }`) compiles to a scalar copy with a bounds check per element, where rustc and clang turn the same loop into one `memmove` | — |
 | B-2026-11-26-81 | 2026-11-26 | typecheck | low | After "no method 'fold' on type 'Slice'" (`s.bytes().fold(0, |c, b| c * 31 + b as i64)`, the `.iter()` left out), the closure's parameter stays an open type and its cast adds a second error naming an internal variable, "cannot cast '?T1' to 'i64'" | — |
 | B-2026-11-26-82 | 2026-11-26 | typecheck | low | The fix for `a + b.as_str()` (a `String` plus a `Str`, as Rust writes it) appends `.to_string()`, giving `a + b.as_str().to_string()`, a view copied back into a new `String`, where `a + ref b` checks with no copy and is what `karac fix` makes of Rust's `a + &b` | — |
-| B-2026-11-26-98 | 2026-11-26 | effect | low | `p.read_volatile()` / `p.write_volatile(v)` carry no effect: a `pub fn` doing one declares nothing, and `karac query effects` shows none, where VolatileCell's read/write declare reads/writes(Hardware) | — |
 | B-2026-11-27-2 | 2026-11-27 | typecheck | medium | `f([][..])`, with `f` taking a `Slice[T]` of a concrete `T`, is refused: a range of an empty list literal does not take the slot's element type (E0516 "a type that failed to check is not lowered yet" at 83c1fcea2c; at e723cc81b8 E_EMPTY_PREFIX_LITERAL_NEEDS_ANNOTATION, which says nothing gives the type), where a bare `[]` into a `Vec[T]` slot passes | — |
 | B-2026-11-27-3 | 2026-11-27 | parser | high | `karac fix` of a Rust `BinaryHeap<..>` struct field filled by `.collect()` in a struct literal writes the plain `PriorityQueue[..]` collect, which flips the pop order: B-2026-11-15-80/-86 keep Rust's order for a `let`-typed collect only | — |
 | B-2026-11-27-4 | 2026-11-27 | typecheck | low | `a.min(b)` / `a.max(b)` on a tuple is refused E0236 "no method 'min' on type '(i64, i64)'" with no hint and no fix, where a tuple compares and takes the free `min(a, b)` / `max(a, b)` | — |
@@ -2410,13 +2408,14 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-95 | typecheck | high | A write through a `*const T` is accepted and writes: `*p = v`, `*p += v`, `(*p).f = v` and `p.write(v)` / `write_unaligned` / `write_volatile`, even… | 6c7f2f430f |
 | B-2026-11-26-96 | typecheck+mir | medium | `VolatileCell[T]` (prelude) checks but runs on neither lane: `VolatileCell.new(1)` is `native VolatileCell[i64].new is not lowered yet` on the LLVM l… | c6e916707c |
 | B-2026-11-26-97 | mir+mir-llvm | medium | `p.read_volatile()` / `p.write_volatile(v)` (and the stdlib's volatile_read/write intrinsics) lower to plain loads and stores: three volatile writes… | fcfdc8ca59 |
+| B-2026-11-26-98 | effect | low | `p.read_volatile()` / `p.write_volatile(v)` carry no effect: a `pub fn` doing one declares nothing, and `karac query effects` shows none, where Volat… | 3d128180f7 |
 | B-2026-11-27-1 | typecheck | medium | Regression from the B-2026-11-26-1 fix (293934a062): a literal left open past an `as` cast is refused as a tensor index (`t[i, j] = (i * 3 + j) as f3… | 1a7d6a29e6 |
 | B-2026-11-27-7 | typecheck | medium | A collection's `.clone()` and `to_vec` of an unbounded type parameter pass `karac check`: `fn f[T](v: Vec[T]) -> Vec[T] { v.clone() }` clones a `Vec[… | b7e16eae6c |
 | B-2026-11-27-9 | typecheck | medium | A type-qualified call on a type with `const` parameters drops the const argument: `Buf[i64, 3].fill(7)` over `impl[T, const N: i64] Buf[T, N] { fn fi… | afb988da49 |
 | B-2026-11-27-14 | interp+mir-llvm | medium | `text_backend` wrote a record's message as it was, so a message holding a line end split one record over two lines (and a crafted one could forge a s… | 59c73d71d5 |
 | B-2026-11-27-15 | typecheck | medium | The compiler's prelude held library names README keeps in modules: Server, Request, Response, Client, Channel, Sender, TaskGroup, Mutex, File, Durati… | 9172fa1572 |
 | B-2026-11-27-17 | typecheck | high | `if c { (r, steps) } else { (r, r) }` with `steps: i32` and `r: i64` checks clean as an `(i64, i32)` and narrows the second branch's `r` silently (30… | 0c8496bc2e |
-| B-2026-11-27-18 | repl | low | A REPL cell that mixes a top-level import with statements (a snippet pasted with its imports) is refused as an import inside the synthetic `fn main()… | 1f3ee9141d |
+| B-2026-11-27-18 | cli | low | A REPL cell that mixes a top-level import with statements (a snippet pasted with its imports) is refused as an import inside the synthetic `fn main()… | 1f3ee9141d |
 | B-2026-11-27-19 | cli | low | The OnceCell -> OnceLock fix (E_ONCE_CELL_IN_PAR_TYPE, E_ONCE_CELL_AT_MODULE_SCOPE) renames the type but leaves `import std.sync.{OnceCell}`, which n… | 1f3ee9141d |
 
 </details>
