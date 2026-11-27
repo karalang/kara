@@ -1345,6 +1345,11 @@ pub struct NodeTypeFacts {
     /// (or over a `TlsStream`, B-2026-11-10-28): a call on one has the
     /// connection's effects (B-2026-11-10-14).
     pub net_buffers: FxHashSet<crate::ids::NodeId>,
+    /// Method calls on a raw pointer (`*const T` / `*mut T`), by span
+    /// (`TypeCheckResult::pointer_method_receiver_pointees`): their
+    /// `read_volatile` / `write_volatile` are the `volatile_read` /
+    /// `volatile_write` intrinsics' device access (B-2026-11-26-98).
+    pub raw_ptr_calls: FxHashSet<SpanKey>,
     /// Expressions and patterns whose type owns a value of a type with a
     /// `Drop` impl, each with those types' names: dropping one runs their
     /// `drop` bodies (core semantics §12 default 3, B-2026-11-17-13).
@@ -1706,6 +1711,8 @@ pub struct EffectChecker<'a> {
     pub(crate) clone_free_nodes: FxHashSet<crate::ids::NodeId>,
     /// [`NodeTypeFacts::net_buffers`].
     pub(crate) net_buffer_nodes: FxHashSet<crate::ids::NodeId>,
+    /// See [`NodeTypeFacts::raw_ptr_calls`].
+    pub(crate) raw_ptr_calls: FxHashSet<SpanKey>,
     /// B-2026-10-15-21: per function, the `(type parameter, method)` pairs its
     /// body calls through a bound whose trait method declares no effects,
     /// directly or through a generic callee instantiated at one of its own
@@ -1968,6 +1975,7 @@ impl<'a> EffectChecker<'a> {
             cloned_alloc_nodes: FxHashSet::default(),
             clone_free_nodes: FxHashSet::default(),
             net_buffer_nodes: FxHashSet::default(),
+            raw_ptr_calls: FxHashSet::default(),
             bound_calls: FxHashMap::default(),
             bound_traits: FxHashMap::default(),
             bound_events: std::cell::RefCell::new(None),
@@ -2122,6 +2130,7 @@ impl<'a> EffectChecker<'a> {
         self.cloned_alloc_nodes = facts.cloned_allocs;
         self.clone_free_nodes = facts.clone_free;
         self.net_buffer_nodes = facts.net_buffers;
+        self.raw_ptr_calls = facts.raw_ptr_calls;
         self.drop_nodes = facts.drops;
         self.drops_by_type = facts.drops_by_type;
         self.flagged_fields = facts.flagged_fields;

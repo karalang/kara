@@ -861,6 +861,11 @@ pub fn node_type_facts(
     let mut facts = effectchecker::NodeTypeFacts {
         ufcs_calls: typed.ufcs_calls.clone(),
         operator_calls: typed.node_operator_calls.clone(),
+        raw_ptr_calls: typed
+            .pointer_method_receiver_pointees
+            .keys()
+            .copied()
+            .collect(),
         ..Default::default()
     };
     if !typed.default_copy_spans.is_empty() {

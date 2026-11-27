@@ -20,6 +20,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Programs 0.8.1 accepted that are now refused
 
+- `p.read_volatile()` and `p.write_volatile(v)` on a raw pointer carry
+  `reads(Hardware)` and `writes(Hardware)`, as the `volatile_read` /
+  `volatile_write` intrinsics and `VolatileCell` already did (review
+  ruling 2026-11-26): a `pub fn` doing one declares it (`E0400`
+  otherwise), and `karac query effects` and the auto-parallel conflict
+  model see the device access. They carried no effect (B-2026-11-26-98).
 - A method or associated function of an inherent `impl` follows the three
   levels of visibility a free function does (design.md §4 Visibility): a
   default one called from another package, or a `private` one from another

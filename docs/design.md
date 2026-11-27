@@ -6490,7 +6490,7 @@ fn header_field_addr(h: Header) -> *const u32 {   // `Header` is not `Copy`, so 
 - reading or writing through the pointer (`*p`, `p.read()`, `p.write(v)`);
 - pointer arithmetic (`p.offset(n)`, where `n` is an `i64` count of elements, like every size and offset);
 - unaligned reads (`p.read_unaligned()`);
-- volatile reads and writes (`p.read_volatile()`, `p.write_volatile(v)`). Each is exactly one access of the whole `T` at `T`'s alignment, which the compiler neither removes, repeats, merges with another access nor reorders against another volatile access: three `write_volatile` calls to one register are three stores. The pointer must be aligned; there is no unaligned volatile form. The typed memory-mapped I/O layer over them is deferred ([systems](deferred.md#systems));
+- volatile reads and writes (`p.read_volatile()`, `p.write_volatile(v)`). Each is exactly one access of the whole `T` at `T`'s alignment, which the compiler neither removes, repeats, merges with another access nor reorders against another volatile access: three `write_volatile` calls to one register are three stores. A device access is an effect: `read_volatile` carries `reads(Hardware)` and `write_volatile` carries `writes(Hardware)`, as the `volatile_read` / `volatile_write` intrinsics do, so a `pub fn` doing one declares it. The pointer must be aligned; there is no unaligned volatile form. The typed memory-mapped I/O layer over them is deferred ([systems](deferred.md#systems));
 - casts that change the pointee type.
 
 Keeping construction safe means hot paths, such as taking a field address inside a tight loop, carry no per-iteration `unsafe { }` ceremony, while every actual access stays marked.

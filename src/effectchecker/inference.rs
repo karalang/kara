@@ -2040,6 +2040,24 @@ impl<'a> super::EffectChecker<'a> {
                     }
                     other => other,
                 };
+                // `p.read_volatile()` / `p.write_volatile(v)` on a raw pointer
+                // are the `volatile_read` / `volatile_write` intrinsics' device
+                // access, and carry their `reads(Hardware)` /
+                // `writes(Hardware)` (review ruling 2026-11-26,
+                // B-2026-11-26-98). A program type's own method of that name
+                // is not on a pointer, so it keeps its own effects.
+                if matches!(method.as_str(), "read_volatile" | "write_volatile")
+                    && self.raw_ptr_calls.contains(&SpanKey::from_span(&expr.span))
+                {
+                    let intrinsic = if method == "read_volatile" {
+                        "volatile_read"
+                    } else {
+                        "volatile_write"
+                    };
+                    if let Some(key) = self.interner.get(intrinsic) {
+                        calls.push((key, expr.span));
+                    }
+                }
                 if let Some(precise_key) = precise {
                     calls.push((precise_key, expr.span));
                     if self.method_bodies.contains_key(&precise_key) {
