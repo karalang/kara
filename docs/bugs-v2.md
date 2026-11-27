@@ -58,9 +58,9 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 801 |
+| diagnostics | 802 |
 | false-positive | 408 |
-| missing-feature | 268 |
+| missing-feature | 270 |
 | perf | 206 |
 | other | 165 |
 | soundness | 145 |
@@ -85,8 +85,8 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | runtime | 121 |
 | interp | 119 |
 | effect | 73 |
+| other | 59 |
 | resolver | 59 |
-| other | 56 |
 | codegen | 22 |
 | autopar | 7 |
 | lexer | 2 |
@@ -2437,6 +2437,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-27-44 | mir | medium | A `for` over an `Array` in a function that suspends stops before running with 'index _N is held across a suspension point' | 6f31555eec |
 | B-2026-11-27-45 | mir | medium | `Some(ref v)` with `v: Vec[u8]` passed to an `Option[Slice[u8]]` parameter passes the check and builds invalid MIR: 'field 0 of Option has the wrong… | 6f31555eec |
 | B-2026-11-27-53 | interp | medium | The MIR interpreter segfaults calling an extern "C" function that returns a 16-aligned #[repr(C)] struct (an i128 field) by value: its result slot is… | 08cc0362b8 |
+| B-2026-11-27-54 | other | medium | kara-lsp showed no diagnostics at all in a package's `_test.kara` file, and placed a resolve error in any module after the first (or a test file) at… | 0ba7490af3 |
+| B-2026-11-27-55 | other | medium | Editor completion offered no library type names at all, prelude or import-only, so after the prelude shrink typing `Mute` offered nothing and accepti… | 0ba7490af3 |
+| B-2026-11-27-56 | other | low | Go-to-definition on a library type went to the `import` line (or nowhere on the import itself, or for a prelude type), and hover on an imported name… | 0ba7490af3 |
 
 </details>
 
