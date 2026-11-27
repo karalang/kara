@@ -329,7 +329,12 @@ pub unsafe fn call_shaped(
     #[repr(C)]
     #[derive(Clone, Copy)]
     struct P4<A>(A, A, A, A);
-    #[repr(C)]
+    /// The result slot, at the largest alignment a C struct crossing by
+    /// value takes (`__int128`, `max_align_t`): C writes a 16-aligned
+    /// struct's result with aligned stores (`movaps`), so a slot at `u64`'s
+    /// 8 faulted whenever the caller's frame left it off a 16-byte boundary
+    /// (B-2026-11-27-53).
+    #[repr(C, align(16))]
     #[derive(Clone, Copy)]
     struct Mem([u64; MEMORY_RESULT_MAX / 8]);
     /// The stack arguments, in order: on x86-64 System V every one takes

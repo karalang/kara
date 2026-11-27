@@ -523,7 +523,8 @@ def main():
     all_urls = [u for _, u, _, _ in rows] + list(proto_url.values())
     body = "".join(
         f"    show(c.get({kara_str(u)}));\n" for u in all_urls)
-    src = ("fn show(r: Result[Response, HttpError]) {\n"
+    src = ("import std.net.{Client, HttpError, Response};\n\n"
+           "fn show(r: Result[Response, HttpError]) {\n"
            "    match r {\n"
            "        Ok(resp) => println(f\"ok {resp.status()} {resp.body()}\"),\n"
            "        Err(e) => println(f\"err {e.message()}\"),\n"
@@ -639,7 +640,7 @@ def main():
     # KARAC_HTTP_EXTRA_CA that names nothing usable must be an error, not a
     # silent empty trust list.
     good = proto["no ALPN"]
-    one = ("fn main() {\n    match Client.new().get(" + kara_str(f"https://127.0.0.1:{good.port}/") + ") {\n"
+    one = ("import std.net.{Client};\n\nfn main() {\n    match Client.new().get(" + kara_str(f"https://127.0.0.1:{good.port}/") + ") {\n"
            "        Ok(resp) => println(f\"ok {resp.status()} {resp.body()}\"),\n"
            "        Err(e) => println(f\"err {e.message()}\"),\n    }\n}\n")
     empty = Path(TMP) / "empty.pem"
