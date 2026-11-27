@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["references", "views"]
+expected_from = "spec"
+rules = ["5.1"]
+backends = []
+env = {}
+note = "core-semantics §5.1: cs.303: a reference may be a return type, or inside one (`Option[ref T]`, a tuple). `longest` returns `ref String` (\"ccc\"), `find_len` returns `Option[ref String]` (Some \"bb\" for length 2, None for 9), and `ends` returns a tuple of two references (\"a\", \"ccc\"). (Sentence map 2026-11-27, cell c5/r_ref_in_return_types.)"

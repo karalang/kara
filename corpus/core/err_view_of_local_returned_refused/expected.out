@@ -1,0 +1,1 @@
+error[E0509]: main.kara:6:5: returned borrow does not originate from a borrowed parameter; its source is dropped when the function returns, leaving a dangling reference

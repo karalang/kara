@@ -1,0 +1,10 @@
+// cs.720 §9.6: writing a `mut` field through a captured shared handle is a
+// read, but assigning the handle itself mutates the capture, so this closure
+// is a MutFn and is refused at an Fn slot, naming `log_h`.
+shared struct Log { mut n: i64 }
+fn apply(f: Fn()) { f(); }
+fn main() {
+    let mut log_h = Log { n: 1 };
+    apply(|| { log_h = Log { n: 2 }; });
+    println(log_h.n);
+}

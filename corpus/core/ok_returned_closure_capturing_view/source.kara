@@ -1,0 +1,9 @@
+// cs.413, cs.414: a returned closure that captures a view is a view result,
+// which §5.4 allows: `mk(s: Str) -> Fn() -> i64 { || s.len() }` is accepted.
+// mk(t.as_str())() = len("abc") = 3.
+fn mk(s: Str) -> Fn() -> i64 { || s.len() }
+fn main() {
+    let t = "abc".to_string();
+    let f = mk(t.as_str());
+    println(f"{f()}");
+}

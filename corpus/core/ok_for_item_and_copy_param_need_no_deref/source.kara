@@ -1,0 +1,10 @@
+// cs.436: `for x in v { total += x }` over a `Vec[i64]` needs no `*`, and
+// neither does a bare parameter of a `Copy` type. total = 1+2+3 = 6;
+// double(6) = 12.
+fn double(n: i64) -> i64 { n + n }
+fn main() {
+    let v: Vec[i64] = [1, 2, 3];
+    let mut total = 0;
+    for x in v { total += x; }
+    println(f"{total} {double(total)}");
+}

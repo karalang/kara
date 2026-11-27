@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+expected_from = "spec"
+rules = ["7.7"]
+backends = []
+env = {}
+note = "core-semantics §7.7: cs.581 (\"however that value was produced\"). The failure value here comes from a tail call and from `return` of a call, not a literal `Err(...)`: the function still returns the failure variant, so each errdefer runs. (Sentence map 2026-11-27, cell c7/d_errdefer_runs_on_a_failure_however_produced.)"

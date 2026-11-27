@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closures"]
+expected_from = "spec"
+rules = ["9.4"]
+backends = []
+env = {}
+note = "core-semantics §9.4: cs.687 §9.4: a by-move capture moves the value into the closure when the closure is created. `f` moves `r` (its body moves it), so R1 belongs to `f` from its creation; `f` is never called and drops at the inner block's end, taking R1 with it (d1 before \"after\"), and `r` does not drop again. Expected: made, d1, after. (Sentence map 2026-11-27, cell c3_c9/k_by_move_capture_taken_at_creation.)"

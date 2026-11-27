@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+expected_from = "spec"
+rules = ["7.4"]
+backends = []
+env = {}
+note = "core-semantics §7.4: cs.550 (an argument passed to a borrowed or `mut ref` parameter or receiver drops at the end of the enclosing statement). Each temp outlives the later `say` call of the same statement: say2 then d1; say4 then d3 (receiver); say6 then d6 (mut ref; bump made it 6). In the println statement both the argument's temp and the output come first, the drop after: say8, \"7 8\", d7. (Sentence map 2026-11-27, cell c7/d_borrowed_arg_temp_drops_at_statement_end.)"

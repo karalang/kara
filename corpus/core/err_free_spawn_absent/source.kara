@@ -1,0 +1,6 @@
+// cs.682 §9.3: there is no free `spawn`; a bare `spawn(...)` call does not
+// resolve, so the program is refused.
+fn main() {
+    let h = spawn(|| 1);
+    println(h.join());
+}

@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0519"
+exit = 1
+tags = ["closures"]
+class = "a"
+expected_from = "spec"
+rules = ["9.6"]
+backends = []
+env = {}
+note = "core-semantics §9.6: cs.725 §9.6: the capture prefix `own |x|` is removed, so writing it is refused. (Sentence map 2026-11-27, cell c3_c9/k_capture_prefix_own_removed.) The expected.out wording of an error pin is guidance, not a byte oracle."

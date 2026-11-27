@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0516"
+exit = 1
+tags = ["references", "views"]
+class = "a"
+expected_from = "spec"
+rules = ["5.6"]
+backends = []
+env = {}
+note = "core-semantics §5.6: cs.400: a place overlaps its prefixes: while `m` (a `mut ref w.a`) is live, using `w` (a prefix) is refused, at line 9. (Sentence map 2026-11-27, cell c5/r_overlap_prefix_of_borrowed_place.) The expected.out wording of an error pin is guidance, not a byte oracle."

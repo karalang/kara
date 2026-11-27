@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0200"
+exit = 1
+tags = ["references", "views"]
+class = "a"
+expected_from = "spec"
+rules = ["5.1"]
+backends = []
+env = {}
+note = "core-semantics §5.1: cs.308: \"the same holds for `ref`\": `let p: ref P = w.p;` does not borrow (P is not Copy), so it is an error, and its fix inserts `ref` before the initializer. (Sentence map 2026-11-27, cell c5/r_let_ref_annotation_fix_inserts_ref.) The expected.out wording of an error pin is guidance, not a byte oracle."

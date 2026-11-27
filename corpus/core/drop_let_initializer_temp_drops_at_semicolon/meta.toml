@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+expected_from = "spec"
+rules = ["7.4"]
+backends = []
+env = {}
+note = "core-semantics §7.4: cs.549 (a `let` initializer's temporary drops at the `;`, after the bindings take what they move). The R{1} argument drops at the first `;` (before n1). In the tuple pattern `a` takes element 0; element 1 is bound by nothing and drops at the `;` (d3) before a2; `a` drops at main's end (d2). (Sentence map 2026-11-27, cell c7/d_let_initializer_temp_drops_at_semicolon.)"

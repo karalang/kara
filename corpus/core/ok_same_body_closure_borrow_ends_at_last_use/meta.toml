@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closures"]
+expected_from = "spec"
+rules = ["9.4"]
+backends = []
+env = {}
+note = "core-semantics §9.4: §9.4 (function value a call returns; no cs id): a closure made in the same body has captures its caller can see, so its borrow of `name` ends at its last use, and the write after `f(1)` is allowed. Expected: 3, abc. (Sentence map 2026-11-27, cell c3_c9/k_same_body_closure_borrow_ends_at_last_use.)"

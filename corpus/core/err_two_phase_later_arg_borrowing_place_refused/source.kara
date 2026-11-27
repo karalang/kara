@@ -1,0 +1,10 @@
+// cs.407: a later argument whose value still borrows the place when the
+// call starts is an error: `v[0]` passed to the borrowed `s: String` lends a
+// reference into `v` that the call holds while `v` is mutably borrowed.
+// Refused at the call (line 8).
+fn put(v: mut ref Vec[String], s: String) { v.push(s.clone()); }
+fn main() {
+    let mut v = ["a".to_string()];
+    put(mut v, v[0]);
+    println(f"{v.len()}");
+}

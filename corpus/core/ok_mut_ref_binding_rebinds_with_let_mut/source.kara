@@ -1,0 +1,11 @@
+// cs.310: with `let mut`, the `mut ref` binding may be rebound. `up` first
+// writes a (1 -> 2), is rebound to b, then writes b (2 -> 12). Prints "2 12".
+fn main() {
+    let mut a = 1;
+    let mut b = 2;
+    let mut up = mut ref a;
+    *up += 1;
+    up = mut ref b;
+    *up += 10;
+    println(f"{a} {b}");
+}

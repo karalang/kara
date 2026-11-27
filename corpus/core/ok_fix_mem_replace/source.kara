@@ -1,0 +1,10 @@
+// cs.214 §3.7: the `mem.replace(place, value)` fix. It returns the old value
+// ("x") and leaves the new one ("y") in the place.
+// Expected: x, y.
+struct User { name: String }
+fn rename(u: mut ref User, n: own String) -> String { mem.replace(mut u.name, n) }
+fn main() {
+    let mut u = User { name: "x".to_string() };
+    println(rename(mut u, "y".to_string()));
+    println(u.name);
+}

@@ -1,0 +1,8 @@
+// cs.209 §3.7: moving a non-Copy value out of a place rooted at a `mut ref`
+// parameter is an error (a `mut ref` lets you write, not take).
+struct User { nickname: String }
+fn grab(u: mut ref User) -> String { u.nickname }
+fn main() {
+    let mut u = User { nickname: "x".to_string() };
+    println(grab(mut u));
+}

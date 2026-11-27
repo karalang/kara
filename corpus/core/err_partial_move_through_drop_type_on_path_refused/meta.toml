@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error"
+exit = 1
+tags = ["ownership", "moves"]
+class = "a"
+expected_from = "spec"
+rules = ["3.6", "3.7"]
+backends = []
+env = {}
+note = "core-semantics §3.6, §3.7: cs.200 §3.6 / cs.212 §3.7: a part may not be moved out when any type on the path from the root to it has a Drop body. `outer.w.payload` passes through `W`, which has one, so the move is an error even though `O` (the root's type) has no Drop body. (Sentence map 2026-11-27, cell c3_c9/m_partial_move_through_drop_type_on_path_refused.) The expected.out wording of an error pin is guidance, not a byte oracle."

@@ -1,0 +1,16 @@
+// cs.185 §3.3: moving `s` (declared outside the loop) inside the body is
+// allowed because the only path back to the loop head assigns `s` again.
+// Iterations: take("a"), s=b0; take("b0"), s=b1; take("b1"), s=b2; then the
+// loop ends and `s` is "b2".
+// Expected: a, b0, b1, b2.
+fn take(s: own String) { println(s); }
+fn main() {
+    let mut s = "a".to_string();
+    let mut i = 0;
+    while i < 3 {
+        take(s);
+        s = f"b{i}";
+        i = i + 1;
+    }
+    println(s);
+}

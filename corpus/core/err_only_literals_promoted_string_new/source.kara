@@ -1,0 +1,8 @@
+// cs.355, cs.356: `String.new()` in a `ref` slot is a temporary; a result
+// borrowing it may not outlive the statement. Refused at the `let` (line 6).
+fn pick(a: String, b: String) -> ref String { if a.len() > b.len() { a } else { b } }
+fn main() {
+    let s = "abc".to_string();
+    let r = pick(s, String.new());
+    println(r);
+}

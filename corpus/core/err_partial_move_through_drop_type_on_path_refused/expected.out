@@ -1,0 +1,1 @@
+error[partial_move_of_drop_struct]: main.kara:10:13: cannot move a non-`Copy` field out of `W`, which has a `Drop` body: the body needs every field when it runs (core-semantics.md §3.7). Write `.clone()` to take a copy, or keep using it in place

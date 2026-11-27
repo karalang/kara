@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0517"
+exit = 1
+tags = ["references", "views"]
+class = "a"
+expected_from = "spec"
+rules = ["5.9"]
+backends = []
+env = {}
+note = "core-semantics §5.9: cs.424, cs.426: a borrowed `self` receiver is read-only: `self.n += 1` is refused (line 5). (Sentence map 2026-11-27, cell c5/r_self_receiver_not_compound_assignable.) The expected.out wording of an error pin is guidance, not a byte oracle."

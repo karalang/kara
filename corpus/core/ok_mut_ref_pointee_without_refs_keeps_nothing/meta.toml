@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["references", "views"]
+expected_from = "spec"
+rules = ["5.3"]
+backends = []
+env = {}
+note = "core-semantics §5.3: cs.329 (contrast), cs.358: a `mut ref` pointee that cannot hold a reference (`Vec[i64]`) takes no origins from the other arguments, so `t` may be written while `lens` is live. lens = [1]; t = \"tu\". Prints \"[1] tu\". (Sentence map 2026-11-27, cell c5/r_mut_ref_pointee_without_refs_keeps_nothing.)"

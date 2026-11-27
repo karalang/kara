@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0209"
+exit = 1
+tags = ["references", "views"]
+class = "a"
+expected_from = "spec"
+rules = ["5.10"]
+backends = []
+env = {}
+note = "core-semantics §5.10: cs.439: `*c` on a named function's `c: char` is an error, as on a closure parameter, and its machine-applicable fix removes the `*`. (Sentence map 2026-11-27, cell c5/r_deref_of_char_param_refused.) The expected.out wording of an error pin is guidance, not a byte oracle."

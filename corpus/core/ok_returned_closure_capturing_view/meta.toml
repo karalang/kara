@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["references", "views"]
+expected_from = "spec"
+rules = ["5.7"]
+backends = []
+env = {}
+note = "core-semantics §5.7: cs.413, cs.414: a returned closure that captures a view is a view result, which §5.4 allows: `mk(s: Str) -> Fn() -> i64 { || s.len() }` is accepted. mk(t.as_str())() = len(\"abc\") = 3. (Sentence map 2026-11-27, cell c5/r_returned_closure_capturing_view.)"

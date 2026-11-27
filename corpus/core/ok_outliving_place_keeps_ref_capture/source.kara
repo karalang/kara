@@ -1,0 +1,18 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+// cs.663 §9.1: a place that outlives the closure keeps the inferred capture
+// (`ref` for a read). So `r` is not moved in: it does not drop when `f` drops
+// at the inner block's end, it is still usable after, and it drops at
+// main's end.
+// (`val(r)` captures `r` whole.)
+// Expected: 1, after block, 1, d1.
+fn val(r: R) -> i64 { r.id }
+fn main() {
+    let r = R { id: 1 };
+    {
+        let f = || val(r);
+        println(f());
+    }
+    println("after block");
+    println(r.id);
+}

@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0200"
+exit = 1
+tags = ["references", "views"]
+class = "a"
+expected_from = "spec"
+rules = ["5.5"]
+backends = []
+env = {}
+note = "core-semantics §5.5: cs.392, cs.393: a view whose origin is a temporary must not outlive the statement that created the temporary; there is no temporary lifetime extension. `make().as_str()` views a temporary `String`, so keeping it in `s` is refused, at the `let` (line 7). (Sentence map 2026-11-27, cell c5/r_view_of_temporary_outlives_statement_refused.) The expected.out wording of an error pin is guidance, not a byte oracle."

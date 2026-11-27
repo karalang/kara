@@ -1,0 +1,10 @@
+// cs.214 §3.7: the `Option.take()` fix. It moves the payload out through a
+// `mut ref` and leaves None.
+// Expected: Some(x), None.
+struct Slot { item: Option[String] }
+fn pop(s: mut ref Slot) -> Option[String] { s.item.take() }
+fn main() {
+    let mut s = Slot { item: Some("x".to_string()) };
+    println(f"{pop(mut s)}");
+    println(f"{pop(mut s)}");
+}

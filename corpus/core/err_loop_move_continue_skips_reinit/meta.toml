@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0500"
+exit = 1
+tags = ["ownership", "moves"]
+class = "a"
+expected_from = "spec"
+rules = ["3.3"]
+backends = []
+env = {}
+note = "core-semantics §3.3: cs.185 §3.3: the `continue` path returns to the loop head without assigning `s` again, so not every path back initializes it: the move inside the body is E0500. (Sentence map 2026-11-27, cell c3_c9/m_loop_move_continue_skips_reinit.) The expected.out wording of an error pin is guidance, not a byte oracle."

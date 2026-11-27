@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+expected_from = "spec"
+rules = ["7.7"]
+backends = []
+env = {}
+note = "core-semantics §7.7: cs.581, cs.582 (an `errdefer` runs only when the function returns the failure variant of its `Result` or `Option` return type: `?`, `return Err(...)`, `return None`, or a tail `Err(...)`), cs.583 (otherwise it is skipped). Each function is called once succeeding (no errdefer line) and once failing (its errdefer line, then the caller's line). `?` on an Option counts too. (Sentence map 2026-11-27, cell c7/d_errdefer_runs_on_every_failure_form.)"

@@ -1,0 +1,9 @@
+// cs.316, cs.322: `Slice[T]` is a view and borrows like a reference: while
+// `sl` is live, `v` may not be written. Refused at the `push` (line 7).
+fn main() {
+    let mut v: Vec[i64] = [1, 2, 3];
+    let sl = v.as_slice();
+    let n = sl.len();
+    v.push(4);
+    println(f"{n} {sl.len()}");
+}

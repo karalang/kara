@@ -1,0 +1,12 @@
+// cs.363: with no receiver, the result borrows every view parameter, so
+// `pv(names, t)` keeps `t`'s view of `text` borrowed while `r` is live:
+// writing `text` then is refused, at the `push_str` (line 10).
+fn pv(a: Vec[String], s: Str) -> ref String { ref a[0] }
+fn main() {
+    let names = ["a".to_string()];
+    let mut text = "abc".to_string();
+    let t: Str = text.as_str();
+    let r = pv(names, t);
+    text.push_str("d");
+    println(r);
+}

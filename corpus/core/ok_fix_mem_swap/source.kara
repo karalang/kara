@@ -1,0 +1,10 @@
+// cs.214 §3.7: the `mem.swap(a, b)` fix exchanges two places' values.
+// Expected: "b a".
+struct User { name: String }
+fn trade(a: mut ref User, b: mut ref User) { mem.swap(mut a.name, mut b.name); }
+fn main() {
+    let mut a = User { name: "a".to_string() };
+    let mut b = User { name: "b".to_string() };
+    trade(mut a, mut b);
+    println(f"{a.name} {b.name}");
+}

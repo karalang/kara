@@ -1,0 +1,9 @@
+// cs.312: at a call argument the marker `mut` is the only spelling;
+// `f(mut ref x)` is not accepted (§4.1: `ref` is never written at a call
+// site). Refused at the call (line 7).
+fn bump(x: mut ref i64) { *x += 1; }
+fn main() {
+    let mut n = 1;
+    bump(mut ref n);
+    println(f"{n}");
+}

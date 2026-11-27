@@ -1,0 +1,11 @@
+// cs.424, cs.426: a borrowed `self` receiver is read-only: `self.n += 1`
+// is refused (line 5).
+struct C { n: i64 }
+impl C {
+    fn bump(self) { self.n += 1; }
+}
+fn main() {
+    let c = C { n: 0 };
+    c.bump();
+    println(f"{c.n}");
+}

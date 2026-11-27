@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["ownership", "moves"]
+expected_from = "spec"
+rules = ["3.6"]
+backends = []
+env = {}
+note = "core-semantics §3.6: cs.200 §3.6: a field may be moved out of an `own` parameter. `split` moves `p.b` out, still reads the remaining field `p.a` (cs.202), and returns `b`. At split's end the unmoved field `p.a` drops: d1. Back in main `r` (R2) drops at main's end. Expected: a1, d1, back, d2. (Sentence map 2026-11-27, cell c3_c9/m_partial_move_from_own_param.)"

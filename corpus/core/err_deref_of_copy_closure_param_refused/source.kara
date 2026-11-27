@@ -1,0 +1,7 @@
+// cs.439: writing `*j` on a closure parameter that is an `i64` copy is an
+// error, and its machine-applicable fix removes the `*`.
+fn main() {
+    let w: Vec[i64] = [0, 5, 13];
+    let j = (1..3).find(|j| w[*j] == 13);
+    println(f"{j ?? -1}");
+}

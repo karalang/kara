@@ -1,0 +1,9 @@
+// cs.680 §9.3: the callee may call a function-typed parameter or pass it to
+// another non-escaping parameter. outer: inner(f, 1) = 11, f(2) = 12.
+// Expected: 23.
+fn inner(f: Fn(i64) -> i64, x: i64) -> i64 { f(x) }
+fn outer(f: Fn(i64) -> i64) -> i64 { inner(f, 1) + f(2) }
+fn main() {
+    let k = 10;
+    println(outer(|x| x + k));
+}

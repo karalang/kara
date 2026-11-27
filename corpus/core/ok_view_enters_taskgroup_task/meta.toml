@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["references", "views"]
+expected_from = "spec"
+rules = ["5.7"]
+backends = []
+env = {}
+note = "core-semantics §5.7: cs.416: a view may enter a `TaskGroup` task that joins inside the scope of every origin: the task reads the view `s` of \"abc\" and is joined before `text` drops. Prints \"3\". (Sentence map 2026-11-27, cell c5/r_view_enters_taskgroup_task.)"

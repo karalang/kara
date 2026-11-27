@@ -1,0 +1,11 @@
+// cs.698 §9.5: a second task may not capture by `mut ref` a place another task
+// of the group already captured.
+import std.sync.{TaskGroup};
+fn main() {
+    let mut counter_v: Vec[i64] = Vec.new();
+    let g = TaskGroup.new();
+    let h1 = g.spawn(|| { counter_v.push(1); });
+    let h2 = g.spawn(|| { counter_v.push(2); });
+    h1.join();
+    h2.join();
+}

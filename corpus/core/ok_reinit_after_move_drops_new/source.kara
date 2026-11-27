@@ -1,0 +1,13 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+// cs.188 §3.4: assigning to a moved place makes it initialized again. `r`
+// moves into `eat` (eat1, then d1 at eat's end); `r = R{2}` drops nothing
+// (the place held no value) and `r` is usable again; it drops at main's end.
+// Expected: eat1, d1, now2, d2.
+fn eat(r: own R) { println(f"eat{r.id}"); }
+fn main() {
+    let mut r = R { id: 1 };
+    eat(r);
+    r = R { id: 2 };
+    println(f"now{r.id}");
+}

@@ -1,0 +1,11 @@
+// cs.702 §9.5: the view `txt_view` is moved into the task; its origin
+// `txt_origin` is declared before `g`, so it outlives the group.
+// Expected: 4.
+import std.sync.{TaskGroup};
+fn main() {
+    let txt_origin = "abcd".to_string();
+    let g = TaskGroup.new();
+    let txt_view = txt_origin.as_str();
+    let h = g.spawn(|| txt_view.len());
+    println(h.join());
+}

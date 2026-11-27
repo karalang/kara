@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closures"]
+expected_from = "spec"
+rules = ["9.2"]
+backends = []
+env = {}
+note = "core-semantics §9.2: cs.666-667 §9.2: a closure with a `ref` capture is a view; it can be called and passed down to a (non-escaping) parameter. Expected: 3, 6, abc. (Sentence map 2026-11-27, cell c3_c9/k_view_closure_called_and_passed_down.)"

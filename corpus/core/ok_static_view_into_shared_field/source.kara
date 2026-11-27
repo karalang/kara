@@ -1,0 +1,7 @@
+// cs.350 with cs.410: a `Str` literal is static data with no origins, so
+// §5.7 does not limit it; it may be stored in a `shared` field. Prints "lit".
+shared struct S { name: Str }
+fn main() {
+    let s = S { name: "lit" };
+    println(s.name);
+}

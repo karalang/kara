@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+expected_from = "spec"
+rules = ["7.9"]
+backends = []
+env = {}
+note = "core-semantics §7.9: cs.605 (partially moved values drop their remaining parts in the §7.8 order, skipping the moved parts). x takes t.1; LIFO pops x (d2), then t's remaining elements last to first: d3, d1. (Sentence map 2026-11-27, cell c7/d_partial_move_tuple_drops_the_rest.)"

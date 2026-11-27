@@ -1,0 +1,14 @@
+// cs.712 §9.6: a `mut ref` is a unique mutable access, so a MutFn can be
+// called through one. Two calls of `twice` -> 4 increments of `n`.
+// Expected: 4.
+fn twice(f: mut ref MutFn()) {
+    f();
+    f();
+}
+fn main() {
+    let mut n = 0;
+    let mut bump = || { n += 1; };
+    twice(mut bump);
+    twice(mut bump);
+    println(n);
+}

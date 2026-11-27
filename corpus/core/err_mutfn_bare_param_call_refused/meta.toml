@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0518"
+exit = 1
+tags = ["closures"]
+class = "a"
+expected_from = "spec"
+rules = ["9.6"]
+backends = []
+env = {}
+note = "core-semantics §9.6: cs.714 §9.6: a shared borrow of a MutFn (a bare parameter) cannot call it. (Sentence map 2026-11-27, cell c3_c9/k_mutfn_bare_param_call_refused.) The expected.out wording of an error pin is guidance, not a byte oracle."

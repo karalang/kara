@@ -1,0 +1,14 @@
+// cs.204 §3.6: the root is usable as a whole only once EVERY moved part is
+// restored. Two fields move out and only one is assigned back, so passing
+// `parcel` whole is still an error.
+struct P { a: String, b: String }
+fn consume(p: own P) { println(p.a); }
+fn main() {
+    let mut parcel = P { a: "a".to_string(), b: "b".to_string() };
+    let x = parcel.a;
+    let y = parcel.b;
+    parcel.a = "c".to_string();
+    consume(parcel);
+    println(x);
+    println(y);
+}

@@ -1,0 +1,24 @@
+// cs.433-cs.435: a `ref T` / `mut ref T` whose `T` is `Copy` is read as a
+// `T` wherever a `T` is expected: an operator operand, an argument, a `let`
+// with a `T` annotation, a field or element of a literal, a return value.
+// Nothing is moved, the reference stays usable, and `*r` reads explicitly.
+// r -> 4, m -> 6 (after *m += 1: 7).
+// r + 1 = 5; sq(r) = 16; k = 4; P{x: r}.x = 4; [r, m][1] = 7; get(m) = 7;
+// *r = 4. Prints "5 16 4 4 7 7 4 7".
+struct P { x: i64 }
+fn sq(n: i64) -> i64 { n * n }
+fn get(r: ref i64) -> i64 { r }
+fn main() {
+    let a = 4;
+    let mut b = 6;
+    let r = ref a;
+    let m = mut ref b;
+    *m += 1;
+    let op = r + 1;
+    let arg = sq(r);
+    let k: i64 = r;
+    let lit = P { x: r };
+    let arr: Vec[i64] = [r, m];
+    let ret = get(m);
+    println(f"{op} {arg} {k} {lit.x} {arr[1]} {ret} {*r} {*m}");
+}

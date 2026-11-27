@@ -1,0 +1,15 @@
+// cs.593 (struct fields drop in reverse declaration order). The literal lists
+// the fields as c, a, b; declaration order is a, b, c, so the drop is c, b, a:
+// d3 d2 d1 (reverse literal order would be d2 d1 d3).
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+fn r(i: i64) -> R { R { id: i } }
+fn see(x: R) -> i64 { x.id }
+fn say(i: i64) -> i64 { println(f"say{i}"); i }
+fn add(a: i64, b: i64) -> i64 { a + b }
+fn take(x: own R) { println(f"took{x.id}"); }
+struct P { a: R, b: R, c: R }
+fn main() {
+    let p = P { c: R { id: 3 }, a: R { id: 1 }, b: R { id: 2 } };
+    println("end");
+}

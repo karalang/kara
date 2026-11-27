@@ -1,0 +1,10 @@
+// cs.325: projecting a place `w.a` borrows `w.a`. While `r` is live,
+// writing `w.a` is refused (§5.6), at the assignment (line 8).
+struct W { a: String, b: String }
+fn main() {
+    let mut w = W { a: "a".to_string(), b: "b".to_string() };
+    let r = ref w.a;
+    let n = r.len();
+    w.a = "z".to_string();
+    println(f"{n} {r}");
+}

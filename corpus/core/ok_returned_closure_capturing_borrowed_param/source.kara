@@ -1,0 +1,9 @@
+// cs.414: a borrowed parameter counts as a view: the returned closure
+// captures the reference `p` holds, so `mk(p: String) -> Fn(String) -> String`
+// is accepted. mk(name)("c") = "ab" + "c". Prints "abc".
+fn mk(p: String) -> Fn(String) -> String { |s| f"{p}{s}" }
+fn main() {
+    let name = "ab".to_string();
+    let f = mk(name);
+    println(f("c"));
+}

@@ -1,0 +1,9 @@
+// cs.321, cs.322: a closure that captures by reference is a view (§9.1: it
+// only reads `s`, so it captures by `ref`): while `c` is live, `s` may not be
+// written. Refused at the `push_str` (line 7).
+fn main() {
+    let mut s = "ab".to_string();
+    let c = || s.len();
+    s.push_str("c");
+    println(f"{c()}");
+}

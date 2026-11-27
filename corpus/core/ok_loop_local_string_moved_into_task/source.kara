@@ -1,0 +1,19 @@
+// cs.699 §9.5: a non-Copy loop-body local is moved into each task, which owns
+// it. Two tasks each return "task".len() = 4.
+// Expected: 8.
+import std.sync.{TaskGroup, TaskHandle};
+fn main() {
+    let g = TaskGroup.new();
+    let mut hs: Vec[TaskHandle[i64]] = Vec.new();
+    let mut k = 0;
+    while k < 2 {
+        let label = "task".to_string();
+        hs.push(g.spawn(|| label.len()));
+        k = k + 1;
+    }
+    let mut total = 0;
+    for h in hs.into_iter() {
+        total = total + h.join();
+    }
+    println(total);
+}

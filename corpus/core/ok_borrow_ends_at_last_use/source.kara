@@ -1,0 +1,10 @@
+// cs.403, cs.404: a borrow is live from its creation to its last use (not
+// to the end of its scope), so after `m`'s last use `v` may be used again
+// while `m` is still in scope. v = [1, 2]. Prints "[1, 2] 2".
+fn main() {
+    let mut v: Vec[i64] = [1];
+    let m = mut ref v;
+    m.push(2);
+    let n = v.len();
+    println(f"{v} {n}");
+}

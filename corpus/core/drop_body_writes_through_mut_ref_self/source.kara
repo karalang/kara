@@ -1,0 +1,21 @@
+// cs.613, cs.614 (form: `fn drop(mut ref self)`). The body may write self
+// through the `mut ref`: C{n: 2} multiplies n by 10 and prints dC20;
+// then its field `inner` drops (d2), after C's body (cs.590, cs.592).
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+fn r(i: i64) -> R { R { id: i } }
+fn see(x: R) -> i64 { x.id }
+fn say(i: i64) -> i64 { println(f"say{i}"); i }
+fn add(a: i64, b: i64) -> i64 { a + b }
+fn take(x: own R) { println(f"took{x.id}"); }
+struct C { n: i64, inner: R }
+impl Drop for C {
+    fn drop(mut ref self) {
+        self.n = self.n * 10;
+        println(f"dC{self.n}");
+    }
+}
+fn main() {
+    let c = C { n: 2, inner: R { id: 2 } };
+    println(f"end{c.n}");
+}

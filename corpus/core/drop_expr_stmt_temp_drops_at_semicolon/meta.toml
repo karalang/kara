@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+expected_from = "spec"
+rules = ["7.4"]
+backends = []
+env = {}
+note = "core-semantics §7.4: cs.548 (a temporary of an expression statement `e;` drops at the `;`). Each discarded value drops before the next statement prints. (Sentence map 2026-11-27, cell c7/d_expr_stmt_temp_drops_at_semicolon.)"

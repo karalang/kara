@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0516"
+exit = 1
+tags = ["references", "views"]
+class = "a"
+expected_from = "spec"
+rules = ["5.2"]
+backends = []
+env = {}
+note = "core-semantics §5.2: cs.318, cs.322: a struct with a `ref` field is a view: while `h` is live, `s` may not be written. Refused at the assignment (line 7). (Sentence map 2026-11-27, cell c5/r_borrowed_struct_borrows.) The expected.out wording of an error pin is guidance, not a byte oracle."

@@ -1,0 +1,29 @@
+// cs.660 §9.1: the spec's two examples compile. `c` is a loop-body local, so it
+// drops before `tg` and is copied into each task; `name` is declared after
+// `tg`, so it drops before `tg` and is moved into its task.
+// Tasks: work(0..3) = 0+1+4+9 = 14; log_len("alice") = 5.
+// Expected: 14, 5.
+import std.sync.{TaskGroup, TaskHandle};
+struct Req { name: String }
+fn work(c: i64) -> i64 { c * c }
+fn log_len(name: String) -> i64 { name.len() }
+fn main() {
+    let tg = TaskGroup.new();
+    let n = 4;
+    let mut hs: Vec[TaskHandle[i64]] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        let c = i;
+        hs.push(tg.spawn(|| work(c)));
+        i = i + 1;
+    }
+    let req = Req { name: "alice".to_string() };
+    let name = req.name.clone();
+    let h = tg.spawn(|| log_len(name));
+    let mut total = 0;
+    for x in hs.into_iter() {
+        total = total + x.join();
+    }
+    println(total);
+    println(h.join());
+}

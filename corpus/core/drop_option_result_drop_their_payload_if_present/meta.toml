@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+expected_from = "spec"
+rules = ["7.8"]
+backends = []
+env = {}
+note = "core-semantics §7.8: cs.597 (`Option` / `Result`: the payload, if present). a=Some(1), b=None, c=Ok(2), d=Err(3); the LIFO pops d, c, b, a: d3, d2, (nothing), d1. (Sentence map 2026-11-27, cell c7/d_option_result_drop_their_payload_if_present.)"

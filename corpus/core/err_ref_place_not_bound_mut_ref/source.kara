@@ -1,0 +1,13 @@
+// cs.427: a place through a `ref` may not be mutably borrowed by a
+// `mut ref name` binding: `Some(mut ref p)` on a bare parameter's field is
+// refused (line 7).
+struct P { n: i64 }
+struct W { o: Option[P] }
+fn set(w: W) {
+    match w.o { Some(mut ref p) => { p.n = 1; } None => {} }
+}
+fn main() {
+    let w = W { o: Some(P { n: 0 }) };
+    set(w);
+    println(f"{w.o.is_some()}");
+}

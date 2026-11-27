@@ -1,0 +1,1 @@
+error[E0517]: main.kara:5:21: the receiver is `ref self`, so an assignment through `self` cannot modify it (core-semantics.md §5.9). Declare the method `mut ref self`

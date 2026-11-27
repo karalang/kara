@@ -1,0 +1,12 @@
+// cs.646 §9.1: capture modes are inferred per captured PLACE (disjoint field
+// capture). `f` reads only `p.a`, so it borrows `p.a`, not `p`; moving `p.b`
+// out while `f` is live is fine.
+// Expected: eat B, 1.
+struct P { a: String, b: String }
+fn eat(s: own String) { println(f"eat {s}"); }
+fn main() {
+    let p = P { a: "A".to_string(), b: "B".to_string() };
+    let f = || p.a.len();
+    eat(p.b);
+    println(f());
+}

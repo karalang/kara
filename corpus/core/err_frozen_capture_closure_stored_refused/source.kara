@@ -1,0 +1,11 @@
+// cs.665 §9.1: a `frozen` handle is never counted, so a closure that captures
+// one is a view; a struct field of function type is escaping (§9.3), and a
+// view may not flow into an escaping closure (§5.7).
+shared struct Node { val: i64 }
+struct Holder { f: Fn() -> i64 }
+fn main() {
+    let node_src = Node { val: 2 };
+    let node_frz = freeze node_src;
+    let h = Holder { f: || node_frz.val };
+    println((h.f)());
+}

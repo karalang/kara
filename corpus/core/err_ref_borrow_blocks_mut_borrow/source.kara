@@ -1,0 +1,9 @@
+// cs.399: while a `ref` borrow of `s` is live, `s` may not be mutably
+// borrowed. Refused at the `mut ref` (line 6).
+fn main() {
+    let mut s = "a".to_string();
+    let r = ref s;
+    let m = mut ref s;
+    m.push_str("b");
+    println(r);
+}

@@ -1,0 +1,10 @@
+// cs.709 §9.6: an Fn may be called any number of times, through any access,
+// `ref` included. (1+10)+(2+10)+(3+10) = 36; then f(0) = 10.
+// Expected: 36, 10.
+fn thrice(f: ref Fn(i64) -> i64) -> i64 { f(1) + f(2) + f(3) }
+fn main() {
+    let k = 10;
+    let f = |x: i64| x + k;
+    println(thrice(f));
+    println(f(0));
+}

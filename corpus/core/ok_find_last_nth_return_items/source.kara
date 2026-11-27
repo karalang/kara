@@ -1,0 +1,11 @@
+// cs.368: `last`, `nth` and `find` results borrow the collection the
+// iterator iterates, not the (temporary) iterator, so a function can return
+// them. v = ["a", "bb", "ccc"]: find(len > 1) = "bb", last = "ccc",
+// nth(1) = "bb". Prints "bb ccc bb".
+fn long_one(v: Vec[String]) -> Option[ref String] { v.iter().find(|s| s.len() > 1) }
+fn last_of(v: Vec[String]) -> Option[ref String] { v.iter().last() }
+fn second(v: Vec[String]) -> Option[ref String] { v.iter().nth(1) }
+fn main() {
+    let v = ["a".to_string(), "bb".to_string(), "ccc".to_string()];
+    println(f"{long_one(v).unwrap()} {last_of(v).unwrap()} {second(v).unwrap()}");
+}

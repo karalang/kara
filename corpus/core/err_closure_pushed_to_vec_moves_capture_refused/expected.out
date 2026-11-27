@@ -1,0 +1,1 @@
+error[E0500]: main.kara:7:13: value 's' was moved into an escaping closure (captured at line 6:16), used again here: a closure that is returned, stored, or sent to a task captures by move (core-semantics.md §9.3)

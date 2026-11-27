@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+expected_from = "spec"
+rules = ["7.3", "7.7"]
+backends = []
+env = {}
+note = "core-semantics §7.3, §7.7: cs.540 (bindings and `defer` / `errdefer` blocks are pushed in the order they are introduced and popped in reverse at scope end). Pushed: a, errdefer A, b, defer B, c, errdefer C. On the failing call all pop in reverse; on the Ok call the errdefers are skipped (cs.583) and the rest keep their order. (Sentence map 2026-11-27, cell c7/d_errdefer_shares_the_lifo_with_bindings.)"

@@ -1,0 +1,8 @@
+// cs.405, cs.406: the borrow for a `mut ref self` receiver starts after
+// every argument is evaluated, so `v.push(v.len())` is legal. v = [5, 1, 2].
+fn main() {
+    let mut v: Vec[i64] = [5];
+    v.push(v.len());
+    v.push(v.len());
+    println(f"{v}");
+}

@@ -1,0 +1,24 @@
+// cs.316-cs.322 control: a view borrows like a `ref`, and a `ref` borrow
+// lets its origin be read (§5.6 forbids only writes, moves, mutable
+// borrows, drops). Every view below is live while `text`/`v` are read.
+// s = "abc"; sl.len() = 3; it.next() = Some(1) -> 1; h.r = "abc";
+// first = "x"; rs.len() = 1; c() = 3; b.v = "abc".
+struct H { r: ref String }
+struct Box[T] { v: T }
+fn main() {
+    let text = "abc".to_string();
+    let v: Vec[i64] = [1, 2, 3];
+    let names = ["x".to_string()];
+    let s = text.as_str();
+    let sl = v.as_slice();
+    let mut it = v.iter();
+    let h = H { r: ref text };
+    let o = names.first();
+    let mut rs: Vec[ref String] = Vec.new();
+    let tr = ref text;
+    rs.push(tr);
+    let c = || text.len();
+    let b: Box[ref String] = Box { v: ref text };
+    println(f"{text.len()} {v.len()} {names.len()}");
+    println(f"{s} {sl.len()} {it.next() ?? 0} {h.r} {o.unwrap()} {rs.len()} {c()} {b.v}");
+}

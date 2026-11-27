@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+expected_from = "spec"
+rules = ["7.4"]
+backends = []
+env = {}
+note = "core-semantics §7.4: cs.558 (a brace-less `match` arm's temporary drops as a block tail: after `e` is computed, at the arm's end), cs.561 (an argument to a borrowed parameter in a brace-less arm drops where that row says, not at the end of the enclosing statement). So d5 precedes the statement's later say6; likewise d7 for the field read of a temporary before say8. (Sentence map 2026-11-27, cell c7/d_braceless_arm_temp_drops_at_arm_end.)"

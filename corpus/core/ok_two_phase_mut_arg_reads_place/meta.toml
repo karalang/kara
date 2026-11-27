@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["references", "views"]
+expected_from = "spec"
+rules = ["5.6"]
+backends = []
+env = {}
+note = "core-semantics §5.6: cs.405, cs.406: the same holds for any `mut ref` argument: `insert(mut nodes, nodes[root].left, v)` reads `nodes` in a later argument. nodes[0].left = 1, so nodes[1].val becomes 7. Prints \"0 7\". (Sentence map 2026-11-27, cell c5/r_two_phase_mut_arg_reads_place.)"

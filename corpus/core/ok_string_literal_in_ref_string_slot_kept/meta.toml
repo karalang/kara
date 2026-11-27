@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["references", "views"]
+expected_from = "spec"
+rules = ["5.3"]
+backends = []
+env = {}
+note = "core-semantics §5.3: cs.351, cs.355 (contrast): a string literal in a `ref String` slot is promoted to static data, so the result may be kept past the statement. \"abc\" is longer than \"de\". Prints \"abc\". (Sentence map 2026-11-27, cell c5/r_string_literal_in_ref_string_slot_kept.)"

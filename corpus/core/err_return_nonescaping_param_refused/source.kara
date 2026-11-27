@@ -1,0 +1,7 @@
+// cs.680-681 §9.3: returning a non-escaping function-typed parameter needs the
+// `escaping` declaration; without it this is an error.
+fn pass(cb_fn: Fn() -> i64) -> Fn() -> i64 { cb_fn }
+fn main() {
+    let g = pass(|| 2);
+    println(g());
+}

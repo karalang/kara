@@ -1,0 +1,11 @@
+// cs.416: a view may enter a branch of `par {}` and of `par for`. Both
+// branches read the view `s` of "abc": (3, 4). par for over [1, 2] gives
+// [1*3, 2*3] in iteration order.
+fn main() {
+    let text = "abc".to_string();
+    let s = text.as_str();
+    let (a, b) = par { s.len(), s.len() + 1 };
+    let v: Vec[i64] = [1, 2];
+    let w = par for x in v { x * s.len() };
+    println(f"{a} {b} {w}");
+}

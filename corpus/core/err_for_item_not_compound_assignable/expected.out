@@ -1,0 +1,1 @@
+error[E0517]: main.kara:5:18: `x` is a `ref` to an element of the collection the `for` iterates (§4.6), so an assignment through `x` cannot modify it (core-semantics.md §5.9). Iterate with `.iter_mut()`

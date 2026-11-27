@@ -1,0 +1,15 @@
+// cs.562 (several temporaries that drop at the same point drop in reverse
+// order of creation). Three argument temporaries of one `let` drop at its `;`
+// as d3 d2 d1; two in one println statement drop after the output as d6 d5.
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+fn r(i: i64) -> R { R { id: i } }
+fn see(x: R) -> i64 { x.id }
+fn say(i: i64) -> i64 { println(f"say{i}"); i }
+fn add(a: i64, b: i64) -> i64 { a + b }
+fn take(x: own R) { println(f"took{x.id}"); }
+fn main() {
+    let n = see(R { id: 1 }) + see(R { id: 2 }) + see(R { id: 3 });
+    println(f"n{n}");
+    println(f"{see(r(5))}{see(r(6))}");
+}

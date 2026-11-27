@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["references", "views"]
+expected_from = "spec"
+rules = ["5.1", "5.2"]
+backends = []
+env = {}
+note = "core-semantics §5.1, §5.2: cs.305, cs.318: a reference may appear inside a view; a struct with a `ref` field is a borrowed struct. `Pair` holds two references into `v`; reading through them prints \"p q\". (Sentence map 2026-11-27, cell c5/r_ref_inside_struct_view.)"

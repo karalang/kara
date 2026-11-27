@@ -1,0 +1,8 @@
+// cs.181 §3.2: calling a method on a moved place is a use, so `s.len()`
+// after `s` moved is E0500.
+fn main() {
+    let s = "hi".to_string();
+    let t = s;
+    println(s.len());
+    println(t);
+}

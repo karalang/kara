@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["references", "views"]
+expected_from = "spec"
+rules = ["5.3", "5.7"]
+backends = []
+env = {}
+note = "core-semantics §5.3, §5.7: cs.350 with cs.410: a `Str` literal is static data with no origins, so §5.7 does not limit it; it may be stored in a `shared` field. Prints \"lit\". (Sentence map 2026-11-27, cell c5/r_static_view_into_shared_field.)"

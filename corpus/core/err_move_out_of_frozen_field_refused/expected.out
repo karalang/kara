@@ -1,0 +1,1 @@
+error[E_SHARED_FIELD_MOVE]: main.kara:6:13: cannot move a field out of `H`, which is declared `shared`: the value is a counted handle, so any other handle to it would still see the moved-from field — and would read it after this field's `Drop` body has run and its buffer is freed. Take an independent copy (`.clone()`), or borrow the field instead

@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["ownership", "moves"]
+expected_from = "spec"
+rules = ["3.7"]
+backends = []
+env = {}
+note = "core-semantics §3.7: cs.213 §3.7: the `mem.take(place)` fix (for `T: Default`). Taking `v[0]` through a `mut ref` returns \"a\" and leaves String's default, \"\", behind. Expected: a, \"[] b\". (Sentence map 2026-11-27, cell c3_c9/m_fix_mem_take.)"

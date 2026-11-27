@@ -1,0 +1,1 @@
+error[E_CROSS_BORROW_CONFLICT]: main.kara:7:5: `v` cannot be borrowed as `mut ref T` because it is also borrowed as `Slice[T]` at line 5:14

@@ -1,0 +1,9 @@
+// cs.670 §9.3: a closure stored in a collection escapes and captures by move,
+// so `s` is moved and reading it afterwards is E0500.
+fn main() {
+    let s = "abc".to_string();
+    let mut fs: Vec[Fn() -> i64] = Vec.new();
+    fs.push(|| s.len());
+    println(s);
+    println((fs[0])());
+}

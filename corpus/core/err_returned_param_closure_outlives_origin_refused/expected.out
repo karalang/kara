@@ -1,0 +1,1 @@
+error[E0516]: main.kara:5:13: cannot drop `name` while `f` still holds a borrow of it, taken at 7:12 (core-semantics.md §5.6) [E0516]. Finish using the borrow first, or take a copy of the value (`.clone()`, `.cloned()`, `*r` for a `Copy` value) where it is borrowed

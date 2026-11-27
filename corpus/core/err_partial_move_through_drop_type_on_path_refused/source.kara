@@ -1,0 +1,12 @@
+// cs.200 §3.6 / cs.212 §3.7: a part may not be moved out when any type on the
+// path from the root to it has a Drop body. `outer.w.payload` passes through
+// `W`, which has one, so the move is an error even though `O` (the root's
+// type) has no Drop body.
+struct W { payload: String }
+impl Drop for W { fn drop(mut ref self) { println("dW"); } }
+struct O { w: W }
+fn main() {
+    let outer = O { w: W { payload: "a".to_string() } };
+    let x = outer.w.payload;
+    println(x);
+}

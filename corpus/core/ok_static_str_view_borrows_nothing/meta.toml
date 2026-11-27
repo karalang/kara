@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["references", "views"]
+expected_from = "spec"
+rules = ["5.3"]
+backends = []
+env = {}
+note = "core-semantics §5.3: cs.350: a string literal typed `Str` is static data and borrows nothing, so none of §5.5-§5.7 limits it: `s` is a loop-body local, yet the `Str` it holds outlives it in `v`, and a `const` (a global) may hold one. v = [\"lit\", \"lit\"]; G = \"hi\". Prints \"2 lit lit hi\". (Sentence map 2026-11-27, cell c5/r_static_str_view_borrows_nothing.)"

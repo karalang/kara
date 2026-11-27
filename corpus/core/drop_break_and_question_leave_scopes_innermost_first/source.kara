@@ -1,0 +1,45 @@
+// cs.576 (`break`, `continue`, `return` and `?` run the drops and defers of
+// every scope they leave, innermost scope first, each scope in its own LIFO
+// order). break: the inner block pops c, defer inner, b; then the loop body
+// pops defer loop, a; o stays to main's end. `?`: on i == 1 it leaves the inner
+// block (d31), the iteration (d21) and the function (defer g, d10).
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+fn r(i: i64) -> R { R { id: i } }
+fn see(x: R) -> i64 { x.id }
+fn say(i: i64) -> i64 { println(f"say{i}"); i }
+fn add(a: i64, b: i64) -> i64 { a + b }
+fn take(x: own R) { println(f"took{x.id}"); }
+fn step(ok: bool) -> Result[i64, String] {
+    if ok { Ok(1) } else { Err("e".to_string()) }
+}
+fn gq() -> Result[i64, String] {
+    let a = R { id: 10 };
+    defer println("defer g");
+    for i in 0..2 {
+        let b = R { id: 20 + i };
+        {
+            let c = R { id: 30 + i };
+            let v = step(i == 0)?;
+            println(f"v{v}{b.id}{c.id}");
+        }
+    }
+    Ok(a.id)
+}
+fn main() {
+    let o = R { id: 0 };
+    loop {
+        let a = R { id: 1 };
+        defer println("defer loop");
+        {
+            let b = R { id: 2 };
+            defer println("defer inner");
+            let c = R { id: 3 };
+            println(f"breaking{a.id}{b.id}{c.id}");
+            break;
+        }
+    }
+    println("after loop");
+    let res = gq();
+    println(f"err {res.is_err()}{o.id}");
+}

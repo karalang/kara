@@ -1,0 +1,9 @@
+// cs.170 §3.1: a field of a struct literal is a move position, so
+// `P { a: s }` moves `s`; reading `s` afterwards is E0500 (§3.2).
+struct P { a: String }
+fn main() {
+    let s = "x".to_string();
+    let p = P { a: s };
+    println(s);
+    println(p.a);
+}

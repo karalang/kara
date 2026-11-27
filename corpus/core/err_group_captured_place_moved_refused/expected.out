@@ -1,0 +1,1 @@
+error[E0200]: main.kara:10:17: `data_v` is moved while a task of `g` borrows it (spawned at line 8; the borrow lasts until `g` drops, core-semantics.md §9.5)

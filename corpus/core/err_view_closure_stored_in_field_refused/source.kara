@@ -1,0 +1,10 @@
+// cs.667 §9.2: a closure that holds a view may not be stored where §5.7
+// forbids. A fn-typed struct field is escaping (§9.3), so `txt_view` moves in
+// and the closure is a view inside an escaping closure (§5.7).
+struct Holder { f: Fn() -> i64 }
+fn main() {
+    let txt_origin = "abc".to_string();
+    let txt_view = txt_origin.as_str();
+    let h = Holder { f: || txt_view.len() };
+    println((h.f)());
+}

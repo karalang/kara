@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closures"]
+expected_from = "spec"
+rules = ["9.3"]
+backends = []
+env = {}
+note = "core-semantics §9.3: cs.672-673 §9.3: the sent closure owns its capture (moved in), so it can be received and called after the sender's scope has moved on. Expected: 3. (Sentence map 2026-11-27, cell c3_c9/k_channel_sent_closure_owns_capture.)"

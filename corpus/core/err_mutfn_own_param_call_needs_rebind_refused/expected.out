@@ -1,0 +1,1 @@
+error[E0518]: main.kara:4:5: `bump_fn` is an `own` `MutFn` parameter, and calling a `MutFn` changes the binding's value, so it needs a mutable binding: rebind it first, `let mut bump_fn = bump_fn;` (design.md §7 Function types and kinds)

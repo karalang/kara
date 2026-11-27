@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["references", "views"]
+expected_from = "spec"
+rules = ["5.3"]
+backends = []
+env = {}
+note = "core-semantics §5.3: cs.354 (contrast): a literal checked against `mut ref T` is a temporary that lives to the end of its statement (§5.5), so using the result inside the same statement is accepted. bump makes the temporary 0 into 1. (Sentence map 2026-11-27, cell c5/r_literal_in_mut_ref_slot_used_in_statement.)"

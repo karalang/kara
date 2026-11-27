@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["ownership", "moves"]
+expected_from = "spec"
+rules = ["3.1"]
+backends = []
+env = {}
+note = "core-semantics §3.1: cs.168 §3.1: `r.consume()` with an `own self` receiver moves `r` into the method, so `r` drops at the end of `consume` (d1 before \"after\") and not again at main's end. Expected: consume1, d1, after. (Sentence map 2026-11-27, cell c3_c9/m_own_self_receiver_drops_in_callee.)"

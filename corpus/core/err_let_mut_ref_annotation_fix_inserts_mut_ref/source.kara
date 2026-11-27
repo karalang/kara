@@ -1,0 +1,11 @@
+// cs.307, cs.308: a `let` annotation never creates the borrow, so
+// `let p: mut ref P = w.p;` is an error, and its fix inserts `mut ref`
+// before the initializer.
+struct P { hits: i64 }
+struct W { p: P }
+fn main() {
+    let mut w = W { p: P { hits: 0 } };
+    let p: mut ref P = w.p;
+    p.hits += 1;
+    println(f"{w.p.hits}");
+}

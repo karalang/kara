@@ -1,0 +1,32 @@
+// cs.303: a reference may be a return type, or inside one (`Option[ref T]`,
+// a tuple). `longest` returns `ref String` ("ccc"), `find_len` returns
+// `Option[ref String]` (Some "bb" for length 2, None for 9), and `ends`
+// returns a tuple of two references ("a", "ccc").
+fn longest(v: ref Vec[String]) -> ref String {
+    let mut best = 0;
+    let mut i = 0;
+    while i < v.len() {
+        if v[i].len() > v[best].len() { best = i; }
+        i += 1;
+    }
+    ref v[best]
+}
+fn find_len(v: ref Vec[String], n: i64) -> Option[ref String] {
+    let mut i = 0;
+    while i < v.len() {
+        if v[i].len() == n { return Some(ref v[i]); }
+        i += 1;
+    }
+    None
+}
+fn ends(v: ref Vec[String]) -> (ref String, ref String) {
+    (ref v[0], ref v[v.len() - 1])
+}
+fn main() {
+    let v = ["a".to_string(), "bb".to_string(), "ccc".to_string()];
+    println(longest(v));
+    match find_len(v, 2) { Some(s) => println(s), None => println("none") }
+    match find_len(v, 9) { Some(s) => println(s), None => println("none") }
+    let (a, b) = ends(v);
+    println(f"{a} {b}");
+}

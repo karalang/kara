@@ -1,0 +1,13 @@
+// §9.4 (function value a call returns; no cs id): when `f`'s scope ends
+// sooner (an inner block), its borrow of `name` ends there.
+// Expected: 3, abc.
+fn mk(p: String) -> Fn(i64) -> i64 { |k| p.len() + k }
+fn main() {
+    let mut name = "ab".to_string();
+    {
+        let f = mk(name);
+        println(f(1));
+    }
+    name.push_str("c");
+    println(name);
+}

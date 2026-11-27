@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0515"
+exit = 1
+tags = ["closures"]
+class = "a"
+expected_from = "spec"
+rules = ["9.3"]
+backends = []
+env = {}
+note = "core-semantics §9.3: §9.3 (borrowed parameter sentence) with §5.7: the closure moves in the reference `p_txt` holds, so it is a view; storing it in a collection is an escape that only a returned closure may be, so this is an error. (Sentence map 2026-11-27, cell c3_c9/k_stored_closure_over_borrowed_param_refused.) The expected.out wording of an error pin is guidance, not a byte oracle."

@@ -1,0 +1,20 @@
+// cs.362: with a `mut ref self` receiver, the result borrows from `self`
+// only, so the argument `h` may be written while `r` is live (`b` itself
+// stays mutably borrowed until `r`'s last use, so it is read after).
+// items = ["x", "h"]; r = items[0] = "x"; h becomes "hy". Prints "x hy",
+// then "2".
+struct Bag { items: Vec[String] }
+impl Bag {
+    fn add_first(mut ref self, hint: String) -> ref String {
+        self.items.push(hint.clone());
+        ref self.items[0]
+    }
+}
+fn main() {
+    let mut b = Bag { items: ["x".to_string()] };
+    let mut h = "h".to_string();
+    let r = b.add_first(h);
+    h.push_str("y");
+    println(f"{r} {h}");
+    println(f"{b.items.len()}");
+}

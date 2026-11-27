@@ -1,0 +1,29 @@
+// cs.550 (an argument passed to a borrowed or `mut ref` parameter or receiver
+// drops at the end of the enclosing statement). Each temp outlives the later
+// `say` call of the same statement: say2 then d1; say4 then d3 (receiver);
+// say6 then d6 (mut ref; bump made it 6). In the println statement both the
+// argument's temp and the output come first, the drop after: say8, "7 8", d7.
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+fn r(i: i64) -> R { R { id: i } }
+fn see(x: R) -> i64 { x.id }
+fn say(i: i64) -> i64 { println(f"say{i}"); i }
+fn add(a: i64, b: i64) -> i64 { a + b }
+fn take(x: own R) { println(f"took{x.id}"); }
+impl R {
+    fn get(self) -> i64 { self.id }
+}
+fn bump(x: mut ref R) -> i64 {
+    x.id = x.id + 1;
+    x.id
+}
+fn main() {
+    let s = add(see(R { id: 1 }), say(2));
+    println(f"s{s}");
+    let t = r(3).get() + say(4);
+    println(f"t{t}");
+    let u = add(bump(mut r(5)), say(6));
+    println(f"u{u}");
+    println(f"{see(r(7))} {say(8)}");
+    println("end");
+}

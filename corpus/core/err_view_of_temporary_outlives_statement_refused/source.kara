@@ -1,0 +1,9 @@
+// cs.392, cs.393: a view whose origin is a temporary must not outlive the
+// statement that created the temporary; there is no temporary lifetime
+// extension. `make().as_str()` views a temporary `String`, so keeping it in
+// `s` is refused, at the `let` (line 7).
+fn make() -> String { "abc".to_string() }
+fn main() {
+    let s = make().as_str();
+    println(s);
+}

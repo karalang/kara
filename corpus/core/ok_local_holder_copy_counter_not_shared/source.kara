@@ -1,0 +1,14 @@
+// cs.676-677 §9.3: a fn-typed field escapes even in a local struct, so the
+// Copy counter `n` is copied in; the closure's writes go to its own copy and
+// the enclosing `n` stays 0. The MutFn taken out of the field is rebound
+// `let mut g = ...` before it is called (§9.6).
+// Expected: 1, 2, 0.
+struct Holder { f: MutFn() -> i64 }
+fn main() {
+    let mut n = 0;
+    let h = Holder { f: || { n += 1; n } };
+    let mut g = h.f;
+    println(g());
+    println(g());
+    println(n);
+}

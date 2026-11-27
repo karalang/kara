@@ -1,0 +1,1 @@
+error[E0516]: main.kara:6:13: cannot read `v` while `mut ref m` borrows `v`: `m` is used after this, at 7:5 (`m` is bound at 5:9; core-semantics.md §5.6). Read it through `m`, or use `m` for the last time first

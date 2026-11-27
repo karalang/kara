@@ -1,0 +1,11 @@
+// cs.405, cs.406: the same holds for any `mut ref` argument:
+// `insert(mut nodes, nodes[root].left, v)` reads `nodes` in a later argument.
+// nodes[0].left = 1, so nodes[1].val becomes 7. Prints "0 7".
+struct Node { val: i64, left: i64 }
+fn insert(nodes: mut ref Vec[Node], at: i64, v: i64) { nodes[at].val = v; }
+fn main() {
+    let mut nodes = [Node { val: 0, left: 1 }, Node { val: 0, left: 0 }];
+    let root = 0;
+    insert(mut nodes, nodes[root].left, 7);
+    println(f"{nodes[0].val} {nodes[1].val}");
+}

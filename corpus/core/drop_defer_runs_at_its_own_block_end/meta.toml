@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+expected_from = "spec"
+rules = ["7.7"]
+backends = []
+env = {}
+note = "core-semantics §7.7: cs.580 (a `defer` block runs when its scope ends, in its LIFO position). An inner block's defer runs at that block's brace, an `if` body's at that body's end, and main's own at main's end. (Sentence map 2026-11-27, cell c7/d_defer_runs_at_its_own_block_end.)"

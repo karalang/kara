@@ -1,0 +1,8 @@
+// cs.317, cs.322: an iterator over a borrowed collection is a view: while
+// `it` is live, `v` may not be written. Refused at the `push` (line 6).
+fn main() {
+    let mut v: Vec[i64] = [1, 2, 3];
+    let mut it = v.iter();
+    v.push(4);
+    println(f"{it.next()}");
+}

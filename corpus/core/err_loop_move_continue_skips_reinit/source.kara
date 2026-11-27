@@ -1,0 +1,16 @@
+// cs.185 §3.3: the `continue` path returns to the loop head without assigning
+// `s` again, so not every path back initializes it: the move inside the body
+// is E0500.
+fn take(s: own String) { println(s); }
+fn main() {
+    let mut s = "a".to_string();
+    let mut i = 0;
+    while i < 3 {
+        i = i + 1;
+        take(s);
+        if i == 2 {
+            continue;
+        }
+        s = "b".to_string();
+    }
+}

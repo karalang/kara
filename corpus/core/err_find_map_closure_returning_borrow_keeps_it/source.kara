@@ -1,0 +1,10 @@
+// cs.336: a closure whose own result type can hold a reference keeps the
+// general flow: `it.find_map(|x| w.first())` borrows `w`. Writing `w` while
+// `r` is live is refused, at the `push` (line 8).
+fn main() {
+    let mut w = ["a".to_string()];
+    let v: Vec[i64] = [1];
+    let r = v.iter().find_map(|x| w.first());
+    w.push("b".to_string());
+    println(r.unwrap());
+}

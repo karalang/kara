@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+expected_from = "spec"
+rules = ["7.10"]
+backends = []
+env = {}
+note = "core-semantics §7.10: cs.610 (an optimiser may never move, add or remove a `Drop` body call). The guard `_g` is never read after its `let`; its Drop body must still run exactly at the end of `work`'s body each call (dg0 dg1 dg2 before s6), and the never-read `h` drops at main's end, not at its last use, after \"end\". (Sentence map 2026-11-27, cell c7/d_drop_body_calls_are_not_removed_or_moved.)"

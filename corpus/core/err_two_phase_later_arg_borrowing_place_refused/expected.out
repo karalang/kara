@@ -1,0 +1,1 @@
+error[E_EXCLUSIVE_BORROW_ALIASED_ARGS]: main.kara:8:16: exclusive-borrow conflict: `v[..]` is borrowed by two arguments of the same call and at least one is a `mut ref` / `mut Slice` (exclusive) borrow. An exclusive borrow must be the only active borrow of its place; pass distinct values, or use `split_at_mut` for two disjoint mutable halves.

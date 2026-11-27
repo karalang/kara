@@ -1,0 +1,12 @@
+// cs.657 §9.1: a Copy place that dies first is copied in, and still counts as
+// borrowed in the inferred mode (`ref` here), so reading it is fine.
+// Expected: 3, 30.
+fn main() {
+    let mut f: Fn() -> i64 = || 0;
+    {
+        let k = 3;
+        f = || k * 10;
+        println(k);
+    }
+    println(f());
+}

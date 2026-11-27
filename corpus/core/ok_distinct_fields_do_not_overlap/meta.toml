@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["references", "views"]
+expected_from = "spec"
+rules = ["5.6"]
+backends = []
+env = {}
+note = "core-semantics §5.6: cs.401: distinct fields do not overlap, so `mut ref w.a` and `mut ref w.b` may be live together. a.n = 10, b.n = 20. Prints \"10 20\". (Sentence map 2026-11-27, cell c5/r_distinct_fields_do_not_overlap.)"

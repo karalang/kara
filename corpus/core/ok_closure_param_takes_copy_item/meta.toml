@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["references", "views"]
+expected_from = "spec"
+rules = ["5.10"]
+backends = []
+env = {}
+note = "core-semantics §5.10: cs.437, cs.438, cs.442: a closure parameter takes its type from the function type it is checked against, so with a `Copy` item a predicate gets a copy: in `(1..n).find(|j| w[j] == 13)` `j` is an `i64`, and in `s.chars().filter(|c| c == 'Q')` `c` is a `char`. w = [0, 5, 13, 13]: first j in 1..4 with w[j] == 13 is 2. \"aQbQQ\" has three Qs. Prints \"2 3\". (Sentence map 2026-11-27, cell c5/r_closure_param_takes_copy_item.)"

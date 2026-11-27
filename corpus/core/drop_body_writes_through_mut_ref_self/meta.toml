@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+expected_from = "spec"
+rules = ["7.8", "7.11"]
+backends = []
+env = {}
+note = "core-semantics §7.8, §7.11: cs.613, cs.614 (form: `fn drop(mut ref self)`). The body may write self through the `mut ref`: C{n: 2} multiplies n by 10 and prints dC20; then its field `inner` drops (d2), after C's body (cs.590, cs.592). (Sentence map 2026-11-27, cell c7/d_drop_body_writes_through_mut_ref_self.)"

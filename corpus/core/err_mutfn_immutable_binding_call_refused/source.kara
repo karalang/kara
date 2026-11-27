@@ -1,0 +1,9 @@
+// cs.712-713 §9.6: a MutFn can be called only through a unique mutable access;
+// a call changes the binding's value, so a plain `let` binding cannot call
+// it.
+fn main() {
+    let mut tally = 0;
+    let bump = || { tally += 1; };
+    bump();
+    println(tally);
+}

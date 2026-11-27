@@ -1,0 +1,9 @@
+// cs.398: while a `mut ref` borrow of `v` is live, no overlapping place may
+// be used except through it: reading `v.len()` is refused, at line 6.
+fn main() {
+    let mut v: Vec[i64] = [1];
+    let m = mut ref v;
+    let n = v.len();
+    m.push(n);
+    println(f"{v}");
+}

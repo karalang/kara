@@ -1,0 +1,12 @@
+// cs.168 §3.1: an `own self` receiver moves the value it is called on, so
+// `w` is moved by `w.into_s()` and the later read of `w.s` is E0500 (§3.2).
+struct W { s: String }
+impl W {
+    fn into_s(own self) -> String { self.s }
+}
+fn main() {
+    let w = W { s: "a".to_string() };
+    let s = w.into_s();
+    println(s);
+    println(w.s);
+}

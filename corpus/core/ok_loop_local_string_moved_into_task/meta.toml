@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closures"]
+expected_from = "spec"
+rules = ["9.5"]
+backends = []
+env = {}
+note = "core-semantics §9.5: cs.699 §9.5: a non-Copy loop-body local is moved into each task, which owns it. Two tasks each return \"task\".len() = 4. Expected: 8. (Sentence map 2026-11-27, cell c3_c9/k_loop_local_string_moved_into_task.)"

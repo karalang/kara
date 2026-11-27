@@ -1,0 +1,11 @@
+// cs.400: a place overlaps its prefixes: while `m` (a `mut ref w.a`) is
+// live, using `w` (a prefix) is refused, at line 9.
+struct A { n: i64 }
+struct W { a: A, b: A }
+fn show(w: W) -> i64 { w.a.n + w.b.n }
+fn main() {
+    let mut w = W { a: A { n: 1 }, b: A { n: 2 } };
+    let m = mut ref w.a;
+    let t = show(w);
+    m.n = t;
+}

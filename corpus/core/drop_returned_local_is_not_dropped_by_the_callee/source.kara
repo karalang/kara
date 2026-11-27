@@ -1,0 +1,30 @@
+// cs.526 (a returned value is moved out of its binding before the scope's drops
+// run, so the returning function does not drop it). mk_tail returns b by tail:
+// only a drops (d1). mk_ret returns b by `return`: only a drops (d3). The
+// returned values drop in main, LIFO: y (d4), then x (d2).
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+fn r(i: i64) -> R { R { id: i } }
+fn see(x: R) -> i64 { x.id }
+fn say(i: i64) -> i64 { println(f"say{i}"); i }
+fn add(a: i64, b: i64) -> i64 { a + b }
+fn take(x: own R) { println(f"took{x.id}"); }
+fn mk_tail() -> R {
+    let a = R { id: 1 };
+    let b = R { id: 2 };
+    b
+}
+fn mk_ret(c: bool) -> R {
+    let a = R { id: 3 };
+    let b = R { id: 4 };
+    if c {
+        return b;
+    }
+    R { id: 5 }
+}
+fn main() {
+    let x = mk_tail();
+    println(f"got tail{x.id}");
+    let y = mk_ret(true);
+    println(f"got ret{y.id}");
+}

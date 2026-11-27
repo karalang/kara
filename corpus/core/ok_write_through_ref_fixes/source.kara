@@ -1,0 +1,20 @@
+// cs.431: the fixes: a `mut ref T` parameter with `mut` at its call
+// sites; `c.iter_mut()`; `mut ref name` from a mutable owned scrutinee;
+// `mut ref place` from a writable place.
+// v: [1] -> push 2 -> [1, 2] -> iter_mut +10 -> [11, 12];
+// o: Some(P{n: 0}) -> n = 5; w.p.n: 0 -> 7. Prints "[11, 12] 5 7".
+struct P { n: i64 }
+struct W { p: P }
+fn grow(v: mut ref Vec[i64]) { v.push(2); }
+fn main() {
+    let mut v: Vec[i64] = [1];
+    grow(mut v);
+    for x in v.iter_mut() { *x += 10; }
+    let mut o = Some(P { n: 0 });
+    match o { Some(mut ref p) => { p.n = 5; } None => {} }
+    let mut w = W { p: P { n: 0 } };
+    let up = mut ref w.p;
+    up.n = 7;
+    let on = match o { Some(ref p) => p.n, None => -1 };
+    println(f"{v} {on} {w.p.n}");
+}

@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+expected_from = "spec"
+rules = ["7.2"]
+backends = []
+env = {}
+note = "core-semantics §7.2: cs.531 (a scope ends at the end of a closure body). The closure's local `t` drops when each call's body ends, before the caller prints the result: before, in1, d1, got7, in1, d1, end. (Sentence map 2026-11-27, cell c7/d_closure_body_local_drops_at_closure_body_end.)"

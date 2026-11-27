@@ -1,0 +1,13 @@
+// cs.672-673 §9.3: the sent closure owns its capture (moved in), so it can be
+// received and called after the sender's scope has moved on.
+// Expected: 3.
+import std.sync.{Sender, Receiver};
+fn main() {
+    let (tx, rx): (Sender[Fn() -> i64 + CrossTask], Receiver[Fn() -> i64 + CrossTask]) = channel(1);
+    let s = "abc".to_string();
+    let sent = tx.send(|| s.len());
+    match rx.recv() {
+        Some(f) => println(f()),
+        None => println("none"),
+    }
+}

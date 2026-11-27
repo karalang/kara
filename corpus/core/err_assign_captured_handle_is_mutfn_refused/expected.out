@@ -1,0 +1,1 @@
+error[E0518]: main.kara:8:11: the closure mutates log_h, so it is a MutFn, but apply expects Fn (§9.6)

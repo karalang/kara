@@ -1,0 +1,15 @@
+// cs.563 (literal fields are not temporaries: they move into the literal). The
+// values r(1), r(2) become p's fields, so nothing drops at the `;`; they drop
+// with p at main's end, in reverse declaration order (b then a: d2 d1).
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+fn r(i: i64) -> R { R { id: i } }
+fn see(x: R) -> i64 { x.id }
+fn say(i: i64) -> i64 { println(f"say{i}"); i }
+fn add(a: i64, b: i64) -> i64 { a + b }
+fn take(x: own R) { println(f"took{x.id}"); }
+struct P { a: R, b: R }
+fn main() {
+    let p = P { a: r(1), b: r(2) };
+    println(f"mid{p.a.id}{p.b.id}");
+}

@@ -1,0 +1,14 @@
+// cs.202 §3.6: after `p.b` is moved out, the remaining fields can still be
+// read (`p.n`), borrowed (`show(p.a)`) and moved (`let y = p.a`).
+// Expected: b, 7, a, a.
+struct P { a: String, b: String, n: i64 }
+fn show(s: ref String) { println(s); }
+fn main() {
+    let p = P { a: "a".to_string(), b: "b".to_string(), n: 7 };
+    let x = p.b;
+    println(x);
+    println(f"{p.n}");
+    show(p.a);
+    let y = p.a;
+    println(y);
+}

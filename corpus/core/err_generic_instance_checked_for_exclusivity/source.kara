@@ -1,0 +1,11 @@
+// cs.419: the checks of §5.6 run on the monomorphised instance:
+// `wrap[Str]`'s result borrows `text`, so writing `text` while `b` is live is
+// refused, at the `push_str` (line 9).
+struct Box[T] { v: T }
+fn wrap[T](x: own T) -> Box[T] { Box { v: x } }
+fn main() {
+    let mut text = "abc".to_string();
+    let b = wrap(text.as_str());
+    text.push_str("d");
+    println(b.v);
+}

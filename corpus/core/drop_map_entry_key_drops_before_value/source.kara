@@ -1,0 +1,17 @@
+// cs.598 (Map / Set: within an entry, the key drops before the value). One
+// entry, so the order between entries does not arise: dk1 then d1.
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+fn r(i: i64) -> R { R { id: i } }
+fn see(x: R) -> i64 { x.id }
+fn say(i: i64) -> i64 { println(f"say{i}"); i }
+fn add(a: i64, b: i64) -> i64 { a + b }
+fn take(x: own R) { println(f"took{x.id}"); }
+#[derive(Hash, Eq, PartialEq)]
+struct K { id: i64 }
+impl Drop for K { fn drop(mut ref self) { println(f"dk{self.id}"); } }
+fn main() {
+    let mut m: Map[K, R] = Map.new();
+    m.insert(K { id: 1 }, R { id: 1 });
+    println(f"end{m.len()}");
+}

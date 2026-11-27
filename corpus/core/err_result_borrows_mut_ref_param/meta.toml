@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0516"
+exit = 1
+tags = ["references", "views"]
+class = "a"
+expected_from = "spec"
+rules = ["5.4"]
+backends = []
+env = {}
+note = "core-semantics §5.4: cs.363: with no receiver, the result borrows every `mut ref` parameter too: `pm`'s result borrows `nums`, so writing `nums` while `r` is live is refused, at the `push` (line 9). (Sentence map 2026-11-27, cell c5/r_result_borrows_mut_ref_param.) The expected.out wording of an error pin is guidance, not a byte oracle."

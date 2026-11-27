@@ -1,0 +1,11 @@
+// cs.702 §9.5: a captured view's origins are not moved, so every origin must
+// outlive the group. `txt_view` (declared after `g`) is moved into the task,
+// but its origin `txt_origin` also drops before `g`: an error.
+import std.sync.{TaskGroup};
+fn main() {
+    let g = TaskGroup.new();
+    let txt_origin = "abc".to_string();
+    let txt_view = txt_origin.as_str();
+    let h = g.spawn(|| txt_view.len());
+    println(h.join());
+}

@@ -1,0 +1,1 @@
+error[E0509]: main.kara:8:13: a view of `text` is stored in an escaping closure, a `dyn` value, a `shared` value or a channel, where its borrow is not kept (borrow at 7:13); store an owned copy instead (core semantics §5.7, §9.3) [E0509]

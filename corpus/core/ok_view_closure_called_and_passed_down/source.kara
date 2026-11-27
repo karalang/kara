@@ -1,0 +1,11 @@
+// cs.666-667 §9.2: a closure with a `ref` capture is a view; it can be called
+// and passed down to a (non-escaping) parameter.
+// Expected: 3, 6, abc.
+fn call_twice(f: Fn() -> i64) -> i64 { f() + f() }
+fn main() {
+    let s = "abc".to_string();
+    let f = || s.len();
+    println(f());
+    println(call_twice(f));
+    println(s);
+}

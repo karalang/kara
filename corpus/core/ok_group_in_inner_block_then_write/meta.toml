@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closures"]
+expected_from = "spec"
+rules = ["9.5"]
+backends = []
+env = {}
+note = "core-semantics §9.5: cs.701 §9.5: putting the group in an inner block lets the task borrow `data`; once the group drops (joining the task) the borrow ends and `data` may be written. Expected: 6, 4. (Sentence map 2026-11-27, cell c3_c9/k_group_in_inner_block_then_write.)"

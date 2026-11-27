@@ -1,0 +1,1 @@
+error[E0516]: main.kara:8:20: cannot drop `txt_origin` while `g` still holds a borrow of it, taken at 8:20 (core-semantics.md §5.6) [E0516]. A task spawned into `g` keeps the borrow until `g` drops, which joins its tasks (core-semantics.md §9.5): put `g` in an inner block that ends before this, so its tasks are joined first, or give the task a copy of the value

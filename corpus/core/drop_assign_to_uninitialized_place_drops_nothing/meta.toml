@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+expected_from = "spec"
+rules = ["7.5"]
+backends = []
+env = {}
+note = "core-semantics §7.5: cs.570 (the old value of p is dropped, if p is initialized). After `take(x)` x is moved, so `x = R{2}` drops nothing. In `g`, x is maybe-moved: the assignment drops the old value only on the path where it is still initialized (c == false), never twice. (Sentence map 2026-11-27, cell c7/d_assign_to_uninitialized_place_drops_nothing.)"

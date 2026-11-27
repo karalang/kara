@@ -1,0 +1,10 @@
+// cs.414: `mk(name)` may not outlive `name`: `name` drops at the end of the
+// block while `f` lives on. Refused.
+fn mk(p: String) -> Fn(String) -> String { |s| f"{p}{s}" }
+fn main() {
+    let f = {
+        let name = "ab".to_string();
+        mk(name)
+    };
+    println(f("c"));
+}

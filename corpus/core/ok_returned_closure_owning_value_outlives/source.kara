@@ -1,0 +1,11 @@
+// cs.414: to return a closure that owns the value, take `own p`; such a
+// closure may outlive the argument (`name` drops at the end of the block,
+// having been moved into `mk_own`). Prints "ab" + "c" = "abc".
+fn mk_own(p: own String) -> Fn(String) -> String { |s| f"{p}{s}" }
+fn main() {
+    let f = {
+        let name = "ab".to_string();
+        mk_own(name)
+    };
+    println(f("c"));
+}

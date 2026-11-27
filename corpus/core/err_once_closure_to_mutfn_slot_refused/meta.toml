@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0235"
+exit = 1
+tags = ["closures"]
+class = "a"
+expected_from = "spec"
+rules = ["9.6"]
+backends = []
+env = {}
+note = "core-semantics §9.6: cs.719, cs.723 §9.6: the body moves `ticket` out, so the closure is OnceFn; passing it where a MutFn is expected is an error that names the capture responsible. (Sentence map 2026-11-27, cell c3_c9/k_once_closure_to_mutfn_slot_refused.) The expected.out wording of an error pin is guidance, not a byte oracle."

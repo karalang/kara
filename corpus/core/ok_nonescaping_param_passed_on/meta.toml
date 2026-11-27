@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closures"]
+expected_from = "spec"
+rules = ["9.3"]
+backends = []
+env = {}
+note = "core-semantics §9.3: cs.680 §9.3: the callee may call a function-typed parameter or pass it to another non-escaping parameter. outer: inner(f, 1) = 11, f(2) = 12. Expected: 23. (Sentence map 2026-11-27, cell c3_c9/k_nonescaping_param_passed_on.)"

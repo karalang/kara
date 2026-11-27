@@ -1,0 +1,55 @@
+// cs.581, cs.582 (an `errdefer` runs only when the function returns the failure
+// variant of its `Result` or `Option` return type: `?`, `return Err(...)`,
+// `return None`, or a tail `Err(...)`), cs.583 (otherwise it is skipped). Each
+// function is called once succeeding (no errdefer line) and once failing (its
+// errdefer line, then the caller's line). `?` on an Option counts too.
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+fn r(i: i64) -> R { R { id: i } }
+fn see(x: R) -> i64 { x.id }
+fn say(i: i64) -> i64 { println(f"say{i}"); i }
+fn add(a: i64, b: i64) -> i64 { a + b }
+fn take(x: own R) { println(f"took{x.id}"); }
+fn step(ok: bool) -> Result[i64, String] {
+    if ok { Ok(1) } else { Err("e".to_string()) }
+}
+fn ostep(ok: bool) -> Option[i64] {
+    if ok { Some(1) } else { None }
+}
+fn by_question(ok: bool) -> Result[i64, String] {
+    errdefer println("errdefer ?");
+    let v = step(ok)?;
+    Ok(v)
+}
+fn by_return_err(ok: bool) -> Result[i64, String] {
+    errdefer println("errdefer return Err");
+    if not ok {
+        return Err("e".to_string());
+    }
+    Ok(1)
+}
+fn by_return_none(ok: bool) -> Option[i64] {
+    errdefer println("errdefer return None");
+    if not ok {
+        return None;
+    }
+    Some(1)
+}
+fn by_tail_err(ok: bool) -> Result[i64, String] {
+    errdefer println("errdefer tail Err");
+    if ok { Ok(1) } else { Err("e".to_string()) }
+}
+fn by_option_question(ok: bool) -> Option[i64] {
+    errdefer println("errdefer option ?");
+    let v = ostep(ok)?;
+    Some(v)
+}
+fn main() {
+    for ok in [true, false] {
+        println(f"q {by_question(ok).is_ok()}");
+        println(f"re {by_return_err(ok).is_ok()}");
+        println(f"rn {by_return_none(ok).is_some()}");
+        println(f"te {by_tail_err(ok).is_ok()}");
+        println(f"oq {by_option_question(ok).is_some()}");
+    }
+}

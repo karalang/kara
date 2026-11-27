@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["references", "views"]
+expected_from = "spec"
+rules = ["5.1"]
+backends = []
+env = {}
+note = "core-semantics §5.1: cs.310: with `let mut`, the `mut ref` binding may be rebound. `up` first writes a (1 -> 2), is rebound to b, then writes b (2 -> 12). Prints \"2 12\". (Sentence map 2026-11-27, cell c5/r_mut_ref_binding_rebinds_with_let_mut.)"

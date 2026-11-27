@@ -1,0 +1,12 @@
+errdefer C
+d3
+defer B
+d2
+errdefer A
+d1
+-- true
+d3
+defer B
+d2
+d1
+end true

@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0516"
+exit = 1
+tags = ["references", "views"]
+class = "a"
+expected_from = "spec"
+rules = ["5.6"]
+backends = []
+env = {}
+note = "core-semantics §5.6: cs.399: while a `ref` borrow of `s` is live, `s` may not be mutably borrowed. Refused at the `mut ref` (line 6). (Sentence map 2026-11-27, cell c5/r_ref_borrow_blocks_mut_borrow.) The expected.out wording of an error pin is guidance, not a byte oracle."

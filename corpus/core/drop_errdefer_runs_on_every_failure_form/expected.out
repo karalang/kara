@@ -1,0 +1,15 @@
+q true
+re true
+rn true
+te true
+oq true
+errdefer ?
+q false
+errdefer return Err
+re false
+errdefer return None
+rn false
+errdefer tail Err
+te false
+errdefer option ?
+oq false

@@ -1,0 +1,16 @@
+// cs.304: a local may have a reference type when bound to a call that
+// returns a reference (`a`), to `ref place` (`b`), to `mut ref place` (`c`),
+// or to another reference (`d`, a copy of `b`).
+// a = "x" (first element), b = "y"; c writes w.n from 1 to 11; d = "y".
+struct W { n: i64, s: String }
+fn first(v: ref Vec[String]) -> ref String { ref v[0] }
+fn main() {
+    let v = ["x".to_string(), "y".to_string()];
+    let mut w = W { n: 1, s: "s".to_string() };
+    let a: ref String = first(v);
+    let b: ref String = ref v[1];
+    let c: mut ref i64 = mut ref w.n;
+    *c += 10;
+    let d: ref String = b;
+    println(f"{a} {b} {d} {w.n} {w.s}");
+}

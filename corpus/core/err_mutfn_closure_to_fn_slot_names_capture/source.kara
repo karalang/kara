@@ -1,0 +1,8 @@
+// cs.719, cs.723 §9.6: the body mutates `tally`, so the closure is MutFn;
+// passing it where an Fn is expected is an error that names `tally`.
+fn apply(f: Fn()) { f(); }
+fn main() {
+    let mut tally = 0;
+    apply(|| { tally += 1; });
+    println(tally);
+}

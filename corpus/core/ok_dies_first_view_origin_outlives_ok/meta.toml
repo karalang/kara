@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closures"]
+expected_from = "spec"
+rules = ["9.1"]
+backends = []
+env = {}
+note = "core-semantics §9.1: cs.661-662 §9.1: the captured view `txt_view` dies first and is moved in; its origin `txt_origin` is declared before `f`, so it outlives the closure. Expected: 5. (Sentence map 2026-11-27, cell c3_c9/k_dies_first_view_origin_outlives_ok.)"

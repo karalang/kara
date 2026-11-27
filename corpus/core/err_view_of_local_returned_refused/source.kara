@@ -1,0 +1,11 @@
+// cs.415: a view may not flow into the function's result except as §5.4
+// allows: the result may borrow only from the selected parameters, so
+// returning a view of the local `w` is refused.
+fn copy_view(v: Vec[i64]) -> Slice[i64] {
+    let w = v.clone();
+    w.as_slice()
+}
+fn main() {
+    let v: Vec[i64] = [1, 2];
+    println(f"{copy_view(v).len()}");
+}

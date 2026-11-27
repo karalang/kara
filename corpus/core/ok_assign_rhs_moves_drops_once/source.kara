@@ -1,0 +1,12 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+// cs.166 §3.1: `b = a;` moves `a` into `b`. The old value of `b` (2) drops at
+// the assignment (pin drop_assign), and `a` is moved, so it does not drop at
+// scope end; only `b`, now holding 1, does.
+// Expected: d2, after, d1 (exactly one d1).
+fn main() {
+    let a = R { id: 1 };
+    let mut b = R { id: 2 };
+    b = a;
+    println("after");
+}

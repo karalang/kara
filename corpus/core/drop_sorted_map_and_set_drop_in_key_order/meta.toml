@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+expected_from = "spec"
+rules = ["7.8"]
+backends = []
+env = {}
+note = "core-semantics §7.8: cs.599 (SortedMap / SortedSet: key order). Inserted 3, 1, 2 (map) and 30, 10, 20 (set). s was introduced after m, so s drops first: dk10 dk20 dk30; then m's values in key order: d1 d2 d3. (Sentence map 2026-11-27, cell c7/d_sorted_map_and_set_drop_in_key_order.)"

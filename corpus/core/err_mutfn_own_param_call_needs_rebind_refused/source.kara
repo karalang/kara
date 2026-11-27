@@ -1,0 +1,11 @@
+// cs.712 §9.6: an `own` MutFn parameter is rebound first (`let mut f = f;`);
+// calling it directly is an error.
+fn twice(bump_fn: own MutFn()) {
+    bump_fn();
+    bump_fn();
+}
+fn main() {
+    let mut n = 0;
+    twice(|| { n += 1; });
+    println(n);
+}

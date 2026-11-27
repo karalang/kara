@@ -1,0 +1,12 @@
+// cs.214 §3.7: the `for x in c.into_iter()` fix: instead of moving `v[i]`
+// out (an error), consuming the Vec moves each element out in order.
+// Expected: a, b, 2.
+fn keep(s: own String) -> i64 { println(s); s.len() }
+fn main() {
+    let v: Vec[String] = ["a".to_string(), "b".to_string()];
+    let mut n = 0;
+    for s in v.into_iter() {
+        n = n + keep(s);
+    }
+    println(n);
+}

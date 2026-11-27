@@ -1,0 +1,11 @@
+// cs.363: a bare parameter of a `Copy` type is not borrowed (it is a copy,
+// §4.1), so the result does not borrow `k`: writing `k` while `r` is live is
+// accepted. r = "a", k = 2. Prints "a 2".
+fn pc(a: Vec[String], n: i64) -> ref String { ref a[0] }
+fn main() {
+    let names = ["a".to_string()];
+    let mut k = 1;
+    let r = pc(names, k);
+    k += 1;
+    println(f"{r} {k}");
+}

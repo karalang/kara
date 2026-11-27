@@ -1,0 +1,11 @@
+// cs.328: branches take the union of their arms. `r` borrows `x` and `y`
+// whichever arm runs, so writing `y` while `r` is live is refused, at the
+// assignment (line 9).
+fn main() {
+    let x = "x".to_string();
+    let mut y = "y".to_string();
+    let flag = x.len() > 0;
+    let r = if flag { ref x } else { ref y };
+    y = "z".to_string();
+    println(r);
+}

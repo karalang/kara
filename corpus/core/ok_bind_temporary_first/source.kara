@@ -1,0 +1,8 @@
+// cs.394: the fix for §5.5 is to bind the temporary to a variable first;
+// the view of the named `t` may then be kept. Prints "abc".
+fn make() -> String { "abc".to_string() }
+fn main() {
+    let t = make();
+    let s = t.as_str();
+    println(s);
+}

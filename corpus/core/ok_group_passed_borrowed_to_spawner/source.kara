@@ -1,0 +1,12 @@
+// cs.693 §9.5: `spawn` borrows its receiver, so a group can be passed borrowed
+// to a function that spawns into it. Each task copies `n` (a parameter that
+// drops before the group). 3*2 + 4*2 = 14.
+// Expected: 14.
+import std.sync.{TaskGroup, TaskHandle};
+fn launch(g: TaskGroup, n: i64) -> TaskHandle[i64] { g.spawn(|| n * 2) }
+fn main() {
+    let g = TaskGroup.new();
+    let a = launch(g, 3);
+    let b = launch(g, 4);
+    println(a.join() + b.join());
+}

@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0509"
+exit = 1
+tags = ["references", "views"]
+class = "a"
+expected_from = "spec"
+rules = ["5.7"]
+backends = []
+env = {}
+note = "core-semantics §5.7: cs.415: a view may not flow into the function's result except as §5.4 allows: the result may borrow only from the selected parameters, so returning a view of the local `w` is refused. (Sentence map 2026-11-27, cell c5/r_view_of_local_returned_refused.) The expected.out wording of an error pin is guidance, not a byte oracle."

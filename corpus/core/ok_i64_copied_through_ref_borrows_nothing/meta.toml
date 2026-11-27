@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["references", "views"]
+expected_from = "spec"
+rules = ["5.3"]
+backends = []
+env = {}
+note = "core-semantics §5.3: cs.358, cs.360: only a value whose type can hold a reference has origins; an `i64` copied out through a reference borrows nothing, so `v` may be written while `n` and `m` are live. n = 1, m = 1; v gets 9 -> len 3. (Sentence map 2026-11-27, cell c5/r_i64_copied_through_ref_borrows_nothing.)"

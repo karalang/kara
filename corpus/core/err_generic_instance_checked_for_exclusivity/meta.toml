@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0516"
+exit = 1
+tags = ["references", "views"]
+class = "a"
+expected_from = "spec"
+rules = ["5.8"]
+backends = []
+env = {}
+note = "core-semantics §5.8: cs.419: the checks of §5.6 run on the monomorphised instance: `wrap[Str]`'s result borrows `text`, so writing `text` while `b` is live is refused, at the `push_str` (line 9). (Sentence map 2026-11-27, cell c5/r_generic_instance_checked_for_exclusivity.) The expected.out wording of an error pin is guidance, not a byte oracle."

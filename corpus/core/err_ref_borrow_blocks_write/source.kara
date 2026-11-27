@@ -1,0 +1,8 @@
+// cs.399: while a `ref` borrow of `s` is live, `s` may not be written.
+// Refused at the assignment (line 6).
+fn main() {
+    let mut s = "a".to_string();
+    let r = ref s;
+    s = "b".to_string();
+    println(r);
+}

@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0516"
+exit = 1
+tags = ["references", "views"]
+class = "a"
+expected_from = "spec"
+rules = ["5.3"]
+backends = []
+env = {}
+note = "core-semantics §5.3: cs.327: a literal that builds a view takes the union of its fields' origins. `t` borrows both `x` and `y`; writing `y` while `t` is live is refused, at the assignment (line 9), even though only `t.a` is read. (Sentence map 2026-11-27, cell c5/r_view_literal_takes_union_of_field_origins.) The expected.out wording of an error pin is guidance, not a byte oracle."

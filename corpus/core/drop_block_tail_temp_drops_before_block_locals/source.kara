@@ -1,0 +1,17 @@
+// cs.557 (a block tail value's temporary drops after the tail is computed,
+// before the block's locals). The tail reads a field of the temporary r(2):
+// d2 then the block local a (d1), then n2.
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+fn r(i: i64) -> R { R { id: i } }
+fn see(x: R) -> i64 { x.id }
+fn say(i: i64) -> i64 { println(f"say{i}"); i }
+fn add(a: i64, b: i64) -> i64 { a + b }
+fn take(x: own R) { println(f"took{x.id}"); }
+fn main() {
+    let n = {
+        let a = R { id: 1 };
+        r(2).id + a.id - 1
+    };
+    println(f"n{n}");
+}

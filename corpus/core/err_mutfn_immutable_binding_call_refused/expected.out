@@ -1,0 +1,1 @@
+error[E0518]: main.kara:7:5: `bump` is a `MutFn` (it writes captured `tally`), so calling it needs `let mut bump` (design.md §7 Function types and kinds)

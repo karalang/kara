@@ -1,0 +1,9 @@
+// cs.209 §3.7: moving a non-Copy value out of a place rooted at a `ref`
+// binding is an error.
+struct User { nickname: String }
+fn main() {
+    let u = User { nickname: "x".to_string() };
+    let r = ref u;
+    let s = r.nickname;
+    println(s);
+}

@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0516"
+exit = 1
+tags = ["closures"]
+class = "a"
+expected_from = "spec"
+rules = ["9.4"]
+backends = []
+env = {}
+note = "core-semantics §9.4: §9.4 (function value a call returns, 2026-11-26; no cs id): `f = mk(name_txt)` hides its captures, so its borrow of `name_txt` lasts until `f` drops at the end of main, not until its last use: the write after `f(1)` is an error. The capture (a reference) drops nothing; that does not shorten it. (Sentence map 2026-11-27, cell c3_c9/k_returned_fn_borrows_until_scope_end_refused.) The expected.out wording of an error pin is guidance, not a byte oracle."

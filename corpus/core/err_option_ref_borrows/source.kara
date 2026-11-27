@@ -1,0 +1,8 @@
+// cs.319, cs.322: `Option[ref T]` is a view: while `o` (from `first`) is
+// live, `v` may not be written. Refused at the `push` (line 6).
+fn main() {
+    let mut v = ["a".to_string()];
+    let o = v.first();
+    v.push("b".to_string());
+    println(o.unwrap());
+}

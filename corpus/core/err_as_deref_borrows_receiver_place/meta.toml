@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0516"
+exit = 1
+tags = ["references", "views"]
+class = "a"
+expected_from = "spec"
+rules = ["5.4"]
+backends = []
+env = {}
+note = "core-semantics §5.4: cs.372: `Option.as_deref`'s result is a view of the receiver's own value, so it borrows the receiver place `o`, as a `ref` in the signature would. Assigning `o` while `d` is live is refused, at line 7. (Sentence map 2026-11-27, cell c5/r_as_deref_borrows_receiver_place.) The expected.out wording of an error pin is guidance, not a byte oracle."

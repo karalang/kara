@@ -1,0 +1,10 @@
+// cs.427: a place through a `ref` may not be mutably borrowed by an
+// argument marked `mut`: passing the bare parameter `v` as `mut v` is
+// refused (line 5).
+fn grow(v: mut ref Vec[i64]) { v.push(1); }
+fn outer(v: Vec[i64]) { grow(mut v); }
+fn main() {
+    let v: Vec[i64] = [];
+    outer(v);
+    println(f"{v.len()}");
+}

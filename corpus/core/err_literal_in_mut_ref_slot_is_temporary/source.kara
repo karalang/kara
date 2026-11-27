@@ -1,0 +1,8 @@
+// cs.354: a literal checked against `mut ref T` is a temporary, so §5.5
+// applies: the result of `bump(mut 0)` borrows that temporary and may not
+// outlive the statement. Binding it with `let` is refused (line 6).
+fn bump(x: mut ref i64) -> mut ref i64 { *x += 1; x }
+fn main() {
+    let r = bump(mut 0);
+    println(f"{r}");
+}

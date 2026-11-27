@@ -1,0 +1,1 @@
+error[E0516]: main.kara:8:5: cannot assign `w.a` while `ref r` borrows `w.a`: `r` is used after this, at 9:20 (`r` is bound at 6:9; core-semantics.md §5.6). Use `r` before the write, or clone what you need from it first

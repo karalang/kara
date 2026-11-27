@@ -1,0 +1,1 @@
+error[E0500]: main.kara:14:13: value 'a' moved here, used again here (moved at line 12:13)

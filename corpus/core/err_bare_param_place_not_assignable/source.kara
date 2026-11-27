@@ -1,0 +1,11 @@
+// cs.423, cs.424, cs.426: a place through a borrowed (bare) parameter is
+// read-only and may not be assigned. Refused at the assignment (line 5).
+struct P { n: i64 }
+fn set(p: P) {
+    p.n = 1;
+}
+fn main() {
+    let p = P { n: 0 };
+    set(p);
+    println(f"{p.n}");
+}

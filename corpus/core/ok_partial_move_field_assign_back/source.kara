@@ -1,0 +1,15 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+// cs.192 §3.4 / cs.203 §3.6: a field moved out on its own may be assigned
+// back, and assigning it back drops nothing (the field held no value).
+// eat(p.a): eat1, d1. `p.a = R{3}`: no drop. "restored". At main's end `p`
+// drops whole, fields last first (cs.19): b=2 then a=3.
+// Expected: eat1, d1, restored, d2, d3.
+struct P { a: R, b: R }
+fn eat(r: own R) { println(f"eat{r.id}"); }
+fn main() {
+    let mut p = P { a: R { id: 1 }, b: R { id: 2 } };
+    eat(p.a);
+    p.a = R { id: 3 };
+    println("restored");
+}

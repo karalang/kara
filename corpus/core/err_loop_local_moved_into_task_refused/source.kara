@@ -1,0 +1,14 @@
+// cs.699-700 §9.5: a loop-body local drops before the group, so it is moved
+// into the task (§9.1); using it afterwards is E0500.
+import std.sync.{TaskGroup};
+fn main() {
+    let g = TaskGroup.new();
+    let mut k = 0;
+    while k < 2 {
+        let label = "task".to_string();
+        let h = g.spawn(|| label.len());
+        println(label);
+        println(h.join());
+        k = k + 1;
+    }
+}

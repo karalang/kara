@@ -1,0 +1,11 @@
+// cs.399: while a `ref` borrow of `s` is live, `s` may not be dropped. `s`
+// drops at the end of the inner block, while `r` (used after the block) still
+// borrows it. Refused.
+fn main() {
+    let mut r: ref String = "lit";
+    {
+        let s = "a".to_string();
+        r = ref s;
+    }
+    println(r);
+}

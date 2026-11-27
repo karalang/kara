@@ -1,0 +1,12 @@
+// §9.4 (function value a call returns, 2026-11-26; no cs id): `f = mk(name_txt)`
+// hides its captures, so its borrow of `name_txt` lasts until `f` drops at the
+// end of main, not until its last use: the write after `f(1)` is an error.
+// The capture (a reference) drops nothing; that does not shorten it.
+fn mk(p: String) -> Fn(i64) -> i64 { |k| p.len() + k }
+fn main() {
+    let mut name_txt = "ab".to_string();
+    let f = mk(name_txt);
+    println(f(1));
+    name_txt.push_str("c");
+    println(name_txt);
+}

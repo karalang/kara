@@ -1,0 +1,8 @@
+// cs.725 §9.6: the capture prefix `mut ref |x|` is removed, so writing it is
+// refused.
+fn main() {
+    let mut n = 0;
+    let mut f = mut ref || { n += 1; };
+    f();
+    println(n);
+}

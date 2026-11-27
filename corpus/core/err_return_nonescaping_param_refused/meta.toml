@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0200"
+exit = 1
+tags = ["closures"]
+class = "a"
+expected_from = "spec"
+rules = ["9.3"]
+backends = []
+env = {}
+note = "core-semantics §9.3: cs.680-681 §9.3: returning a non-escaping function-typed parameter needs the `escaping` declaration; without it this is an error. (Sentence map 2026-11-27, cell c3_c9/k_return_nonescaping_param_refused.) The expected.out wording of an error pin is guidance, not a byte oracle."

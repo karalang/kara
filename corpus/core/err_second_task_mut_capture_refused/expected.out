@@ -1,0 +1,1 @@
+error[E0200]: main.kara:7:14: a task of `g` captures `counter_v` by `mut ref`, which no other task of the group may capture (core-semantics.md §9.5)

@@ -1,0 +1,12 @@
+// cs.650 §9.1: a by-move capture of a Copy place copies it. The closure in a
+// struct field escapes (§9.3), so it captures `n` by move, i.e. a copy of 5;
+// `n` itself stays usable and writable, and the closure keeps reading 5.
+// Expected: 10, 7.
+struct Holder { f: Fn() -> i64 }
+fn main() {
+    let mut n = 5;
+    let h = Holder { f: || n * 2 };
+    n = 7;
+    println((h.f)());
+    println(n);
+}

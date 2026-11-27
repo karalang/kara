@@ -1,0 +1,8 @@
+// cs.355, cs.356: `Vec.new()` in a `ref` slot is a temporary; a result
+// borrowing it may not outlive the statement. Refused at the `let` (line 6).
+fn longer(a: Vec[i64], b: Vec[i64]) -> ref Vec[i64] { if a.len() > b.len() { a } else { b } }
+fn main() {
+    let v: Vec[i64] = [1];
+    let r = longer(v, Vec.new());
+    println(f"{r.len()}");
+}

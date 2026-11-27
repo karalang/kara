@@ -1,0 +1,18 @@
+// cs.551 (an argument passed to an `own` parameter is not a caller temporary: it
+// moves into the callee, which drops it). `eat` drops its parameter at its own
+// body's end, so d1 comes before the statement's later `say(2)`.
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+fn r(i: i64) -> R { R { id: i } }
+fn see(x: R) -> i64 { x.id }
+fn say(i: i64) -> i64 { println(f"say{i}"); i }
+fn add(a: i64, b: i64) -> i64 { a + b }
+fn take(x: own R) { println(f"took{x.id}"); }
+fn eat(x: own R) -> i64 {
+    println(f"eat{x.id}");
+    x.id
+}
+fn main() {
+    let s = add(eat(R { id: 1 }), say(2));
+    println(f"s{s}");
+}

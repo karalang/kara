@@ -1,0 +1,28 @@
+// cs.553 (a `let ... else` initializer's temporary drops before the `else`
+// block runs, or at the `;` when the pattern matches), cs.561. try_(2): the
+// pattern matches, d2 at the `;`, then n2. try_(1): no match, d1, then the else
+// block prints "else".
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+fn r(i: i64) -> R { R { id: i } }
+fn see(x: R) -> i64 { x.id }
+fn say(i: i64) -> i64 { println(f"say{i}"); i }
+fn add(a: i64, b: i64) -> i64 { a + b }
+fn take(x: own R) { println(f"took{x.id}"); }
+fn check(x: R) -> Option[i64] {
+    if x.id > 1 { Some(x.id) } else { None }
+}
+fn try_(i: i64) -> i64 {
+    let Some(n) = check(R { id: i }) else {
+        println("else");
+        return 0;
+    };
+    println(f"n{n}");
+    n
+}
+fn main() {
+    let a = try_(2);
+    println(f"got{a}");
+    let b = try_(1);
+    println(f"got{b}");
+}

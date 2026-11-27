@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["ownership", "moves"]
+expected_from = "spec"
+rules = ["3.4", "3.6"]
+backends = []
+env = {}
+note = "core-semantics §3.4, §3.6: cs.192 §3.4 / cs.203 §3.6: a field moved out on its own may be assigned back, and assigning it back drops nothing (the field held no value). eat(p.a): eat1, d1. `p.a = R{3}`: no drop. \"restored\". At main's end `p` drops whole, fields last first (cs.19): b=2 then a=3. Expected: eat1, d1, restored, d2, d3. (Sentence map 2026-11-27, cell c3_c9/m_partial_move_field_assign_back.)"

@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0500"
+exit = 1
+tags = ["ownership", "moves"]
+class = "a"
+expected_from = "spec"
+rules = ["3.1"]
+backends = []
+env = {}
+note = "core-semantics §3.1: cs.165 §3.1: a `let` initializer is a move position, so `let t = s;` moves the String `s`; reading `s` afterwards uses a moved place: E0500 (§3.2). (Sentence map 2026-11-27, cell c3_c9/m_let_initializer_moves.) The expected.out wording of an error pin is guidance, not a byte oracle."

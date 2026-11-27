@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+expected_from = "spec"
+rules = ["7.4"]
+backends = []
+env = {}
+note = "core-semantics §7.4: cs.556 (a `while let` scrutinee temporary drops at the end of each iteration's body). Each G drops after its iteration's body line; the last, non-matching test's G (dg2) drops before \"done\". (Sentence map 2026-11-27, cell c7/d_while_let_scrutinee_temp_drops_each_iteration.)"

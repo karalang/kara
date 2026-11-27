@@ -1,0 +1,8 @@
+// cs.165 §3.1: a `let` initializer is a move position, so `let t = s;` moves
+// the String `s`; reading `s` afterwards uses a moved place: E0500 (§3.2).
+fn main() {
+    let s = "hi".to_string();
+    let t = s;
+    println(s);
+    println(t);
+}

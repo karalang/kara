@@ -1,0 +1,8 @@
+// cs.210 §3.7: moving a non-Copy value out of a `frozen` value is an error.
+shared struct H { payload: Vec[i64] }
+fn main() {
+    let h = H { payload: [1, 2] };
+    let g = freeze h;
+    let v = g.payload;
+    println(v.len());
+}

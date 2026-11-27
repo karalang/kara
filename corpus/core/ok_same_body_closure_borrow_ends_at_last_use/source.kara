@@ -1,0 +1,11 @@
+// §9.4 (function value a call returns; no cs id): a closure made in the same
+// body has captures its caller can see, so its borrow of `name` ends at its
+// last use, and the write after `f(1)` is allowed.
+// Expected: 3, abc.
+fn main() {
+    let mut name = "ab".to_string();
+    let f = |k: i64| name.len() + k;
+    println(f(1));
+    name.push_str("c");
+    println(name);
+}

@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closures"]
+expected_from = "spec"
+rules = ["9.3", "9.6"]
+backends = []
+env = {}
+note = "core-semantics §9.3, §9.6: cs.675 §9.3 / cs.726 §9.6: the fix is to clone before creating the closure: the escaping closure moves the clone `c`, and `s` stays usable. Expected: abc, 3. (Sentence map 2026-11-27, cell c3_c9/k_clone_before_escaping_closure.)"

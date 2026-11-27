@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0516"
+exit = 1
+tags = ["references", "views"]
+class = "a"
+expected_from = "spec"
+rules = ["5.6"]
+backends = []
+env = {}
+note = "core-semantics §5.6: cs.402: any index projection overlaps the whole collection: `v[1]` overlaps `v[0]`, so `ref v[1]` while `mut ref v[0]` is live is refused, at line 6. (Sentence map 2026-11-27, cell c5/r_index_projection_overlaps_collection.) The expected.out wording of an error pin is guidance, not a byte oracle."

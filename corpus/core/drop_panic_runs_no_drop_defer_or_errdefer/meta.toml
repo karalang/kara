@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "panic:101"
+exit = 101
+tags = ["drop"]
+class = "a"
+expected_from = "spec"
+rules = ["7.7"]
+backends = []
+env = {}
+note = "core-semantics §7.7: cs.584 (neither `defer` nor `errdefer` runs on a panic, §10), with §10.2 (no Drop body runs; exit code 101; the message goes to stderr). Only \"before\" is printed: no defer, no errdefer, no d1. (Sentence map 2026-11-27, cell c7/d_panic_runs_no_drop_defer_or_errdefer.)"

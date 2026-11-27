@@ -1,0 +1,21 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+// cs.688 §9.4: a closure's captures drop when the closure drops, in reverse
+// capture order = reverse of the order their names first appear in the body.
+// The field closure escapes (§9.3), so it owns a, b, c. Body order: b, c, a;
+// reverse: a, c, b -> d1, d3, d2, when `h` drops at the inner block's end.
+// (`val(x)` captures each root whole, as the pin drop_closure_captures_in_first_use_order does.)
+// Expected: 231, drop holder, d1, d3, d2, end.
+fn val(r: R) -> i64 { r.id }
+struct Holder { f: Fn() -> i64 }
+fn main() {
+    let a = R { id: 1 };
+    let b = R { id: 2 };
+    let c = R { id: 3 };
+    {
+        let h = Holder { f: || val(b) * 100 + val(c) * 10 + val(a) };
+        println((h.f)());
+        println("drop holder");
+    }
+    println("end");
+}

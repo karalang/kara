@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0517"
+exit = 1
+tags = ["references", "views"]
+class = "a"
+expected_from = "spec"
+rules = ["5.9"]
+backends = []
+env = {}
+note = "core-semantics §5.9: cs.427: a place through a `ref` may not be mutably borrowed by a `mut ref name` binding: `Some(mut ref p)` on a bare parameter's field is refused (line 7). (Sentence map 2026-11-27, cell c5/r_ref_place_not_bound_mut_ref.) The expected.out wording of an error pin is guidance, not a byte oracle."

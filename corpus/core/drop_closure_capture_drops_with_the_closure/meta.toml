@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+expected_from = "spec"
+rules = ["7.1"]
+backends = []
+env = {}
+note = "core-semantics §7.1: cs.522 (a closure's captured values are holders, dropped with the closure). `make` returns the closure, so it escapes and captures `t` by move (§9.3). In the block, `x` is pushed before `g`, so at the block's end `g` drops first, taking its capture (d1), then `x` (d2), all before \"after\". (Sentence map 2026-11-27, cell c7/d_closure_capture_drops_with_the_closure.)"

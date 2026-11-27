@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["references", "views"]
+expected_from = "spec"
+rules = ["5.7"]
+backends = []
+env = {}
+note = "core-semantics §5.7: cs.414: a borrowed parameter counts as a view: the returned closure captures the reference `p` holds, so `mk(p: String) -> Fn(String) -> String` is accepted. mk(name)(\"c\") = \"ab\" + \"c\". Prints \"abc\". (Sentence map 2026-11-27, cell c5/r_returned_closure_capturing_borrowed_param.)"

@@ -1,0 +1,13 @@
+// cs.309: `mut ref place` needs a writable place (§5.9). `q` is a bare
+// (borrowed, read-only) parameter, so `mut ref q.p` is refused at that line (6).
+struct P { hits: i64 }
+struct Q { p: P }
+fn bump(q: Q) {
+    let up = mut ref q.p;
+    up.hits += 1;
+}
+fn main() {
+    let q = Q { p: P { hits: 0 } };
+    bump(q);
+    println(f"{q.p.hits}");
+}

@@ -1,0 +1,9 @@
+// cs.402: any index projection overlaps the whole collection: `v[1]` overlaps
+// `v[0]`, so `ref v[1]` while `mut ref v[0]` is live is refused, at line 6.
+fn main() {
+    let mut v: Vec[i64] = [1, 2];
+    let a = mut ref v[0];
+    let b = ref v[1];
+    *a += 1;
+    println(f"{b}");
+}

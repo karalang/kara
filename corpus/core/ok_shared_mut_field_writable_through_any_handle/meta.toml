@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["references", "views"]
+expected_from = "spec"
+rules = ["5.9"]
+backends = []
+env = {}
+note = "core-semantics §5.9: cs.429, cs.430: the exception is a `mut` field of a `shared` value, writable through any handle however it was reached: through a `for` item (a `ref`), a bare parameter and a `ref` returned by a call. hits: 0 -> 1 (for) -> 2 (bump) -> 3 (first). Prints \"3\". (Sentence map 2026-11-27, cell c5/r_shared_mut_field_writable_through_any_handle.)"

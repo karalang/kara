@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closures"]
+expected_from = "spec"
+rules = ["9.3"]
+backends = []
+env = {}
+note = "core-semantics §9.3: cs.669, cs.673 §9.3: the returned closure captures `r` by move, so R7 does not drop at mk's end; it lives in the closure and drops with `f` at main's end. (`val(r)` captures `r` whole.) Expected: made, 7, end, d7. (Sentence map 2026-11-27, cell c3_c9/k_returned_closure_owns_capture.)"

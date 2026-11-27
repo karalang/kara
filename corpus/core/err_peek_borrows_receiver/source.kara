@@ -1,0 +1,10 @@
+// cs.370, cs.371: a `ref` written in the signature keeps the receiver rule:
+// `peek(mut ref self) -> Option[ref Self.Item]` borrows `p` itself, so
+// calling `p.next()` while `a` is live is refused, at line 8.
+fn main() {
+    let v = ["x".to_string(), "y".to_string()];
+    let mut p = v.iter().peekable();
+    let a = p.peek();
+    let _ = p.next();
+    println(f"{a.is_some()}");
+}

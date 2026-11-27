@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+expected_from = "spec"
+rules = ["7.4"]
+backends = []
+env = {}
+note = "core-semantics §7.4: cs.553 (a `let ... else` initializer's temporary drops before the `else` block runs, or at the `;` when the pattern matches), cs.561. try_(2): the pattern matches, d2 at the `;`, then n2. try_(1): no match, d1, then the else block prints \"else\". (Sentence map 2026-11-27, cell c7/d_let_else_temp_drops_before_else_or_at_semicolon.)"

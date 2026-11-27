@@ -1,0 +1,11 @@
+// cs.715-716 §9.6: an OnceFn may be called once; the call moves the value, so a
+// second call of the local `f` is E0500.
+fn main() {
+    let s = "x".to_string();
+    let f = || {
+        let t = s;
+        println(t);
+    };
+    f();
+    f();
+}

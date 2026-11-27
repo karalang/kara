@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+expected_from = "spec"
+rules = ["7.10"]
+backends = []
+env = {}
+note = "core-semantics §7.10: cs.611 (an optimiser may remove a matched increment/decrement pair on a shared handle only if no count reaches zero at a different point). §6.1: using a handle as a value increments, each holder releases at its drop. Part 1: `holder = Some(a)` takes a second count; a's release at the inner brace leaves 1; the Drop body runs when holder's old value is dropped by the assignment (dS1 before \"end1\"). Part 2: c copies b's handle and releases it at its block's end; b's own release at the outer block's end is the last (dS2 between \"b alive\" and \"after b\"). (Sentence map 2026-11-27, cell c7/d_shared_count_reaches_zero_where_the_last_holder_drops.)"

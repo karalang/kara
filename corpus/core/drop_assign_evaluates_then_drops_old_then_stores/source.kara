@@ -1,0 +1,35 @@
+// cs.568 (p's operands are evaluated, then v), cs.570 (the old value is then
+// dropped), cs.572 (the new value is stored), cs.573 (the same holds for a field
+// or element place). `mk` prints when it makes the value, `idx` when the index
+// operand is evaluated. So: mk2 then d1; mk5 then d3 (old p.a); idx1, mk8, then
+// d7 (old v[1]). At main's end the LIFO pops v (elements first index to last:
+// d6 d8), p (fields in reverse declaration order: b=d4, a=d5), then x (d2).
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+fn r(i: i64) -> R { R { id: i } }
+fn see(x: R) -> i64 { x.id }
+fn say(i: i64) -> i64 { println(f"say{i}"); i }
+fn add(a: i64, b: i64) -> i64 { a + b }
+fn take(x: own R) { println(f"took{x.id}"); }
+struct P { a: R, b: R }
+fn mk(i: i64) -> R {
+    println(f"mk{i}");
+    R { id: i }
+}
+fn idx(i: i64) -> i64 {
+    println(f"idx{i}");
+    i
+}
+fn main() {
+    let mut x = R { id: 1 };
+    x = mk(2);
+    println("x done");
+    let mut p = P { a: R { id: 3 }, b: R { id: 4 } };
+    p.a = mk(5);
+    println("field done");
+    let mut v: Vec[R] = Vec.new();
+    v.push(R { id: 6 });
+    v.push(R { id: 7 });
+    v[idx(1)] = mk(8);
+    println("element done");
+}

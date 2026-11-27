@@ -1,0 +1,11 @@
+// cs.341: a reborrow from a `mut ref` stays exclusive: while `x`
+// (`mut ref r.n`) is live, a second borrow `ref r.n` is refused, at line 8.
+struct B { n: i64 }
+fn main() {
+    let mut a = B { n: 1 };
+    let r = mut ref a;
+    let x = mut ref r.n;
+    let y = ref r.n;
+    *x += 1;
+    println(f"{y}");
+}

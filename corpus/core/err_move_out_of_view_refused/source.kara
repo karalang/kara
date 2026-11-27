@@ -1,0 +1,11 @@
+// cs.209 §3.7: moving a non-Copy value out of a place rooted at a view is an
+// error. `Card` has a `ref` field, so it is a view (§5.2); `card.u.nickname`
+// is rooted at it.
+struct User { nickname: String }
+struct Card { u: ref User }
+fn main() {
+    let user = User { nickname: "x".to_string() };
+    let card = Card { u: ref user };
+    let s = card.u.nickname;
+    println(s);
+}

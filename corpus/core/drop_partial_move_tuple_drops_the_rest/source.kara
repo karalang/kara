@@ -1,0 +1,15 @@
+// cs.605 (partially moved values drop their remaining parts in the §7.8 order,
+// skipping the moved parts). x takes t.1; LIFO pops x (d2), then t's remaining
+// elements last to first: d3, d1.
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+fn r(i: i64) -> R { R { id: i } }
+fn see(x: R) -> i64 { x.id }
+fn say(i: i64) -> i64 { println(f"say{i}"); i }
+fn add(a: i64, b: i64) -> i64 { a + b }
+fn take(x: own R) { println(f"took{x.id}"); }
+fn main() {
+    let t = (R { id: 1 }, R { id: 2 }, R { id: 3 });
+    let x = t.1;
+    println(f"mid{x.id}");
+}

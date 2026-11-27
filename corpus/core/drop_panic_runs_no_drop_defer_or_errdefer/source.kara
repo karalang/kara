@@ -1,0 +1,24 @@
+// cs.584 (neither `defer` nor `errdefer` runs on a panic, §10), with §10.2 (no
+// Drop body runs; exit code 101; the message goes to stderr). Only "before" is
+// printed: no defer, no errdefer, no d1.
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+fn r(i: i64) -> R { R { id: i } }
+fn see(x: R) -> i64 { x.id }
+fn say(i: i64) -> i64 { println(f"say{i}"); i }
+fn add(a: i64, b: i64) -> i64 { a + b }
+fn take(x: own R) { println(f"took{x.id}"); }
+fn f(k: i64) -> Result[i64, String] {
+    let a = R { id: 1 };
+    defer println("defer");
+    errdefer println("errdefer");
+    println("before");
+    if k > 0 {
+        panic("boom");
+    }
+    Ok(a.id)
+}
+fn main() {
+    let v = f(1);
+    println(f"after {v.is_ok()}");
+}

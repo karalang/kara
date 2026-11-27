@@ -1,0 +1,10 @@
+// cs.413: a view may not flow into an escaping closure. A closure stored
+// in a struct field escapes (§9.3) even when the struct is a local, so a
+// closure capturing the view `t` there is refused, at line 8.
+struct Holder { f: Fn() -> i64 }
+fn main() {
+    let text = "abc".to_string();
+    let t = text.as_str();
+    let h = Holder { f: || t.len() };
+    println(f"{(h.f)()}");
+}

@@ -1,0 +1,6 @@
+// cs.439: `*c` on a named function's `c: char` is an error, as on a closure
+// parameter, and its machine-applicable fix removes the `*`.
+fn is_q(c: char) -> bool { *c == 'Q' }
+fn main() {
+    println(f"{is_q('Q')}");
+}

@@ -1,0 +1,28 @@
+// cs.570 (the old value of p is dropped, if p is initialized). After `take(x)`
+// x is moved, so `x = R{2}` drops nothing. In `g`, x is maybe-moved: the
+// assignment drops the old value only on the path where it is still initialized
+// (c == false), never twice.
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+fn r(i: i64) -> R { R { id: i } }
+fn see(x: R) -> i64 { x.id }
+fn say(i: i64) -> i64 { println(f"say{i}"); i }
+fn add(a: i64, b: i64) -> i64 { a + b }
+fn take(x: own R) { println(f"took{x.id}"); }
+fn g(c: bool) {
+    let mut x = R { id: 30 };
+    if c {
+        take(x);
+    }
+    x = R { id: 31 };
+    println(f"g assigned{x.id}");
+}
+fn main() {
+    let mut x = R { id: 1 };
+    take(x);
+    x = R { id: 2 };
+    println(f"assigned{x.id}");
+    g(true);
+    g(false);
+    println("end");
+}

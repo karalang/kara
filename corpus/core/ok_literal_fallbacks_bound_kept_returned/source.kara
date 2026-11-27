@@ -1,0 +1,19 @@
+// cs.351-cs.353: a literal checked against `ref T` is a `ref T` to a
+// constant in static data and borrows nothing, so `m.get(k).unwrap_or("")`,
+// `counts.get(k).unwrap_or(0)` and `m.get(k) ?? ""` may be bound, kept and
+// returned. Missing key "q": "" / 0 / ""; present key "a": "b" / 3 / "b".
+fn name(m: Map[String, String], k: String) -> ref String { m.get(k).unwrap_or("") }
+fn count(counts: Map[String, i64], k: String) -> ref i64 { counts.get(k).unwrap_or(0) }
+fn coalesce(m: Map[String, String], k: String) -> ref String { m.get(k) ?? "" }
+fn main() {
+    let mut m: Map[String, String] = Map.new();
+    m.insert("a".to_string(), "b".to_string());
+    let mut counts: Map[String, i64] = Map.new();
+    counts.insert("a".to_string(), 3);
+    let q = "q".to_string();
+    let a = "a".to_string();
+    let kept = m.get(q).unwrap_or("");
+    let n = count(counts, q);
+    println(f"[{kept}] [{name(m, q)}] {n} [{coalesce(m, q)}]");
+    println(f"[{name(m, a)}] {count(counts, a)} [{coalesce(m, a)}]");
+}

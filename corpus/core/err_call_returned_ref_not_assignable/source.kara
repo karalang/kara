@@ -1,0 +1,10 @@
+// cs.424, cs.426: a `ref` returned by a call, and a local bound to it, are
+// read-only: assigning through `r` is refused (line 8).
+struct P { n: i64 }
+fn first(v: Vec[P]) -> ref P { ref v[0] }
+fn main() {
+    let v = [P { n: 0 }];
+    let r = first(v);
+    r.n = 3;
+    println(f"{v[0].n}");
+}

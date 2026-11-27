@@ -1,0 +1,10 @@
+// cs.213 §3.7: the `mem.take(place)` fix (for `T: Default`). Taking `v[0]`
+// through a `mut ref` returns "a" and leaves String's default, "", behind.
+// Expected: a, "[] b".
+fn grab(v: mut ref Vec[String]) -> String { mem.take(mut v[0]) }
+fn main() {
+    let mut v: Vec[String] = ["a".to_string(), "b".to_string()];
+    let s = grab(mut v);
+    println(s);
+    println(f"[{v[0]}] {v[1]}");
+}

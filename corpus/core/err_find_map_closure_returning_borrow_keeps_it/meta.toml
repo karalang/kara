@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0516"
+exit = 1
+tags = ["references", "views"]
+class = "a"
+expected_from = "spec"
+rules = ["5.3"]
+backends = []
+env = {}
+note = "core-semantics §5.3: cs.336: a closure whose own result type can hold a reference keeps the general flow: `it.find_map(|x| w.first())` borrows `w`. Writing `w` while `r` is live is refused, at the `push` (line 8). (Sentence map 2026-11-27, cell c5/r_find_map_closure_returning_borrow_keeps_it.) The expected.out wording of an error pin is guidance, not a byte oracle."

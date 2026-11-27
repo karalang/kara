@@ -1,0 +1,16 @@
+// cs.597 (`Option` / `Result`: the payload, if present). a=Some(1), b=None,
+// c=Ok(2), d=Err(3); the LIFO pops d, c, b, a: d3, d2, (nothing), d1.
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+fn r(i: i64) -> R { R { id: i } }
+fn see(x: R) -> i64 { x.id }
+fn say(i: i64) -> i64 { println(f"say{i}"); i }
+fn add(a: i64, b: i64) -> i64 { a + b }
+fn take(x: own R) { println(f"took{x.id}"); }
+fn main() {
+    let a: Option[R] = Some(R { id: 1 });
+    let b: Option[R] = None;
+    let c: Result[R, R] = Ok(R { id: 2 });
+    let d: Result[R, R] = Err(R { id: 3 });
+    println(f"end{b.is_none()}");
+}

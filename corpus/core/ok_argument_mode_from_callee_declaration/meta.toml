@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["ownership", "moves"]
+expected_from = "spec"
+rules = ["3.1"]
+backends = []
+env = {}
+note = "core-semantics §3.1: cs.174 §3.1: whether an argument moves is decided only by the callee's declared mode. `look(r: R)` borrows (bare), so `a` can be passed twice; `keep(r: own R)` moves `a`, which then drops at keep's end (d1 printed before the println of keep's result), and not again at main's end. Expected: 1, 1, d1, 1, end. (Sentence map 2026-11-27, cell c3_c9/m_argument_mode_from_callee_declaration.)"

@@ -1,0 +1,1 @@
+error[E0209]: main.kara:5:31: unary '*' requires 'ref T', 'mut ref T', or a raw pointer ('*const T' / '*mut T'), found 'i64'; a 'i64' is copied, so drop the `*`

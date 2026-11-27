@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0516"
+exit = 1
+tags = ["references", "views"]
+class = "a"
+expected_from = "spec"
+rules = ["5.2"]
+backends = []
+env = {}
+note = "core-semantics §5.2: cs.321, cs.322: a closure that captures by reference is a view (§9.1: it only reads `s`, so it captures by `ref`): while `c` is live, `s` may not be written. Refused at the `push_str` (line 7). (Sentence map 2026-11-27, cell c5/r_ref_capturing_closure_borrows.) The expected.out wording of an error pin is guidance, not a byte oracle."

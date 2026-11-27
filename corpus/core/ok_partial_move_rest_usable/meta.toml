@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["ownership", "moves"]
+expected_from = "spec"
+rules = ["3.6"]
+backends = []
+env = {}
+note = "core-semantics §3.6: cs.202 §3.6: after `p.b` is moved out, the remaining fields can still be read (`p.n`), borrowed (`show(p.a)`) and moved (`let y = p.a`). Expected: b, 7, a, a. (Sentence map 2026-11-27, cell c3_c9/m_partial_move_rest_usable.)"

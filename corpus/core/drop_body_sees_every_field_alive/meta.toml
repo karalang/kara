@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+expected_from = "spec"
+rules = ["7.8"]
+backends = []
+env = {}
+note = "core-semantics §7.8: cs.590 (the type's own `Drop` body runs first, with every field still alive), cs.593. W's body reads both fields (dW 1 2), then the fields drop in reverse declaration order: d2 d1. (Sentence map 2026-11-27, cell c7/d_drop_body_sees_every_field_alive.)"

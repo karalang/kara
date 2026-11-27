@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0518"
+exit = 1
+tags = ["closures"]
+class = "a"
+expected_from = "spec"
+rules = ["9.6"]
+backends = []
+env = {}
+note = "core-semantics §9.6: cs.712 §9.6: an `own` MutFn parameter is rebound first (`let mut f = f;`); calling it directly is an error. (Sentence map 2026-11-27, cell c3_c9/k_mutfn_own_param_call_needs_rebind_refused.) The expected.out wording of an error pin is guidance, not a byte oracle."

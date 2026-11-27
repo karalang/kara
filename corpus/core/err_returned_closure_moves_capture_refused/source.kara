@@ -1,0 +1,11 @@
+// cs.669 §9.3: a closure that is returned escapes and captures every place by
+// move, so `s` is moved when `f` is created and reading it is E0500.
+fn mk() -> Fn() -> i64 {
+    let s = "abc".to_string();
+    let f = || s.len();
+    println(s);
+    f
+}
+fn main() {
+    println(mk()());
+}

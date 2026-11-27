@@ -1,0 +1,1 @@
+error[E0500]: main.kara:10:14: value 's' is moved inside a loop and not assigned again before the next iteration (moved at line 10:14; core-semantics.md §3.3)

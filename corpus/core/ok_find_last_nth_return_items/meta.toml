@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["references", "views"]
+expected_from = "spec"
+rules = ["5.4"]
+backends = []
+env = {}
+note = "core-semantics §5.4: cs.368: `last`, `nth` and `find` results borrow the collection the iterator iterates, not the (temporary) iterator, so a function can return them. v = [\"a\", \"bb\", \"ccc\"]: find(len > 1) = \"bb\", last = \"ccc\", nth(1) = \"bb\". Prints \"bb ccc bb\". (Sentence map 2026-11-27, cell c5/r_find_last_nth_return_items.)"

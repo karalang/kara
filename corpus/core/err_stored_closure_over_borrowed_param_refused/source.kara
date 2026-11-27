@@ -1,0 +1,12 @@
+// §9.3 (borrowed parameter sentence) with §5.7: the closure moves in the
+// reference `p_txt` holds, so it is a view; storing it in a collection is an
+// escape that only a returned closure may be, so this is an error.
+fn add_to(fs: mut ref Vec[Fn() -> i64], p_txt: String) {
+    fs.push(|| p_txt.len());
+}
+fn main() {
+    let t = "abc".to_string();
+    let mut fs: Vec[Fn() -> i64] = Vec.new();
+    add_to(mut fs, t);
+    println((fs[0])());
+}

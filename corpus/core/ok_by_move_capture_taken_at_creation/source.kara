@@ -1,0 +1,16 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+// cs.687 §9.4: a by-move capture moves the value into the closure when the
+// closure is created. `f` moves `r` (its body moves it), so R1 belongs to `f`
+// from its creation; `f` is never called and drops at the inner block's end,
+// taking R1 with it (d1 before "after"), and `r` does not drop again.
+// Expected: made, d1, after.
+fn eat(r: own R) { println(f"eat{r.id}"); }
+fn main() {
+    let r = R { id: 1 };
+    {
+        let f = || eat(r);
+        println("made");
+    }
+    println("after");
+}

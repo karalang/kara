@@ -1,0 +1,9 @@
+// cs.440: when the item is already a `ref T`, as with
+// `v.iter().filter(|x| ...)`, `*x` is the explicit read and `x` alone also
+// works. v = [1, 2, 3, 4]: items > 2 are 3 and 4, both ways. Prints "2 2".
+fn main() {
+    let v: Vec[i64] = [1, 2, 3, 4];
+    let a = v.iter().filter(|x| *x > 2).count();
+    let b = v.iter().filter(|x| x > 2).count();
+    println(f"{a} {b}");
+}

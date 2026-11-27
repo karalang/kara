@@ -1,0 +1,1 @@
+error[E0515]: main.kara:5:16: an escaping closure captures `p_txt` by move (core-semantics §9.3), but `p_txt` borrows its value, so `p_txt` cannot be moved out of it

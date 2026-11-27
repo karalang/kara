@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["references", "views"]
+expected_from = "spec"
+rules = ["5.4"]
+backends = []
+env = {}
+note = "core-semantics §5.4: cs.363: a bare parameter of a `Copy` type is not borrowed (it is a copy, §4.1), so the result does not borrow `k`: writing `k` while `r` is live is accepted. r = \"a\", k = 2. Prints \"a 2\". (Sentence map 2026-11-27, cell c5/r_result_skips_copy_param.)"

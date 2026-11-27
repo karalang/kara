@@ -1,0 +1,20 @@
+// cs.701 §9.5: putting the group in an inner block lets the task borrow
+// `data`; once the group drops (joining the task) the borrow ends and
+// `data` may be written.
+// Expected: 6, 4.
+import std.sync.{TaskGroup};
+fn total(v: ref Vec[i64]) -> i64 {
+    let mut acc = 0;
+    for x in v { acc = acc + x; }
+    acc
+}
+fn main() {
+    let mut data: Vec[i64] = [1, 2, 3];
+    {
+        let g = TaskGroup.new();
+        let h = g.spawn(|| total(data));
+        println(h.join());
+    }
+    data.push(4);
+    println(data.len());
+}

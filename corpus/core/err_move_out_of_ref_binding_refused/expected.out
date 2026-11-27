@@ -1,0 +1,1 @@
+error[borrow_projection_copy]: main.kara:7:13: cannot move a non-`Copy` value out of a borrowed place: `r.nickname` is reached through `r`, a reference. Write `.clone()` to take a copy, or keep using it in place

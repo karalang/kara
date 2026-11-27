@@ -1,0 +1,14 @@
+// cs.683 §9.3: `par {}` and `TaskGroup.spawn` take non-escaping closures, so
+// they may borrow `data`, which stays usable (read) afterwards.
+// par: 1+2, 3+4 -> 10; the task reads data.len() = 4.
+// Expected: 10, 4, 4.
+import std.sync.{TaskGroup};
+fn main() {
+    let data: Vec[i64] = [1, 2, 3, 4];
+    let (a, b) = par { data[0] + data[1], data[2] + data[3] };
+    let tg = TaskGroup.new();
+    let h = tg.spawn(|| data.len());
+    println(a + b);
+    println(h.join());
+    println(data.len());
+}

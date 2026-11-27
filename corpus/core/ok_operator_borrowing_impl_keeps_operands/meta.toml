@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["ownership", "moves"]
+expected_from = "spec"
+rules = ["3.1"]
+backends = []
+env = {}
+note = "core-semantics §3.1: cs.175 §3.1 (with design.md \"an impl may borrow where the trait takes ownership\"): this `add` borrows both operands (bare `self`, bare `rhs`), so `a + b` moves neither; both stay usable and each drops once, in reverse declaration order c, b, a at main's end. Expected: \"3 1 2\", then d3 d2 d1. (Sentence map 2026-11-27, cell c3_c9/m_operator_borrowing_impl_keeps_operands.)"

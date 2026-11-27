@@ -1,0 +1,13 @@
+// cs.350: a string literal typed `Str` is static data and borrows nothing,
+// so none of §5.5-§5.7 limits it: `s` is a loop-body local, yet the `Str`
+// it holds outlives it in `v`, and a `const` (a global) may hold one.
+// v = ["lit", "lit"]; G = "hi". Prints "2 lit lit hi".
+const G: Str = "hi";
+fn main() {
+    let mut v: Vec[Str] = Vec.new();
+    for i in 0..2 {
+        let s: Str = "lit";
+        v.push(s);
+    }
+    println(f"{v.len()} {v[0]} {v[1]} {G}");
+}

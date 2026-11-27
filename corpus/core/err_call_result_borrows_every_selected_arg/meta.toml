@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0516"
+exit = 1
+tags = ["references", "views"]
+class = "a"
+expected_from = "spec"
+rules = ["5.3", "5.4"]
+backends = []
+env = {}
+note = "core-semantics §5.3, §5.4: cs.326, cs.363, cs.386, cs.387: a call result borrows the origins of the arguments the signature rule selects: with no receiver, every borrowed non-Copy parameter. `pick` returns only `a`, but its result still borrows `y` (no body-dependent precision), so writing `y` while `r` is live is refused, at the assignment (line 11). (Sentence map 2026-11-27, cell c5/r_call_result_borrows_every_selected_arg.) The expected.out wording of an error pin is guidance, not a byte oracle."

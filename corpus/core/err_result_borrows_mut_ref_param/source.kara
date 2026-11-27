@@ -1,0 +1,11 @@
+// cs.363: with no receiver, the result borrows every `mut ref` parameter
+// too: `pm`'s result borrows `nums`, so writing `nums` while `r` is live is
+// refused, at the `push` (line 9).
+fn pm(a: Vec[String], b: mut ref Vec[i64]) -> ref String { b.push(1); ref a[0] }
+fn main() {
+    let names = ["a".to_string()];
+    let mut nums: Vec[i64] = Vec.new();
+    let r = pm(names, mut nums);
+    nums.push(2);
+    println(r);
+}

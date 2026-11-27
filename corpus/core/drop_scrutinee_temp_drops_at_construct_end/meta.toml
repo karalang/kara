@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+expected_from = "spec"
+rules = ["7.4"]
+backends = []
+env = {}
+note = "core-semantics §7.4: cs.555 (a `match` / `if let` scrutinee temporary drops at the end of the whole construct). G's pattern binds only the Copy `id`, so the G temporary stays whole and drops after the arm/body/else has run (dgN after the body), and when the construct sits inside a `let`, before the statement's later `say` (dg3 before say5, dg4 before say6). (Sentence map 2026-11-27, cell c7/d_scrutinee_temp_drops_at_construct_end.)"

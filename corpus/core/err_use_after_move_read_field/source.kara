@@ -1,0 +1,10 @@
+// cs.181 §3.2: reading a moved place is a use. `p` is moved into `eat`, so
+// reading its (Copy) field `p.n` afterwards is E0500.
+struct P { n: i64, s: String }
+fn eat(p: own P) { println(p.s); }
+fn main() {
+    let p = P { n: 1, s: "s".to_string() };
+    eat(p);
+    let k = p.n;
+    println(k);
+}

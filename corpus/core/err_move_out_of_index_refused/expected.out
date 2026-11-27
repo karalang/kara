@@ -1,0 +1,1 @@
+error[E_INDEX_MOVE_NON_COPY]: main.kara:5:13: cannot move `v[0]` out of an index: it evaluates to a `ref String`, and `String` is not `Copy`. Borrow it (`ref v[0]`), take an independent copy (`v[0].clone()`), or exchange two elements with `swap`. The binding is only read, so the fix borrows it

@@ -1,0 +1,12 @@
+// cs.661-662 §9.1: the captured view `txt_view` dies first and is moved in;
+// its origin `txt_origin` is declared before `f`, so it outlives the closure.
+// Expected: 5.
+fn main() {
+    let txt_origin = "abcde".to_string();
+    let mut f: Fn() -> i64 = || 0;
+    {
+        let txt_view = txt_origin.as_str();
+        f = || txt_view.len();
+    }
+    println(f());
+}

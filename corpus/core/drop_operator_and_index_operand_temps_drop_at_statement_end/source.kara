@@ -1,0 +1,30 @@
+// cs.550 (an operator operand or index operand passed borrowed drops at the end
+// of the enclosing statement), cs.562 (several temporaries that drop at the same
+// point drop in reverse order of creation). `==` borrows its operands: q9, q10
+// are created first, `say(11)` runs, then at the `;` d10, d9. The Map index
+// operand K{12} is borrowed: it drops after say13 at the `;` ("dk12"); the
+// map's own key K{12} and value drop at main's end, key before value (cs.598):
+// dk12, then the value R{20}: d20. Locals: m is the only one left.
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+fn r(i: i64) -> R { R { id: i } }
+fn see(x: R) -> i64 { x.id }
+fn say(i: i64) -> i64 { println(f"say{i}"); i }
+fn add(a: i64, b: i64) -> i64 { a + b }
+fn take(x: own R) { println(f"took{x.id}"); }
+#[derive(Hash, Eq, PartialEq)]
+struct K { id: i64 }
+impl Drop for K { fn drop(mut ref self) { println(f"dk{self.id}"); } }
+#[derive(PartialEq)]
+struct Q { id: i64 }
+impl Drop for Q { fn drop(mut ref self) { println(f"dq{self.id}"); } }
+fn q(i: i64) -> Q { Q { id: i } }
+fn both(b: bool, k: i64) -> bool { b and k > 0 }
+fn main() {
+    let e = both(q(9) == q(10), say(11));
+    println(f"e{e}");
+    let mut m: Map[K, R] = Map.new();
+    m.insert(K { id: 12 }, R { id: 20 });
+    let w = add(m[K { id: 12 }].id, say(13));
+    println(f"w{w}");
+}

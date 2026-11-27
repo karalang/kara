@@ -1,0 +1,14 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+// cs.168 §3.1: `r.consume()` with an `own self` receiver moves `r` into the
+// method, so `r` drops at the end of `consume` (d1 before "after") and not
+// again at main's end.
+// Expected: consume1, d1, after.
+impl R {
+    fn consume(own self) { println(f"consume{self.id}"); }
+}
+fn main() {
+    let r = R { id: 1 };
+    r.consume();
+    println("after");
+}

@@ -1,0 +1,1 @@
+error[E0517]: main.kara:7:26: `p` is bound by `ref`, so an assignment through `p` cannot modify it (core-semantics.md §5.9). Bind it as `mut ref p` from a mutable owned scrutinee

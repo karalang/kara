@@ -1,0 +1,11 @@
+// cs.414: the returned closure carries the view's origins, so
+// `mk(t.as_str())` may not outlive `t`: here `t` drops at the end of the
+// block while `f` lives on. Refused.
+fn mk(s: Str) -> Fn() -> i64 { || s.len() }
+fn main() {
+    let f = {
+        let t = "abc".to_string();
+        mk(t.as_str())
+    };
+    println(f"{f()}");
+}

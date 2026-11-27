@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closures"]
+expected_from = "spec"
+rules = ["9.1"]
+backends = []
+env = {}
+note = "core-semantics §9.1: cs.663 §9.1: a place that outlives the closure keeps the inferred capture (`ref` for a read). So `r` is not moved in: it does not drop when `f` drops at the inner block's end, it is still usable after, and it drops at main's end. (`val(r)` captures `r` whole.) Expected: 1, after block, 1, d1. (Sentence map 2026-11-27, cell c3_c9/k_outliving_place_keeps_ref_capture.)"

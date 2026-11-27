@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["references", "views"]
+expected_from = "spec"
+rules = ["5.3"]
+backends = []
+env = {}
+note = "core-semantics §5.3: cs.331: a closure argument adds its captures' origins to a `mut ref` pointee only when the pointee's type can hold the closure. `Vec[i64]` mentions no function type, so after `apply` the captured `t` may be written while `v` is live. v = [1+10, 2+10, 3+10]; t = 5. (Sentence map 2026-11-27, cell c5/r_closure_arg_not_stored_in_unrelated_pointee.)"

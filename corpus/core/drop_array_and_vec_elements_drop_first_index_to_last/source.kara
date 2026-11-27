@@ -1,0 +1,19 @@
+// cs.596 (`Vec`, `Array` ... first index to last). The Array drops d1 d2 d3.
+// The Vec is built by push(3), push(1), insert(0, 2), so at drop time it holds
+// [2, 3, 1] and drops d2 d3 d1, in index order, not push order. Locals: v was
+// introduced after a, so v drops first.
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+fn r(i: i64) -> R { R { id: i } }
+fn see(x: R) -> i64 { x.id }
+fn say(i: i64) -> i64 { println(f"say{i}"); i }
+fn add(a: i64, b: i64) -> i64 { a + b }
+fn take(x: own R) { println(f"took{x.id}"); }
+fn main() {
+    let a: Array[R, 3] = [R { id: 1 }, R { id: 2 }, R { id: 3 }];
+    let mut v: Vec[R] = Vec.new();
+    v.push(R { id: 3 });
+    v.push(R { id: 1 });
+    v.insert(0, R { id: 2 });
+    println(f"end{v.len()}");
+}

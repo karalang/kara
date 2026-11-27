@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0200"
+exit = 1
+tags = ["closures"]
+class = "a"
+expected_from = "spec"
+rules = ["9.3"]
+backends = []
+env = {}
+note = "core-semantics §9.3: cs.680 §9.3: a non-escaping parameter may be passed only to another non-escaping parameter; handing it to an `escaping` one is an error. (Sentence map 2026-11-27, cell c3_c9/k_nonescaping_param_to_escaping_param_refused.) The expected.out wording of an error pin is guidance, not a byte oracle."

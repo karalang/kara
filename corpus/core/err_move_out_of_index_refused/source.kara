@@ -1,0 +1,7 @@
+// cs.211 §3.7: moving a non-Copy value out of an index projection `v[i]` is
+// an error, the one the spec names E_INDEX_MOVE_NON_COPY.
+fn main() {
+    let v: Vec[String] = ["a".to_string(), "b".to_string()];
+    let s = v[0];
+    println(s);
+}

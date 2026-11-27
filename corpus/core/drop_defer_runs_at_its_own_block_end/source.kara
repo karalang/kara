@@ -1,0 +1,24 @@
+// cs.580 (a `defer` block runs when its scope ends, in its LIFO position). An
+// inner block's defer runs at that block's brace, an `if` body's at that body's
+// end, and main's own at main's end.
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+fn r(i: i64) -> R { R { id: i } }
+fn see(x: R) -> i64 { x.id }
+fn say(i: i64) -> i64 { println(f"say{i}"); i }
+fn add(a: i64, b: i64) -> i64 { a + b }
+fn take(x: own R) { println(f"took{x.id}"); }
+fn main() {
+    let c = 3;
+    defer println("defer main");
+    {
+        defer println("defer inner");
+        println("in");
+    }
+    println("out");
+    if c > 2 {
+        defer println("defer if");
+        println("if body");
+    }
+    println("end");
+}

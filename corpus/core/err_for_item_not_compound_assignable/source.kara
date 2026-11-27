@@ -1,0 +1,7 @@
+// cs.424, cs.426: the item of `for x in c` is a `ref` into `c` and is
+// read-only: `x += 1` over a `Vec[i64]` is refused (line 5).
+fn main() {
+    let mut v: Vec[i64] = [1, 2];
+    for x in v { x += 1; }
+    println(f"{v}");
+}

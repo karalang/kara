@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+expected_from = "spec"
+rules = ["7.6"]
+backends = []
+env = {}
+note = "core-semantics §7.6: cs.576 (`break`, `continue`, `return` and `?` run the drops and defers of every scope they leave, innermost scope first, each scope in its own LIFO order). break: the inner block pops c, defer inner, b; then the loop body pops defer loop, a; o stays to main's end. `?`: on i == 1 it leaves the inner block (d31), the iteration (d21) and the function (defer g, d10). (Sentence map 2026-11-27, cell c7/d_break_and_question_leave_scopes_innermost_first.)"

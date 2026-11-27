@@ -1,0 +1,1 @@
+error[E0516]: main.kara:6:13: cannot borrow `mut ref` `s` while `ref r` borrows `s`: `r` is used after this, at 8:13 (`r` is bound at 5:9; core-semantics.md §5.6). Use `r` before the write, or clone what you need from it first

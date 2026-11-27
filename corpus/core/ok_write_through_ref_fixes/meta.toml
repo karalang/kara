@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["references", "views"]
+expected_from = "spec"
+rules = ["5.9"]
+backends = []
+env = {}
+note = "core-semantics §5.9: cs.431: the fixes: a `mut ref T` parameter with `mut` at its call sites; `c.iter_mut()`; `mut ref name` from a mutable owned scrutinee; `mut ref place` from a writable place. v: [1] -> push 2 -> [1, 2] -> iter_mut +10 -> [11, 12]; o: Some(P{n: 0}) -> n = 5; w.p.n: 0 -> 7. Prints \"[11, 12] 5 7\". (Sentence map 2026-11-27, cell c5/r_write_through_ref_fixes.)"

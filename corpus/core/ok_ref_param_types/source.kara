@@ -1,0 +1,17 @@
+// cs.302: `ref T` and `mut ref T` may appear as a parameter type.
+// `total` reads through a `ref Vec[i64]` parameter (1+2+3 = 6); `bump`
+// writes through a `mut ref` one, so v becomes [2, 3, 4] and the total 9.
+fn total(v: ref Vec[i64]) -> i64 {
+    let mut t = 0;
+    for x in v { t += x; }
+    t
+}
+fn bump(v: mut ref Vec[i64]) {
+    for x in v.iter_mut() { *x += 1; }
+}
+fn main() {
+    let mut v: Vec[i64] = [1, 2, 3];
+    println(total(v));
+    bump(mut v);
+    println(total(v));
+}

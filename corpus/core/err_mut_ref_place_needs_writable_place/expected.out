@@ -1,0 +1,1 @@
+error[E0517]: main.kara:6:14: `q` is a bare parameter, which borrows (design.md § Parameter modes), so a `mut ref` borrow through `q` cannot modify it (core-semantics.md §5.9). Declare it `q: mut ref ...` and mark its call sites `mut`; to change a copy of its own instead, take it `own` or `.clone()` it

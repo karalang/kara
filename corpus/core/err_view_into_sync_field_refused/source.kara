@@ -1,0 +1,10 @@
+// cs.410: a view may not be stored in a field of a `sync` type. `t` views
+// the local `text`; storing it in `S.name` is refused, at the struct
+// literal (line 8).
+sync struct S { name: Str }
+fn main() {
+    let text = "abc".to_string();
+    let t = text.as_str();
+    let s = S { name: t };
+    println(s.name);
+}

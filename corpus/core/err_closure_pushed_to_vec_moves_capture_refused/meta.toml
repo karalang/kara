@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0500"
+exit = 1
+tags = ["closures"]
+class = "a"
+expected_from = "spec"
+rules = ["9.3"]
+backends = []
+env = {}
+note = "core-semantics §9.3: cs.670 §9.3: a closure stored in a collection escapes and captures by move, so `s` is moved and reading it afterwards is E0500. (Sentence map 2026-11-27, cell c3_c9/k_closure_pushed_to_vec_moves_capture_refused.) The expected.out wording of an error pin is guidance, not a byte oracle."

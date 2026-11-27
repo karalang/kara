@@ -1,0 +1,12 @@
+// §9.4 (function value a call returns; no cs id): moving `f` first with
+// `drop(f)` ends its borrow of `name`, so the write after it is allowed.
+// Expected: 3, abc.
+fn mk(p: String) -> Fn(i64) -> i64 { |k| p.len() + k }
+fn main() {
+    let mut name = "ab".to_string();
+    let f = mk(name);
+    println(f(1));
+    drop(f);
+    name.push_str("c");
+    println(name);
+}

@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+expected_from = "spec"
+rules = ["7.4"]
+backends = []
+env = {}
+note = "core-semantics §7.4: cs.559 (`return e`: the temporary drops after `e` is computed, before the function's locals and defers). r(3) drops first (d3), then the LIFO a, defer, b pops: d2, defer, d1; then main prints the value. (Sentence map 2026-11-27, cell c7/d_return_temp_drops_before_locals_and_defers.)"

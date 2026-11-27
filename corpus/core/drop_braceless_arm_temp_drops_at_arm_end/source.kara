@@ -1,0 +1,19 @@
+// cs.558 (a brace-less `match` arm's temporary drops as a block tail: after `e`
+// is computed, at the arm's end), cs.561 (an argument to a borrowed parameter in
+// a brace-less arm drops where that row says, not at the end of the enclosing
+// statement). So d5 precedes the statement's later say6; likewise d7 for the
+// field read of a temporary before say8.
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+fn r(i: i64) -> R { R { id: i } }
+fn see(x: R) -> i64 { x.id }
+fn say(i: i64) -> i64 { println(f"say{i}"); i }
+fn add(a: i64, b: i64) -> i64 { a + b }
+fn take(x: own R) { println(f"took{x.id}"); }
+fn main() {
+    let k = 1;
+    let n = (match k { 1 => see(R { id: 5 }), _ => 0 }) + say(6);
+    println(f"n{n}");
+    let m = (match k { 1 => r(7).id, _ => 0 }) + say(8);
+    println(f"m{m}");
+}

@@ -1,0 +1,14 @@
+// cs.664 §9.1: a `sync` handle is counted too, so an escaping closure that
+// captures `st` leaves `st` usable, and both see the same atomic.
+// fetch_add returns the old value: 0+1, 1+1; then the counter holds 2.
+// Expected: 1, 2, 2.
+import std.sync.{Atomic};
+sync struct Stats { hits: Atomic[i64] }
+struct Holder { f: Fn() -> i64 }
+fn main() {
+    let st = Stats { hits: Atomic.new(0) };
+    let h = Holder { f: || st.hits.fetch_add(1) + 1 };
+    println((h.f)());
+    println((h.f)());
+    println(st.hits.load());
+}

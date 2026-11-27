@@ -1,0 +1,21 @@
+// cs.664 §9.1 with §6.1: a `shared` handle is counted. The escaping closure
+// (struct field, §9.3) captures `c` by move, which for a handle counts it
+// (§6.1: using a handle as a value increments, and the source stays usable).
+// Writing a `mut` field through the handle is a read, so the closure is an
+// Fn (§9.6). The holder's drop releases one count, so Counter is dropped
+// only at main's end, holding 2.
+// Expected: 1, 2, holder drops, 2, end, drop counter 2.
+shared struct Counter { mut n: i64 }
+impl Drop for Counter { fn drop(mut ref self) { println(f"drop counter {self.n}"); } }
+struct Holder { f: Fn() -> i64 }
+fn main() {
+    let c = Counter { n: 0 };
+    {
+        let h = Holder { f: || { c.n = c.n + 1; c.n } };
+        println((h.f)());
+        println((h.f)());
+        println("holder drops");
+    }
+    println(c.n);
+    println("end");
+}

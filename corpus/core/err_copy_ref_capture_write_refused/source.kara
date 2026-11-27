@@ -1,0 +1,11 @@
+// cs.651 §9.1: a read-only capture of a Copy place is still a `ref` capture, so
+// writing the place while the closure is live is an error (§5.6). The
+// spec's own example: the write to `lim` is rejected.
+fn main() {
+    let xs: Vec[i64] = [1, 2, 3, 4];
+    let mut lim = 3;
+    for x in xs.iter().filter(|v| v < lim) {
+        lim = lim - 1;
+        println(x);
+    }
+}

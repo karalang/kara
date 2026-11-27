@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0500"
+exit = 1
+tags = ["ownership", "moves"]
+class = "a"
+expected_from = "spec"
+rules = ["3.6"]
+backends = []
+env = {}
+note = "core-semantics §3.6: cs.201 §3.6: after a partial move the root cannot be moved as a whole: `let q = parcel;` after `parcel.b` moved out is an error. (Sentence map 2026-11-27, cell c3_c9/m_partial_then_move_whole_refused.) The expected.out wording of an error pin is guidance, not a byte oracle."

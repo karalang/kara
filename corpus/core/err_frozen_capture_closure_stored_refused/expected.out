@@ -1,0 +1,1 @@
+error[E0511]: main.kara:9:28: `frozen` binding `node_frz` is captured by a closure that escapes

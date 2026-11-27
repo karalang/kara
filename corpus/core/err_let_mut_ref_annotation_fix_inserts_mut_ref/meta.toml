@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0200"
+exit = 1
+tags = ["references", "views"]
+class = "a"
+expected_from = "spec"
+rules = ["5.1"]
+backends = []
+env = {}
+note = "core-semantics §5.1: cs.307, cs.308: a `let` annotation never creates the borrow, so `let p: mut ref P = w.p;` is an error, and its fix inserts `mut ref` before the initializer. (Sentence map 2026-11-27, cell c5/r_let_mut_ref_annotation_fix_inserts_mut_ref.) The expected.out wording of an error pin is guidance, not a byte oracle."

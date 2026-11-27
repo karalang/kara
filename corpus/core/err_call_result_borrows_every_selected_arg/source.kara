@@ -1,0 +1,13 @@
+// cs.326, cs.363, cs.386, cs.387: a call result borrows the origins of the
+// arguments the signature rule selects: with no receiver, every borrowed
+// non-Copy parameter. `pick` returns only `a`, but its result still borrows
+// `y` (no body-dependent precision), so writing `y` while `r` is live is
+// refused, at the assignment (line 11).
+fn pick(a: String, b: String) -> ref String { a }
+fn main() {
+    let x = "x".to_string();
+    let mut y = "y".to_string();
+    let r = pick(x, y);
+    y = "w".to_string();
+    println(r);
+}

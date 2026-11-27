@@ -1,0 +1,10 @@
+// cs.649 §9.1: a body that moves `s` captures it by move, and a by-move
+// capture moves the value in when the closure is created (§9.4), so reading
+// `s` after the closure literal, even before any call, is E0500.
+fn eat(s: own String) { println(s); }
+fn main() {
+    let s = "hi".to_string();
+    let f = || eat(s);
+    println(s);
+    f();
+}

@@ -1,0 +1,7 @@
+in
+defer inner
+out
+if body
+defer if
+end
+defer main

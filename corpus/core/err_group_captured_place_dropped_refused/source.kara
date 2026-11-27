@@ -1,0 +1,10 @@
+// cs.698 §9.5: while the group lives, a captured place may not be dropped.
+import std.sync.{TaskGroup};
+fn total(v: ref Vec[i64]) -> i64 { v.len() }
+fn main() {
+    let data_v: Vec[i64] = [1, 2, 3];
+    let g = TaskGroup.new();
+    let h = g.spawn(|| total(data_v));
+    println(h.join());
+    drop(data_v);
+}

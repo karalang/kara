@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0516"
+exit = 1
+tags = ["closures"]
+class = "a"
+expected_from = "spec"
+rules = ["9.1"]
+backends = []
+env = {}
+note = "core-semantics §9.1: cs.651 §9.1: a read-only capture of a Copy place is still a `ref` capture, so writing the place while the closure is live is an error (§5.6). The spec's own example: the write to `lim` is rejected. (Sentence map 2026-11-27, cell c3_c9/k_copy_ref_capture_write_refused.) The expected.out wording of an error pin is guidance, not a byte oracle."

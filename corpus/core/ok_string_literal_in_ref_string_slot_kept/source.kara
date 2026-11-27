@@ -1,0 +1,9 @@
+// cs.351, cs.355 (contrast): a string literal in a `ref String` slot is
+// promoted to static data, so the result may be kept past the statement.
+// "abc" is longer than "de". Prints "abc".
+fn pick(a: String, b: String) -> ref String { if a.len() > b.len() { a } else { b } }
+fn main() {
+    let s = "abc".to_string();
+    let r = pick(s, "de");
+    println(r);
+}

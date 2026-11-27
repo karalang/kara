@@ -1,0 +1,9 @@
+// cs.316, cs.322: `Str` is a view, and a view borrows exactly like a
+// reference: while `s` (a view of `text`) is live, `text` may not be written
+// (§5.6). Refused at the `push_str` (line 7).
+fn main() {
+    let mut text = "ab".to_string();
+    let s = text.as_str();
+    text.push_str("c");
+    println(s);
+}

@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+expected_from = "spec"
+rules = ["7.4"]
+backends = []
+env = {}
+note = "core-semantics §7.4: cs.562 (several temporaries that drop at the same point drop in reverse order of creation). Three argument temporaries of one `let` drop at its `;` as d3 d2 d1; two in one println statement drop after the output as d6 d5. (Sentence map 2026-11-27, cell c7/d_same_point_temps_drop_in_reverse_creation.)"

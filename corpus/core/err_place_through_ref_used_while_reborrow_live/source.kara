@@ -1,0 +1,11 @@
+// cs.341: until `r` is reassigned, using a place through it while a
+// reborrow from it is live is a §5.6 conflict. `r.n` is read while `x`
+// (a `mut ref r.n`) is live; refused at the read (line 9).
+struct B { n: i64 }
+fn main() {
+    let mut a = B { n: 1 };
+    let r = mut ref a;
+    let x = mut ref r.n;
+    println(f"{r.n}");
+    *x += 1;
+}

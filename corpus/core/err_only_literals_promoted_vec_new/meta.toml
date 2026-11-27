@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0200"
+exit = 1
+tags = ["references", "views"]
+class = "a"
+expected_from = "spec"
+rules = ["5.3"]
+backends = []
+env = {}
+note = "core-semantics §5.3: cs.355, cs.356: `Vec.new()` in a `ref` slot is a temporary; a result borrowing it may not outlive the statement. Refused at the `let` (line 6). (Sentence map 2026-11-27, cell c5/r_only_literals_promoted_vec_new.) The expected.out wording of an error pin is guidance, not a byte oracle."

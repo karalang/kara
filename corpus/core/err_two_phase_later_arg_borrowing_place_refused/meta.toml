@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E_EXCLUSIVE_BORROW_ALIASED_ARGS"
+exit = 1
+tags = ["references", "views"]
+class = "a"
+expected_from = "spec"
+rules = ["5.6"]
+backends = []
+env = {}
+note = "core-semantics §5.6: cs.407: a later argument whose value still borrows the place when the call starts is an error: `v[0]` passed to the borrowed `s: String` lends a reference into `v` that the call holds while `v` is mutably borrowed. Refused at the call (line 8). (Sentence map 2026-11-27, cell c5/r_two_phase_later_arg_borrowing_place_refused.) The expected.out wording of an error pin is guidance, not a byte oracle."

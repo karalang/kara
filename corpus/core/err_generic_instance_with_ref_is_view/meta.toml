@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0516"
+exit = 1
+tags = ["references", "views"]
+class = "a"
+expected_from = "spec"
+rules = ["5.2"]
+backends = []
+env = {}
+note = "core-semantics §5.2: cs.314: a view is any type that contains a `ref` after generic substitution. `Box[ref String]` is one, so `b` borrows `s`, and `s` may not be written while `b` is live. Refused at the assignment (line 8). (Sentence map 2026-11-27, cell c5/r_generic_instance_with_ref_is_view.) The expected.out wording of an error pin is guidance, not a byte oracle."

@@ -1,0 +1,1 @@
+error[E0500]: main.kara:8:13: value 's' was moved into a closure (captured at line 7:20), used again here

@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+expected_from = "spec"
+rules = ["7.1", "7.3"]
+backends = []
+env = {}
+note = "core-semantics §7.1, §7.3: cs.542 (parameters are introduced before the body, in parameter order, so they drop after the body's locals, last parameter first), cs.519. The body local x (d9) drops first, then c, b, a: d3 d2 d1, all before \"after\". (Sentence map 2026-11-27, cell c7/d_params_drop_after_locals_last_first.)"

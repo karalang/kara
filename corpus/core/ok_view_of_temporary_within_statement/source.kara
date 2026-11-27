@@ -1,0 +1,6 @@
+// cs.392 (contrast): a view of a temporary may be used inside the statement
+// that created it. Prints "abc 3".
+fn make() -> String { "abc".to_string() }
+fn main() {
+    println(f"{make().as_str()} {make().as_str().len()}");
+}

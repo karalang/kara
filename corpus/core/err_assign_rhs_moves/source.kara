@@ -1,0 +1,10 @@
+// cs.166 §3.1: the right-hand side of an assignment is a move position, so
+// `t = s;` moves `s`; the read of `s` after it is E0500 (§3.2).
+fn main() {
+    let s = "hi".to_string();
+    let mut t = "x".to_string();
+    println(t);
+    t = s;
+    println(s);
+    println(t);
+}

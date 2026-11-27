@@ -1,0 +1,1 @@
+error[E0517]: main.kara:8:5: `r` is a shared `ref`, so an assignment through `r` cannot modify it (core-semantics.md §5.9). Borrow it as `mut ref` to write through it

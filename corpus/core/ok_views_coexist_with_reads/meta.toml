@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["references", "views"]
+expected_from = "spec"
+rules = ["5.2"]
+backends = []
+env = {}
+note = "core-semantics §5.2: cs.316-cs.322 control: a view borrows like a `ref`, and a `ref` borrow lets its origin be read (§5.6 forbids only writes, moves, mutable borrows, drops). Every view below is live while `text`/`v` are read. s = \"abc\"; sl.len() = 3; it.next() = Some(1) -> 1; h.r = \"abc\"; first = \"x\"; rs.len() = 1; c() = 3; b.v = \"abc\". (Sentence map 2026-11-27, cell c5/r_views_coexist_with_reads.)"

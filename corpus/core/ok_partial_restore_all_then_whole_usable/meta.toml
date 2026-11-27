@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["ownership", "moves"]
+expected_from = "spec"
+rules = ["3.6"]
+backends = []
+env = {}
+note = "core-semantics §3.6: cs.204 §3.6: once every moved part is restored the root is usable as a whole again. Both fields move out (eat1 d1, eat2 d2), both are assigned back (no drops), then `p` moves whole into `consume`, which prints and then drops it at its end, fields last first: d4, d3. Expected: eat1, d1, eat2, d2, consume 3 4, d4, d3, end. (Sentence map 2026-11-27, cell c3_c9/m_partial_restore_all_then_whole_usable.)"

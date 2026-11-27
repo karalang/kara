@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0516"
+exit = 1
+tags = ["references", "views"]
+class = "a"
+expected_from = "spec"
+rules = ["5.7"]
+backends = []
+env = {}
+note = "core-semantics §5.7: cs.414: the returned closure carries the view's origins, so `mk(t.as_str())` may not outlive `t`: here `t` drops at the end of the block while `f` lives on. Refused. (Sentence map 2026-11-27, cell c5/r_returned_view_closure_outlives_origin_refused.) The expected.out wording of an error pin is guidance, not a byte oracle."

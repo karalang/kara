@@ -1,0 +1,9 @@
+// cs.399: while a `ref` borrow of `s` is live, `s` may not be moved.
+// Refused at the move (line 7).
+fn take(s: own String) -> i64 { s.len() }
+fn main() {
+    let s = "a".to_string();
+    let r = ref s;
+    let n = take(s);
+    println(f"{r} {n}");
+}

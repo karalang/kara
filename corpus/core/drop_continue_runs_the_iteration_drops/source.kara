@@ -1,0 +1,23 @@
+// cs.535 (`continue` ends the iteration scope exactly as reaching the end of the
+// body does), cs.576 (it runs the drops and defers of the scope it leaves, in
+// LIFO order). Per iteration the LIFO is a, defer, b; popped: b, defer, a.
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+fn r(i: i64) -> R { R { id: i } }
+fn see(x: R) -> i64 { x.id }
+fn say(i: i64) -> i64 { println(f"say{i}"); i }
+fn add(a: i64, b: i64) -> i64 { a + b }
+fn take(x: own R) { println(f"took{x.id}"); }
+fn main() {
+    for i in 0..3 {
+        let a = R { id: i };
+        defer println(f"defer{i}");
+        let b = R { id: i + 10 };
+        if i == 1 {
+            println("skip");
+            continue;
+        }
+        println(f"body{i}");
+    }
+    println("done");
+}

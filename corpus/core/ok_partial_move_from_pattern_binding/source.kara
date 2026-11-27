@@ -1,0 +1,19 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+// cs.200 §3.6: a field may be moved out of a pattern binding. `Some(p)` binds
+// `p` in move mode (§4.6); `let b = p.b;` moves R2 out of it. At the arm
+// block's end `b` drops (d2); then the binding `p` drops its remaining field
+// `a` (d1) at the arm's end.
+// Expected: got2, d2, d1, after.
+struct P { a: R, b: R }
+fn main() {
+    let o: Option[P] = Some(P { a: R { id: 1 }, b: R { id: 2 } });
+    match o {
+        Some(p) => {
+            let b = p.b;
+            println(f"got{b.id}");
+        }
+        None => println("none"),
+    }
+    println("after");
+}

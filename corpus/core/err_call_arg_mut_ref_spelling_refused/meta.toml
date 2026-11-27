@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0001"
+exit = 1
+tags = ["references", "views"]
+class = "a"
+expected_from = "spec"
+rules = ["5.1"]
+backends = []
+env = {}
+note = "core-semantics §5.1: cs.312: at a call argument the marker `mut` is the only spelling; `f(mut ref x)` is not accepted (§4.1: `ref` is never written at a call site). Refused at the call (line 7). (Sentence map 2026-11-27, cell c5/r_call_arg_mut_ref_spelling_refused.) The expected.out wording of an error pin is guidance, not a byte oracle."

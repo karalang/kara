@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closures"]
+expected_from = "spec"
+rules = ["9.4"]
+backends = []
+env = {}
+note = "core-semantics §9.4: cs.688 §9.4: a closure's captures drop when the closure drops, in reverse capture order = reverse of the order their names first appear in the body. The field closure escapes (§9.3), so it owns a, b, c. Body order: b, c, a; reverse: a, c, b -> d1, d3, d2, when `h` drops at the inner block's end. (`val(x)` captures each root whole, as the pin drop_closure_captures_in_first_use_order does.) Expected: 231, drop holder, d1, d3, d2, end. (Sentence map 2026-11-27, cell c3_c9/k_captures_drop_reverse_first_appearance.)"

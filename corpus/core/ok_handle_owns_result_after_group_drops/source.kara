@@ -1,0 +1,15 @@
+// cs.697 §9.5: the TaskHandle borrows nothing and owns its task's result, so it
+// can outlive the group (whose drop joined the task) and still be joined.
+// Expected: done.
+import std.sync.{TaskGroup, TaskHandle};
+fn main() {
+    let mut out: Option[TaskHandle[String]] = None;
+    {
+        let g = TaskGroup.new();
+        out = Some(g.spawn(|| "done".to_string()));
+    }
+    match out {
+        Some(h) => println(h.join()),
+        None => println("none"),
+    }
+}

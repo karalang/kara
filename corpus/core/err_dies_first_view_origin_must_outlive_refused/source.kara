@@ -1,0 +1,13 @@
+// cs.661-662 §9.1: the rule moves only the captured place. `txt_view` dies
+// first and is moved in, but it is a view, and its origin `txt_origin` also
+// dies at the block's end while `f` is live: the origin must outlive the
+// closure, so this is an error.
+fn main() {
+    let mut f: Fn() -> i64 = || 0;
+    {
+        let txt_origin = "abc".to_string();
+        let txt_view = txt_origin.as_str();
+        f = || txt_view.len();
+    }
+    println(f());
+}

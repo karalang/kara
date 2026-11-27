@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["ownership", "moves"]
+expected_from = "spec"
+rules = ["3.4"]
+backends = []
+env = {}
+note = "core-semantics §3.4: cs.188 §3.4: assigning to a moved place makes it initialized again. `r` moves into `eat` (eat1, then d1 at eat's end); `r = R{2}` drops nothing (the place held no value) and `r` is usable again; it drops at main's end. Expected: eat1, d1, now2, d2. (Sentence map 2026-11-27, cell c3_c9/m_reinit_after_move_drops_new.)"

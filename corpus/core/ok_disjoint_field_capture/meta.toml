@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closures"]
+expected_from = "spec"
+rules = ["9.1"]
+backends = []
+env = {}
+note = "core-semantics §9.1: cs.646 §9.1: capture modes are inferred per captured PLACE (disjoint field capture). `f` reads only `p.a`, so it borrows `p.a`, not `p`; moving `p.b` out while `f` is live is fine. Expected: eat B, 1. (Sentence map 2026-11-27, cell c3_c9/k_disjoint_field_capture.)"

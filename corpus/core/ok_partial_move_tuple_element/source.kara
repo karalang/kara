@@ -1,0 +1,11 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+// cs.200 §3.6: a tuple element may be moved out of an owned local. `x = t.1`
+// moves R2 out; at scope end `x` (declared later) drops first: d2; then the
+// rest of `t`, last element first (cs.19): d3, d1 (§3.6 last bullet, §7.9).
+// Expected: mid, d2, d3, d1.
+fn main() {
+    let t = (R { id: 1 }, R { id: 2 }, R { id: 3 });
+    let x = t.1;
+    println("mid");
+}

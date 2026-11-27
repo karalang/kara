@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["ownership", "moves"]
+expected_from = "spec"
+rules = ["3.6"]
+backends = []
+env = {}
+note = "core-semantics §3.6: cs.200 §3.6: a field may be moved out of a pattern binding. `Some(p)` binds `p` in move mode (§4.6); `let b = p.b;` moves R2 out of it. At the arm block's end `b` drops (d2); then the binding `p` drops its remaining field `a` (d1) at the arm's end. Expected: got2, d2, d1, after. (Sentence map 2026-11-27, cell c3_c9/m_partial_move_from_pattern_binding.)"

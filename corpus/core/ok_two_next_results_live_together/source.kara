@@ -1,0 +1,10 @@
+// cs.367, cs.368: a `next` result borrows what the iterator borrows (the
+// collection), not the iterator place, so two `it.next()` results can be
+// live together. a = "x", b = "y"; v still has 2 items. Prints "x y 2".
+fn main() {
+    let v = ["x".to_string(), "y".to_string()];
+    let mut it = v.iter();
+    let a = it.next();
+    let b = it.next();
+    println(f"{a.unwrap()} {b.unwrap()} {v.len()}");
+}

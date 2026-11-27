@@ -1,0 +1,24 @@
+// cs.599 (SortedMap / SortedSet: key order). Inserted 3, 1, 2 (map) and 30,
+// 10, 20 (set). s was introduced after m, so s drops first: dk10 dk20 dk30;
+// then m's values in key order: d1 d2 d3.
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+fn r(i: i64) -> R { R { id: i } }
+fn see(x: R) -> i64 { x.id }
+fn say(i: i64) -> i64 { println(f"say{i}"); i }
+fn add(a: i64, b: i64) -> i64 { a + b }
+fn take(x: own R) { println(f"took{x.id}"); }
+#[derive(Eq, PartialEq, Ord, PartialOrd)]
+struct K { id: i64 }
+impl Drop for K { fn drop(mut ref self) { println(f"dk{self.id}"); } }
+fn main() {
+    let mut m: SortedMap[i64, R] = SortedMap.new();
+    m.insert(3, R { id: 3 });
+    m.insert(1, R { id: 1 });
+    m.insert(2, R { id: 2 });
+    let mut s: SortedSet[K] = SortedSet.new();
+    s.insert(K { id: 30 });
+    s.insert(K { id: 10 });
+    s.insert(K { id: 20 });
+    println(f"end{m.len()}{s.len()}");
+}

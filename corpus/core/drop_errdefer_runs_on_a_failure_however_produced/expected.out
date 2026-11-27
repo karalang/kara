@@ -1,0 +1,6 @@
+a true
+errdefer tail call
+b false
+c true
+errdefer return call
+d false

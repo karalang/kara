@@ -1,0 +1,12 @@
+// cs.681 §9.3: with `f: escaping Fn() -> i64` the callee may store the
+// parameter (in a struct) or return it.
+// Expected: 5, 6.
+struct Holder { f: Fn() -> i64 }
+fn keep(f: escaping Fn() -> i64) -> Holder { Holder { f: f } }
+fn pass(f: escaping Fn() -> i64) -> Fn() -> i64 { f }
+fn main() {
+    let h = keep(|| 5);
+    println((h.f)());
+    let g = pass(|| 6);
+    println(g());
+}

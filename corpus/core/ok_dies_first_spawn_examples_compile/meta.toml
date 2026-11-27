@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closures"]
+expected_from = "spec"
+rules = ["9.1"]
+backends = []
+env = {}
+note = "core-semantics §9.1: cs.660 §9.1: the spec's two examples compile. `c` is a loop-body local, so it drops before `tg` and is copied into each task; `name` is declared after `tg`, so it drops before `tg` and is moved into its task. Tasks: work(0..3) = 0+1+4+9 = 14; log_len(\"alice\") = 5. Expected: 14, 5. (Sentence map 2026-11-27, cell c3_c9/k_dies_first_spawn_examples_compile.)"

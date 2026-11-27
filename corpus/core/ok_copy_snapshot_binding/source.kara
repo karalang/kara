@@ -1,0 +1,14 @@
+// cs.652 §9.1: to give the closure a snapshot, copy the value into a new
+// binding first. The filter reads `snap` (3), so `lim` may be written.
+// Items below 3: 1, 2; `lim` is stepped twice, 3 -> 1.
+// Expected: 1, 2, 1.
+fn main() {
+    let xs: Vec[i64] = [1, 2, 3, 4];
+    let mut lim = 3;
+    let snap = lim;
+    for x in xs.iter().filter(|v| v < snap) {
+        lim = lim - 1;
+        println(x);
+    }
+    println(lim);
+}

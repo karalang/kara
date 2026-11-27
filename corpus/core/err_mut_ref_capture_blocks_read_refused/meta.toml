@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0516"
+exit = 1
+tags = ["closures"]
+class = "a"
+expected_from = "spec"
+rules = ["9.1"]
+backends = []
+env = {}
+note = "core-semantics §9.1: cs.648 §9.1 with §5.6: `tally` is captured by `mut ref`; while that borrow is live (until the second `f()`), reading `tally` other than through the closure is an error. (Sentence map 2026-11-27, cell c3_c9/k_mut_ref_capture_blocks_read_refused.) The expected.out wording of an error pin is guidance, not a byte oracle."

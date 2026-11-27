@@ -1,0 +1,1 @@
+error[E0517]: main.kara:5:5: `p` is a bare parameter, which borrows (design.md § Parameter modes), so an assignment through `p` cannot modify it (core-semantics.md §5.9). Declare it `p: mut ref ...` and mark its call sites `mut`; to change a copy of its own instead, take it `own` or `.clone()` it

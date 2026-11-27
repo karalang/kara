@@ -1,0 +1,15 @@
+// cs.719, cs.723 §9.6: the body moves `ticket` out, so the closure is OnceFn;
+// passing it where a MutFn is expected is an error that names the capture
+// responsible.
+fn twice(f: own MutFn()) {
+    let mut f = f;
+    f();
+    f();
+}
+fn main() {
+    let ticket = "t".to_string();
+    twice(|| {
+        let u = ticket;
+        println(u);
+    });
+}

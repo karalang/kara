@@ -1,0 +1,11 @@
+// cs.191 §3.4: a root moved as a whole is reinitialized only by assigning the
+// whole root; assigning one of its fields (`eat(parcel); parcel.a = x;`) is an
+// error. Nothing reads `parcel` afterwards, so the assignment is the only
+// candidate for the error.
+struct P { a: String, b: String }
+fn eat(p: own P) { println(p.a); }
+fn main() {
+    let mut parcel = P { a: "a".to_string(), b: "b".to_string() };
+    eat(parcel);
+    parcel.a = "x".to_string();
+}

@@ -1,0 +1,11 @@
+// cs.358, cs.360: only a value whose type can hold a reference has origins;
+// an `i64` copied out through a reference borrows nothing, so `v` may be
+// written while `n` and `m` are live. n = 1, m = 1; v gets 9 -> len 3.
+fn main() {
+    let mut v: Vec[i64] = [1, 2];
+    let n: i64 = v.first().unwrap();
+    let r = ref v[0];
+    let m = *r;
+    v.push(9);
+    println(f"{n} {m} {v.len()}");
+}

@@ -1,0 +1,12 @@
+// cs.201 §3.6: after a partial move the root cannot be used as a whole, which
+// includes calling a method on it (§3.2's "using").
+struct P { a: String, b: String }
+impl P {
+    fn first(self) -> String { self.a.clone() }
+}
+fn main() {
+    let parcel = P { a: "a".to_string(), b: "b".to_string() };
+    let x = parcel.b;
+    println(parcel.first());
+    println(x);
+}

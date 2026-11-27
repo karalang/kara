@@ -1,0 +1,9 @@
+// cs.318, cs.322: a struct with a `ref` field is a view: while `h` is live,
+// `s` may not be written. Refused at the assignment (line 7).
+struct H { r: ref String }
+fn main() {
+    let mut s = "a".to_string();
+    let h = H { r: ref s };
+    s = "b".to_string();
+    println(h.r);
+}

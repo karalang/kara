@@ -1,0 +1,10 @@
+// cs.308: "the same holds for `ref`": `let p: ref P = w.p;` does not borrow
+// (P is not Copy), so it is an error, and its fix inserts `ref` before the
+// initializer.
+struct P { name: String }
+struct W { p: P }
+fn main() {
+    let w = W { p: P { name: "n".to_string() } };
+    let p: ref P = w.p;
+    println(f"{p.name} {w.p.name}");
+}

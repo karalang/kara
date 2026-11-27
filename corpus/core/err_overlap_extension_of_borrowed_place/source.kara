@@ -1,0 +1,10 @@
+// cs.400: a place overlaps its extensions: while `m` (a `mut ref w`) is
+// live, reading `w.a.n` (an extension) is refused, at line 8.
+struct A { n: i64 }
+struct W { a: A, b: A }
+fn main() {
+    let mut w = W { a: A { n: 1 }, b: A { n: 2 } };
+    let m = mut ref w;
+    let t = w.a.n;
+    m.b.n = t;
+}

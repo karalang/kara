@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closures"]
+expected_from = "spec"
+rules = ["9.1"]
+backends = []
+env = {}
+note = "core-semantics §9.1: cs.654-655 §9.1: `r` drops at the end of the inner block while `f`, which reads it, is still live, so the capture is by move instead. The closure owns R4: nothing drops at the inner block's end, `f()` still reads 4, and R4 drops with `f` at main's end. (The initial `|| 0` holds nothing.) `val(r)` passes `r` whole, so the captured place is `r` itself, not the Copy field `r.id` (design.md, \"Where a captured path stops\"). Expected: block end, after block, 4, d4. (Sentence map 2026-11-27, cell c3_c9/k_dies_first_moved_in.)"

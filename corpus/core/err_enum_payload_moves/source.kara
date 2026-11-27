@@ -1,0 +1,12 @@
+// cs.170 §3.1: a payload of an enum literal is a move position, so
+// `Wrap.One(s)` moves `s`; reading `s` afterwards is E0500 (§3.2).
+enum Wrap { One(String), Zero }
+fn main() {
+    let s = "x".to_string();
+    let w = Wrap.One(s);
+    println(s);
+    match w {
+        Wrap.One(t) => println(t),
+        Wrap.Zero => println("zero"),
+    }
+}

@@ -1,0 +1,8 @@
+// cs.671 §9.3: a closure passed to an `escaping` parameter escapes and
+// captures by move, so `s` is moved and reading it afterwards is E0500.
+fn keep(f: escaping Fn() -> i64) -> i64 { f() }
+fn main() {
+    let s = "abc".to_string();
+    println(keep(|| s.len()));
+    println(s);
+}

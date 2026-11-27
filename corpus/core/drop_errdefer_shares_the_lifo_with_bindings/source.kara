@@ -1,0 +1,29 @@
+// cs.540 (bindings and `defer` / `errdefer` blocks are pushed in the order they
+// are introduced and popped in reverse at scope end). Pushed: a, errdefer A, b,
+// defer B, c, errdefer C. On the failing call all pop in reverse; on the Ok call
+// the errdefers are skipped (cs.583) and the rest keep their order.
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+fn r(i: i64) -> R { R { id: i } }
+fn see(x: R) -> i64 { x.id }
+fn say(i: i64) -> i64 { println(f"say{i}"); i }
+fn add(a: i64, b: i64) -> i64 { a + b }
+fn take(x: own R) { println(f"took{x.id}"); }
+fn f(fail: bool) -> Result[i64, String] {
+    let a = R { id: 1 };
+    errdefer println("errdefer A");
+    let b = R { id: 2 };
+    defer println("defer B");
+    let c = R { id: 3 };
+    errdefer println("errdefer C");
+    if fail {
+        return Err("x".to_string());
+    }
+    Ok(a.id + b.id + c.id)
+}
+fn main() {
+    let e = f(true);
+    println(f"-- {e.is_err()}");
+    let k = f(false);
+    println(f"end {k.is_ok()}");
+}

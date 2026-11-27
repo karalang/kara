@@ -1,0 +1,1 @@
+error[E0516]: main.kara:9:13: cannot move a non-`Copy` value out of a borrowed place: take a copy with `.clone()`, use it in place, or take it with `mem.replace` / `mem.swap` / `Option.take()` (core semantics §3.7)

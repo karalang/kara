@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0516"
+exit = 1
+tags = ["references", "views"]
+class = "a"
+expected_from = "spec"
+rules = ["5.3"]
+backends = []
+env = {}
+note = "core-semantics §5.3: cs.329: a call with a `mut ref` argument whose pointee can hold a reference (`Vec[ref String]`) may store the other reference arguments into it, so `rs`'s origins grow by `t`'s. Writing `t` while `rs` is live is refused, at the `push_str` (line 11). (Sentence map 2026-11-27, cell c5/r_mut_ref_pointee_stores_ref_arg.) The expected.out wording of an error pin is guidance, not a byte oracle."

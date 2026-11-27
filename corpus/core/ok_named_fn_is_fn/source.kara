@@ -1,0 +1,15 @@
+// cs.721-722 §9.6: a named function is an Fn, and an Fn may be passed where an
+// Fn, a MutFn or an OnceFn is expected. double(1), double(2), double(3).
+// Expected: 2, 4, 6.
+fn double(x: i64) -> i64 { x * 2 }
+fn via_fn(f: Fn(i64) -> i64) -> i64 { f(1) }
+fn via_mut(f: own MutFn(i64) -> i64) -> i64 {
+    let mut f = f;
+    f(2)
+}
+fn via_once(f: own OnceFn(i64) -> i64) -> i64 { f(3) }
+fn main() {
+    println(via_fn(double));
+    println(via_mut(double));
+    println(via_once(double));
+}

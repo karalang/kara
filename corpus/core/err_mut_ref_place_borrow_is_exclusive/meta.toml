@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0516"
+exit = 1
+tags = ["references", "views"]
+class = "a"
+expected_from = "spec"
+rules = ["5.1"]
+backends = []
+env = {}
+note = "core-semantics §5.1: cs.311: while a `mut ref place` binding is live, §5.6 applies: no place overlapping `w.p` may be used except through `up`. The println reads `w.p.hits` while `up` is still live (used on the next line), so the program is refused at the println (line 10). (Sentence map 2026-11-27, cell c5/r_mut_ref_place_borrow_is_exclusive.) The expected.out wording of an error pin is guidance, not a byte oracle."

@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+expected_from = "spec"
+rules = ["7.1"]
+backends = []
+env = {}
+note = "core-semantics §7.1: cs.526 (a returned value is moved out of its binding before the scope's drops run, so the returning function does not drop it). mk_tail returns b by tail: only a drops (d1). mk_ret returns b by `return`: only a drops (d3). The returned values drop in main, LIFO: y (d4), then x (d2). (Sentence map 2026-11-27, cell c7/d_returned_local_is_not_dropped_by_the_callee.)"

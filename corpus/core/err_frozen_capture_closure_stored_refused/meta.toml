@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0511"
+exit = 1
+tags = ["closures"]
+class = "a"
+expected_from = "spec"
+rules = ["9.1"]
+backends = []
+env = {}
+note = "core-semantics §9.1: cs.665 §9.1: a `frozen` handle is never counted, so a closure that captures one is a view; a struct field of function type is escaping (§9.3), and a view may not flow into an escaping closure (§5.7). (Sentence map 2026-11-27, cell c3_c9/k_frozen_capture_closure_stored_refused.) The expected.out wording of an error pin is guidance, not a byte oracle."

@@ -1,0 +1,1 @@
+error[E0200]: main.kara:4:44: parameter `cb_fn` is a non-escaping function value and cannot be passed to an `escaping` parameter: a function-typed parameter may only be called or passed to another non-escaping parameter. Declare it `cb_fn: escaping Fn(...)` to store or return it (core-semantics.md §9.3)

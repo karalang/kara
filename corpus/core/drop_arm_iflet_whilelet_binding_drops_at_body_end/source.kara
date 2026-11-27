@@ -1,0 +1,40 @@
+// cs.529 (scopes: the end of a `match` arm, `if let` body or `while let` body),
+// cs.520 (move-mode pattern bindings are holders), cs.541 (pattern bindings
+// belong to their arm's scope, so they drop before anything outside it).
+// Reasoning: in the arm, `r` (move binding) is pushed before `inner`, so at the
+// arm's end `inner` (d2) then `r` (d1), before "after match". The `if let`
+// binding drops at its body's end (d3) before "after if let". Each `while let`
+// binding drops at the end of its iteration's body: wl5 d5 wl4 d4. `outer` is a
+// main local: it drops last (d100); `a`, `b` were moved out by the bindings and
+// `v` is empty by then.
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+fn r(i: i64) -> R { R { id: i } }
+fn see(x: R) -> i64 { x.id }
+fn say(i: i64) -> i64 { println(f"say{i}"); i }
+fn add(a: i64, b: i64) -> i64 { a + b }
+fn take(x: own R) { println(f"took{x.id}"); }
+fn main() {
+    let outer = R { id: 100 };
+    let a: Option[R] = Some(R { id: 1 });
+    match a {
+        Some(x) => {
+            let inner = R { id: 2 };
+            println(f"arm{x.id}");
+        }
+        None => println("none"),
+    }
+    println("after match");
+    let b: Option[R] = Some(R { id: 3 });
+    if let Some(x) = b {
+        println(f"iflet{x.id}");
+    }
+    println("after if let");
+    let mut v: Vec[R] = Vec.new();
+    v.push(R { id: 4 });
+    v.push(R { id: 5 });
+    while let Some(x) = v.pop() {
+        println(f"wl{x.id}");
+    }
+    println(f"end{outer.id}");
+}

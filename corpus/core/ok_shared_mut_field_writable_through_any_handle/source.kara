@@ -1,0 +1,15 @@
+// cs.429, cs.430: the exception is a `mut` field of a `shared` value,
+// writable through any handle however it was reached: through a `for` item
+// (a `ref`), a bare parameter and a `ref` returned by a call.
+// hits: 0 -> 1 (for) -> 2 (bump) -> 3 (first). Prints "3".
+shared struct C { mut hits: i64 }
+fn bump(c: C) { c.hits += 1; }
+fn first(v: Vec[C]) -> ref C { ref v[0] }
+fn main() {
+    let v = [C { hits: 0 }];
+    for c in v { c.hits += 1; }
+    bump(v[0]);
+    let r = first(v);
+    r.hits += 1;
+    println(f"{v[0].hits}");
+}

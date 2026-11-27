@@ -1,0 +1,20 @@
+// cs.559 (`return e`: the temporary drops after `e` is computed, before the
+// function's locals and defers). r(3) drops first (d3), then the LIFO a, defer,
+// b pops: d2, defer, d1; then main prints the value.
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+fn r(i: i64) -> R { R { id: i } }
+fn see(x: R) -> i64 { x.id }
+fn say(i: i64) -> i64 { println(f"say{i}"); i }
+fn add(a: i64, b: i64) -> i64 { a + b }
+fn take(x: own R) { println(f"took{x.id}"); }
+fn f() -> i64 {
+    let a = R { id: 1 };
+    defer println("defer");
+    let b = R { id: 2 };
+    return r(3).id + a.id + b.id;
+}
+fn main() {
+    let v = f();
+    println(f"v{v}");
+}

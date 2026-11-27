@@ -1,0 +1,9 @@
+// cs.399 (contrast): a `ref` borrow forbids writes, moves, mutable borrows
+// and drops only; reading `s` (and taking a second `ref`) while `r` is live
+// is accepted. Prints "a a 1".
+fn main() {
+    let s = "a".to_string();
+    let r = ref s;
+    let q = ref s;
+    println(f"{r} {q} {s.len()}");
+}

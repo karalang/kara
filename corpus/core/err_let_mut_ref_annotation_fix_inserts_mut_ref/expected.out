@@ -1,0 +1,1 @@
+error[E0200]: main.kara:8:24: a type annotation does not borrow: this `let` would move the place (core-semantics.md §5.1). Borrow it by writing `mut ref` before the place

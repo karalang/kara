@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closures"]
+expected_from = "spec"
+rules = ["9.4"]
+backends = []
+env = {}
+note = "core-semantics §9.4: cs.689-690 §9.4: the body moves `a` out, so the closure is OnceFn. Calling it consumes it: `a` goes to `eat` (eat1, then d1 at eat's end), and the other capture `b` drops at the end of that call, as a callee's local would (d2 before \"after\"). (`val(b)` captures `b` whole.) Expected: call, eat1, d1, b2, d2, after. (Sentence map 2026-11-27, cell c3_c9/k_once_call_consumes_and_drops_rest.)"

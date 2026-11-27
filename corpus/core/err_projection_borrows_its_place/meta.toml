@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0516"
+exit = 1
+tags = ["references", "views"]
+class = "a"
+expected_from = "spec"
+rules = ["5.3"]
+backends = []
+env = {}
+note = "core-semantics §5.3: cs.325: projecting a place `w.a` borrows `w.a`. While `r` is live, writing `w.a` is refused (§5.6), at the assignment (line 8). (Sentence map 2026-11-27, cell c5/r_projection_borrows_its_place.) The expected.out wording of an error pin is guidance, not a byte oracle."

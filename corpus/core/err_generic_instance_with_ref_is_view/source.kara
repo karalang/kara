@@ -1,0 +1,10 @@
+// cs.314: a view is any type that contains a `ref` after generic
+// substitution. `Box[ref String]` is one, so `b` borrows `s`, and `s` may
+// not be written while `b` is live. Refused at the assignment (line 8).
+struct Box[T] { v: T }
+fn main() {
+    let mut s = "a".to_string();
+    let b: Box[ref String] = Box { v: ref s };
+    s = "z".to_string();
+    println(b.v);
+}

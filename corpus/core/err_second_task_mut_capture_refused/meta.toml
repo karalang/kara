@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0200"
+exit = 1
+tags = ["closures"]
+class = "a"
+expected_from = "spec"
+rules = ["9.5"]
+backends = []
+env = {}
+note = "core-semantics §9.5: cs.698 §9.5: a second task may not capture by `mut ref` a place another task of the group already captured. (Sentence map 2026-11-27, cell c3_c9/k_second_task_mut_capture_refused.) The expected.out wording of an error pin is guidance, not a byte oracle."

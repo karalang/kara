@@ -1,0 +1,9 @@
+// cs.181 §3.2: borrowing a moved place is a use, so `ref s` after `s` moved
+// is E0500.
+fn eat(s: own String) { println(s); }
+fn main() {
+    let s = "hi".to_string();
+    eat(s);
+    let r = ref s;
+    println(r);
+}

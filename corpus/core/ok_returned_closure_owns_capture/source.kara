@@ -1,0 +1,18 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+// cs.669, cs.673 §9.3: the returned closure captures `r` by move, so R7 does
+// not drop at mk's end; it lives in the closure and drops with `f` at main's
+// end.
+// (`val(r)` captures `r` whole.)
+// Expected: made, 7, end, d7.
+fn val(r: R) -> i64 { r.id }
+fn mk() -> Fn() -> i64 {
+    let r = R { id: 7 };
+    || val(r)
+}
+fn main() {
+    let f = mk();
+    println("made");
+    println(f());
+    println("end");
+}

@@ -1,0 +1,13 @@
+// cs.703 §9.5: the inner task owns the outer task's local (moved in), so it can
+// run past the outer task's body. 3 + 1 = 4.
+// Expected: 4.
+import std.sync.{TaskGroup};
+fn main() {
+    let g = TaskGroup.new();
+    let outer = g.spawn(|| {
+        let inner_label = "abc".to_string();
+        let h = g.spawn(|| inner_label.len());
+        h.join() + 1
+    });
+    println(outer.join());
+}

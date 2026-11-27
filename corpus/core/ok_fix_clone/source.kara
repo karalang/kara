@@ -1,0 +1,10 @@
+// cs.213 §3.7: the `.clone()` fix. Cloning the field out of a `ref`
+// parameter moves nothing, so `u` keeps its name.
+// Expected: x, x.
+struct User { name: String }
+fn name_of(u: ref User) -> String { u.name.clone() }
+fn main() {
+    let u = User { name: "x".to_string() };
+    println(name_of(u));
+    println(u.name);
+}

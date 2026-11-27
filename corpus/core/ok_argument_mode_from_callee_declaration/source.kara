@@ -1,0 +1,16 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+// cs.174 §3.1: whether an argument moves is decided only by the callee's
+// declared mode. `look(r: R)` borrows (bare), so `a` can be passed twice;
+// `keep(r: own R)` moves `a`, which then drops at keep's end (d1 printed
+// before the println of keep's result), and not again at main's end.
+// Expected: 1, 1, d1, 1, end.
+fn look(r: R) -> i64 { r.id }
+fn keep(r: own R) -> i64 { r.id }
+fn main() {
+    let a = R { id: 1 };
+    println(look(a));
+    println(look(a));
+    println(keep(a));
+    println("end");
+}

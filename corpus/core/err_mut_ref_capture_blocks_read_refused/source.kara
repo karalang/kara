@@ -1,0 +1,10 @@
+// cs.648 §9.1 with §5.6: `tally` is captured by `mut ref`; while that borrow
+// is live (until the second `f()`), reading `tally` other than through the
+// closure is an error.
+fn main() {
+    let mut tally = 0;
+    let mut f = || { tally += 1; };
+    f();
+    println(tally);
+    f();
+}

@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0516"
+exit = 1
+tags = ["closures"]
+class = "a"
+expected_from = "spec"
+rules = ["9.1"]
+backends = []
+env = {}
+note = "core-semantics §9.1: cs.661-662 §9.1: the rule moves only the captured place. `txt_view` dies first and is moved in, but it is a view, and its origin `txt_origin` also dies at the block's end while `f` is live: the origin must outlive the closure, so this is an error. (Sentence map 2026-11-27, cell c3_c9/k_dies_first_view_origin_must_outlive_refused.) The expected.out wording of an error pin is guidance, not a byte oracle."

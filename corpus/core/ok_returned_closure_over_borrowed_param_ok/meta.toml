@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closures"]
+expected_from = "spec"
+rules = ["9.3"]
+backends = []
+env = {}
+note = "core-semantics §9.3: §9.3 (borrowed parameter sentence, between cs.675 and cs.676) with §5.7: a borrowed parameter holds a reference; the returned closure moves that reference in and is a view, which a RETURNED closure may be. `mk(name)` then borrows `name`, which stays readable. Expected: abcd, ab. (Sentence map 2026-11-27, cell c3_c9/k_returned_closure_over_borrowed_param_ok.)"

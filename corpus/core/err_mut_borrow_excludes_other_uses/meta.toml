@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0516"
+exit = 1
+tags = ["references", "views"]
+class = "a"
+expected_from = "spec"
+rules = ["5.6"]
+backends = []
+env = {}
+note = "core-semantics §5.6: cs.398: while a `mut ref` borrow of `v` is live, no overlapping place may be used except through it: reading `v.len()` is refused, at line 6. (Sentence map 2026-11-27, cell c5/r_mut_borrow_excludes_other_uses.) The expected.out wording of an error pin is guidance, not a byte oracle."

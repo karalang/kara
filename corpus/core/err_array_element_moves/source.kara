@@ -1,0 +1,8 @@
+// cs.170 §3.1: an element of an array literal is a move position, so `[s]`
+// moves `s`; reading `s` afterwards is E0500 (§3.2).
+fn main() {
+    let s = "x".to_string();
+    let v: Vec[String] = [s];
+    println(s);
+    println(v.len());
+}

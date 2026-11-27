@@ -1,0 +1,1 @@
+error[E0500]: main.kara:10:17: value 'label' was moved into a task of `g` (captured at line 9:28), used again here: it drops before `g`, so the task takes it by move (core-semantics.md §9.1, §9.5). Declare 'label' before `g` to let the task borrow it

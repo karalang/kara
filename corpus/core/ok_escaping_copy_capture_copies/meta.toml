@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closures"]
+expected_from = "spec"
+rules = ["9.1"]
+backends = []
+env = {}
+note = "core-semantics §9.1: cs.650 §9.1: a by-move capture of a Copy place copies it. The closure in a struct field escapes (§9.3), so it captures `n` by move, i.e. a copy of 5; `n` itself stays usable and writable, and the closure keeps reading 5. Expected: 10, 7. (Sentence map 2026-11-27, cell c3_c9/k_escaping_copy_capture_copies.)"

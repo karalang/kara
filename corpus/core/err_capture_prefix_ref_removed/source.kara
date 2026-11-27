@@ -1,0 +1,7 @@
+// cs.725 §9.6: the capture prefix `ref |x|` is removed, so writing it is
+// refused.
+fn main() {
+    let s = "x".to_string();
+    let f = ref || s.len();
+    println(f());
+}

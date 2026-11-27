@@ -1,0 +1,7 @@
+// cs.354 (contrast): a literal checked against `mut ref T` is a temporary
+// that lives to the end of its statement (§5.5), so using the result inside
+// the same statement is accepted. bump makes the temporary 0 into 1.
+fn bump(x: mut ref i64) -> mut ref i64 { *x += 1; x }
+fn main() {
+    println(f"{bump(mut 0)}");
+}

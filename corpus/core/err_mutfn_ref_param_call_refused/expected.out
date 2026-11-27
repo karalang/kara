@@ -1,0 +1,1 @@
+error[E0518]: main.kara:2:33: `bump_fn` is a borrowed `MutFn`, so it cannot be called (core-semantics.md §9.6): a `MutFn` is called only through an owned binding, an `own` parameter or a `mut ref`. Declare the parameter `bump_fn: own MutFn(...)`

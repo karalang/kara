@@ -1,0 +1,13 @@
+// cs.329: a call with a `mut ref` argument whose pointee can hold a
+// reference (`Vec[ref String]`) may store the other reference arguments into
+// it, so `rs`'s origins grow by `t`'s. Writing `t` while `rs` is live is
+// refused, at the `push_str` (line 11).
+fn stash(h: mut ref Vec[ref String], s: ref String) { h.push(s); }
+fn main() {
+    let mut t = "t".to_string();
+    let mut rs: Vec[ref String] = Vec.new();
+    stash(mut rs, t);
+    let n = rs.len();
+    t.push_str("u");
+    println(f"{n} {rs.len()}");
+}

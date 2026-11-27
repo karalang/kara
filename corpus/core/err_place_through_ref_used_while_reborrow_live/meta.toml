@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0516"
+exit = 1
+tags = ["references", "views"]
+class = "a"
+expected_from = "spec"
+rules = ["5.3"]
+backends = []
+env = {}
+note = "core-semantics §5.3: cs.341: until `r` is reassigned, using a place through it while a reborrow from it is live is a §5.6 conflict. `r.n` is read while `x` (a `mut ref r.n`) is live; refused at the read (line 9). (Sentence map 2026-11-27, cell c5/r_place_through_ref_used_while_reborrow_live.) The expected.out wording of an error pin is guidance, not a byte oracle."

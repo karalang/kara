@@ -1,0 +1,7 @@
+// cs.312: `f(mut x)` is the spelling of a `mut ref` argument. n goes 1 -> 2.
+fn bump(x: mut ref i64) { *x += 1; }
+fn main() {
+    let mut n = 1;
+    bump(mut n);
+    println(f"{n}");
+}

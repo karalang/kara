@@ -1,0 +1,24 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+// cs.170 §3.1: struct, tuple, array and enum literals move the places put in
+// them: each R drops exactly once, as a part of its new owner, never as the
+// moved local. Locals drop in reverse declaration order (§7), each aggregate
+// last part first except Vec elements first to last (cs.18-20); the moved
+// locals a..e drop nothing.
+// Live at the end, in declaration order: p {x: a=1}, t (b=2, 9), v [c=3],
+// en Two(d=4, e=5).
+// Reverse: en -> d5 d4 ; v -> d3 ; t -> d9 d2 ; p -> d1.
+enum En { Two(R, R), Zero }
+struct P { x: R }
+fn main() {
+    let a = R { id: 1 };
+    let b = R { id: 2 };
+    let c = R { id: 3 };
+    let d = R { id: 4 };
+    let e = R { id: 5 };
+    let p = P { x: a };
+    let t = (b, R { id: 9 });
+    let v: Vec[R] = [c];
+    let en = En.Two(d, e);
+    println("end");
+}

@@ -1,0 +1,9 @@
+// cs.418: a generic parameter may be instantiated with a view: `wrap` with
+// `T = Str`. b.v = "abc".
+struct Box[T] { v: T }
+fn wrap[T](x: own T) -> Box[T] { Box { v: x } }
+fn main() {
+    let text = "abc".to_string();
+    let b = wrap(text.as_str());
+    println(b.v);
+}

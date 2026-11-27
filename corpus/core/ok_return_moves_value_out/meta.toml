@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["ownership", "moves"]
+expected_from = "spec"
+rules = ["3.1"]
+backends = []
+env = {}
+note = "core-semantics §3.1: cs.169 §3.1: `return r;` moves `r` to the caller, so it does not drop at the end of `make`; it drops at the end of main, after \"got\". The tail `r` (not taken here) would do the same. Expected: got, d1. (Sentence map 2026-11-27, cell c3_c9/m_return_moves_value_out.)"

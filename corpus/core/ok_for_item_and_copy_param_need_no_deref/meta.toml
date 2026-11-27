@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["references", "views"]
+expected_from = "spec"
+rules = ["5.10"]
+backends = []
+env = {}
+note = "core-semantics §5.10: cs.436: `for x in v { total += x }` over a `Vec[i64]` needs no `*`, and neither does a bare parameter of a `Copy` type. total = 1+2+3 = 6; double(6) = 12. (Sentence map 2026-11-27, cell c5/r_for_item_and_copy_param_need_no_deref.)"

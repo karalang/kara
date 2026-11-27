@@ -1,0 +1,11 @@
+// cs.675 §9.3 / cs.726 §9.6: the fix is to clone before creating the closure:
+// the escaping closure moves the clone `c`, and `s` stays usable.
+// Expected: abc, 3.
+struct Holder { f: Fn() -> i64 }
+fn main() {
+    let s = "abc".to_string();
+    let c = s.clone();
+    let h = Holder { f: || c.len() };
+    println(s);
+    println((h.f)());
+}

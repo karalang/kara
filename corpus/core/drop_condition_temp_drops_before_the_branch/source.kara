@@ -1,0 +1,30 @@
+// cs.552 (an `if` / `while` condition's temporary drops after the condition is
+// evaluated, before the branch), cs.561 (an argument to a borrowed parameter
+// inside an `if` or `while` condition drops where the condition's row says).
+// Every dN precedes the branch it selects, and each `while` test drops its temp
+// before the body (or before "done" on the last test).
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+fn r(i: i64) -> R { R { id: i } }
+fn see(x: R) -> i64 { x.id }
+fn say(i: i64) -> i64 { println(f"say{i}"); i }
+fn add(a: i64, b: i64) -> i64 { a + b }
+fn take(x: own R) { println(f"took{x.id}"); }
+fn main() {
+    if see(R { id: 1 }) == 1 {
+        println("then1");
+    } else {
+        println("else1");
+    }
+    if see(R { id: 2 }) == 1 {
+        println("then2");
+    } else {
+        println("else2");
+    }
+    let mut i = 0;
+    while see(R { id: 10 + i }) < 12 {
+        println(f"body{i}");
+        i = i + 1;
+    }
+    println("done");
+}

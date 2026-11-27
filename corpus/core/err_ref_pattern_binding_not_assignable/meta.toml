@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0517"
+exit = 1
+tags = ["references", "views"]
+class = "a"
+expected_from = "spec"
+rules = ["5.9"]
+backends = []
+env = {}
+note = "core-semantics §5.9: cs.424, cs.426: a `ref` pattern binding is read-only: assigning through `ref p` is refused (line 7). (Sentence map 2026-11-27, cell c5/r_ref_pattern_binding_not_assignable.) The expected.out wording of an error pin is guidance, not a byte oracle."

@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0509"
+exit = 1
+tags = ["closures"]
+class = "a"
+expected_from = "spec"
+rules = ["9.2"]
+backends = []
+env = {}
+note = "core-semantics §9.2: cs.667 §9.2: a closure that holds a view may not be stored where §5.7 forbids. A fn-typed struct field is escaping (§9.3), so `txt_view` moves in and the closure is a view inside an escaping closure (§5.7). (Sentence map 2026-11-27, cell c3_c9/k_view_closure_stored_in_field_refused.) The expected.out wording of an error pin is guidance, not a byte oracle."

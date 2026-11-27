@@ -1,0 +1,1 @@
+error[borrow_projection_copy]: main.kara:6:26: cannot move a non-`Copy` value out of a borrowed place: `p.name` is reached through `p`, a bare parameter, which borrows (core-semantics.md §4.1). Write `.clone()` to take a copy, or keep using it in place

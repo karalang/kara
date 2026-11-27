@@ -1,0 +1,10 @@
+// cs.648 §9.1: a body that mutates `n` captures it by `mut ref`, so the
+// closure's writes land in `n` itself: two calls leave it at 2.
+// Expected: 2.
+fn main() {
+    let mut n = 0;
+    let mut f = || { n += 1; };
+    f();
+    f();
+    println(n);
+}

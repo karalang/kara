@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0500"
+exit = 1
+tags = ["ownership", "moves"]
+class = "a"
+expected_from = "spec"
+rules = ["3.4"]
+backends = []
+env = {}
+note = "core-semantics §3.4: cs.191 §3.4: a root moved as a whole is reinitialized only by assigning the whole root; assigning one of its fields (`eat(parcel); parcel.a = x;`) is an error. Nothing reads `parcel` afterwards, so the assignment is the only candidate for the error. (Sentence map 2026-11-27, cell c3_c9/m_field_assign_after_whole_move_refused.) The expected.out wording of an error pin is guidance, not a byte oracle."

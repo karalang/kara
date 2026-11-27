@@ -1,0 +1,18 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+// cs.169 §3.1: `return r;` moves `r` to the caller, so it does not drop at the
+// end of `make`; it drops at the end of main, after "got". The tail `r`
+// (not taken here) would do the same.
+// Expected: got, d1.
+fn make(k: i64) -> R {
+    let r = R { id: k };
+    if k > 0 {
+        return r;
+    }
+    println("not returned");
+    r
+}
+fn main() {
+    let a = make(1);
+    println("got");
+}

@@ -1,0 +1,1 @@
+error[E0500]: main.kara:6:13: value 's' moved here, used again here (moved at line 5:14)

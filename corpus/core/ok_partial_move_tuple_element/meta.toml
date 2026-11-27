@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["ownership", "moves"]
+expected_from = "spec"
+rules = ["3.6"]
+backends = []
+env = {}
+note = "core-semantics §3.6: cs.200 §3.6: a tuple element may be moved out of an owned local. `x = t.1` moves R2 out; at scope end `x` (declared later) drops first: d2; then the rest of `t`, last element first (cs.19): d3, d1 (§3.6 last bullet, §7.9). Expected: mid, d2, d3, d1. (Sentence map 2026-11-27, cell c3_c9/m_partial_move_tuple_element.)"

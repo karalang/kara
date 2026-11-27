@@ -1,0 +1,11 @@
+// cs.327: a literal that builds a view takes the union of its fields'
+// origins. `t` borrows both `x` and `y`; writing `y` while `t` is live is
+// refused, at the assignment (line 9), even though only `t.a` is read.
+struct Two { a: ref String, b: ref String }
+fn main() {
+    let x = "x".to_string();
+    let mut y = "y".to_string();
+    let t = Two { a: ref x, b: ref y };
+    y = "z".to_string();
+    println(t.a);
+}

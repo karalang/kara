@@ -1,0 +1,10 @@
+// cs.428: a place through a `ref` may not be moved out of (§3.7): moving
+// the bare parameter's field `p.name` into an owned parameter is refused
+// (line 6).
+struct P { name: String }
+fn keep(s: own String) -> i64 { s.len() }
+fn f(p: P) -> i64 { keep(p.name) }
+fn main() {
+    let p = P { name: "a".to_string() };
+    println(f"{f(p)}");
+}

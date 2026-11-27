@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closures"]
+expected_from = "spec"
+rules = ["9.1"]
+backends = []
+env = {}
+note = "core-semantics §9.1: cs.657 §9.1: a Copy place that dies first is copied in, and still counts as borrowed in the inferred mode (`ref` here), so reading it is fine. Expected: 3, 30. (Sentence map 2026-11-27, cell c3_c9/k_dies_first_copy_read_ok.)"

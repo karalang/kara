@@ -1,0 +1,22 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+// cs.689-690 §9.4: the body moves `a` out, so the closure is OnceFn. Calling it
+// consumes it: `a` goes to `eat` (eat1, then d1 at eat's end), and the other
+// capture `b` drops at the end of that call, as a callee's local would (d2
+// before "after").
+// (`val(b)` captures `b` whole.)
+// Expected: call, eat1, d1, b2, d2, after.
+fn val(r: R) -> i64 { r.id }
+fn eat(r: own R) { println(f"eat{r.id}"); }
+fn mk(a: own R, b: own R) -> OnceFn() {
+    || {
+        eat(a);
+        println(f"b{val(b)}");
+    }
+}
+fn main() {
+    let f = mk(R { id: 1 }, R { id: 2 });
+    println("call");
+    f();
+    println("after");
+}

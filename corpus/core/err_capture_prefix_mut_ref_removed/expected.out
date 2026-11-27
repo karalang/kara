@@ -1,0 +1,1 @@
+error[E0519]: main.kara:5:17: closure capture prefixes are removed; a closure's captures are inferred from its body (§9.6). Clone a value before the closure to give the closure its own copy

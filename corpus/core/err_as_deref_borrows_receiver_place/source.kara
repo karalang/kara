@@ -1,0 +1,9 @@
+// cs.372: `Option.as_deref`'s result is a view of the receiver's own value,
+// so it borrows the receiver place `o`, as a `ref` in the signature would.
+// Assigning `o` while `d` is live is refused, at line 7.
+fn main() {
+    let mut o: Option[String] = Some("a".to_string());
+    let d = o.as_deref();
+    o = None;
+    println(f"{d.is_some()}");
+}

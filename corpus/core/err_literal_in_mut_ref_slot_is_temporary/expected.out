@@ -1,0 +1,1 @@
+error[E0200]: main.kara:6:22: a reference to a temporary outlives its statement (core-semantics.md §5.5): the value this `let` keeps borrows from a temporary that is dropped at the `;`. Bind the temporary to a variable first

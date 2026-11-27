@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closures"]
+expected_from = "spec"
+rules = ["9.6"]
+backends = []
+env = {}
+note = "core-semantics §9.6: cs.709 §9.6: an Fn may be called any number of times, through any access, `ref` included. (1+10)+(2+10)+(3+10) = 36; then f(0) = 10. Expected: 36, 10. (Sentence map 2026-11-27, cell c3_c9/k_fn_called_through_ref_many_times.)"

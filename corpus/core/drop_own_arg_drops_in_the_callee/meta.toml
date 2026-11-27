@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+expected_from = "spec"
+rules = ["7.4"]
+backends = []
+env = {}
+note = "core-semantics §7.4: cs.551 (an argument passed to an `own` parameter is not a caller temporary: it moves into the callee, which drops it). `eat` drops its parameter at its own body's end, so d1 comes before the statement's later `say(2)`. (Sentence map 2026-11-27, cell c7/d_own_arg_drops_in_the_callee.)"

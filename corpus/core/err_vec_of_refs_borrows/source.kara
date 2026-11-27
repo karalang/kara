@@ -1,0 +1,12 @@
+// cs.320, cs.322, cs.329, cs.330: `Vec[ref T]` is a view; `rs.push(r)`
+// stores the reference `r` into `rs`, so `rs` borrows `s` after `r`'s last
+// use, and `s` may not be written while `rs` is live. Refused at the
+// `push_str` (line 10).
+fn main() {
+    let mut s = "a".to_string();
+    let mut rs: Vec[ref String] = Vec.new();
+    let r = ref s;
+    rs.push(r);
+    s.push_str("b");
+    println(f"{rs.len()}");
+}

@@ -1,0 +1,18 @@
+// cs.722 §9.6: an Fn closure may go where a MutFn or OnceFn is expected, and a
+// MutFn closure where an OnceFn is expected.
+// via_mut(x+5) at 2 -> 7; via_once(x+5) at 3 -> 8; via_once(n += x; n) at 3
+// -> 3, and the mut-ref capture left n = 3.
+// Expected: 7, 8, 3, 3.
+fn via_mut(f: own MutFn(i64) -> i64) -> i64 {
+    let mut f = f;
+    f(2)
+}
+fn via_once(f: own OnceFn(i64) -> i64) -> i64 { f(3) }
+fn main() {
+    let k = 5;
+    println(via_mut(|x| x + k));
+    println(via_once(|x| x + k));
+    let mut n = 0;
+    println(via_once(|x| { n += x; n }));
+    println(n);
+}

@@ -1,0 +1,7 @@
+// cs.680 §9.3: a non-escaping parameter may be passed only to another
+// non-escaping parameter; handing it to an `escaping` one is an error.
+fn keep(f: escaping Fn() -> i64) -> i64 { f() }
+fn relay(cb_fn: Fn() -> i64) -> i64 { keep(cb_fn) }
+fn main() {
+    println(relay(|| 2));
+}

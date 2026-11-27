@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closures"]
+expected_from = "spec"
+rules = ["9.6"]
+backends = []
+env = {}
+note = "core-semantics §9.6: cs.721-722 §9.6: a named function is an Fn, and an Fn may be passed where an Fn, a MutFn or an OnceFn is expected. double(1), double(2), double(3). Expected: 2, 4, 6. (Sentence map 2026-11-27, cell c3_c9/k_named_fn_is_fn.)"

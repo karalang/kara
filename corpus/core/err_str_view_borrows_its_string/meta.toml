@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0516"
+exit = 1
+tags = ["references", "views"]
+class = "a"
+expected_from = "spec"
+rules = ["5.2"]
+backends = []
+env = {}
+note = "core-semantics §5.2: cs.316, cs.322: `Str` is a view, and a view borrows exactly like a reference: while `s` (a view of `text`) is live, `text` may not be written (§5.6). Refused at the `push_str` (line 7). (Sentence map 2026-11-27, cell c5/r_str_view_borrows_its_string.) The expected.out wording of an error pin is guidance, not a byte oracle."

@@ -1,0 +1,17 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+// cs.200 §3.6: a field may be moved out of an `own` parameter. `split` moves
+// `p.b` out, still reads the remaining field `p.a` (cs.202), and returns `b`.
+// At split's end the unmoved field `p.a` drops: d1. Back in main `r` (R2)
+// drops at main's end.
+// Expected: a1, d1, back, d2.
+struct P { a: R, b: R }
+fn split(p: own P) -> R {
+    let b = p.b;
+    println(f"a{p.a.id}");
+    b
+}
+fn main() {
+    let r = split(P { a: R { id: 1 }, b: R { id: 2 } });
+    println("back");
+}

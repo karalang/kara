@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closures"]
+expected_from = "spec"
+rules = ["9.6"]
+backends = []
+env = {}
+note = "core-semantics §9.6: cs.724 §9.6: kind, `escaping` and the effect clause are independent, so `escaping MutFn(Event) -> i64 with writes(Log)` is one parameter type (the spec's example with a result added so the stored closure can be observed). The handler escapes (pushed), so `seen` is copied in; it is a MutFn: its own copy accumulates 2, then 5. Expected: 2, 5, 0. (Sentence map 2026-11-27, cell c3_c9/k_escaping_mutfn_with_effect_is_one_type.)"

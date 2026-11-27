@@ -1,0 +1,17 @@
+// cs.549 (a `let` initializer's temporary drops at the `;`, after the bindings
+// take what they move). The R{1} argument drops at the first `;` (before n1).
+// In the tuple pattern `a` takes element 0; element 1 is bound by nothing and
+// drops at the `;` (d3) before a2; `a` drops at main's end (d2).
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+fn r(i: i64) -> R { R { id: i } }
+fn see(x: R) -> i64 { x.id }
+fn say(i: i64) -> i64 { println(f"say{i}"); i }
+fn add(a: i64, b: i64) -> i64 { a + b }
+fn take(x: own R) { println(f"took{x.id}"); }
+fn main() {
+    let n = see(R { id: 1 });
+    println(f"n{n}");
+    let (a, _) = (R { id: 2 }, R { id: 3 });
+    println(f"a{a.id}");
+}

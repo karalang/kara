@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closures"]
+expected_from = "spec"
+rules = ["9.3"]
+backends = []
+env = {}
+note = "core-semantics §9.3: cs.681 §9.3: with `f: escaping Fn() -> i64` the callee may store the parameter (in a struct) or return it. Expected: 5, 6. (Sentence map 2026-11-27, cell c3_c9/k_escaping_param_stored_and_returned.)"

@@ -1,0 +1,11 @@
+// cs.424, cs.426: a `ref` pattern binding is read-only: assigning through
+// `ref p` is refused (line 7).
+struct P { n: i64 }
+fn main() {
+    let o = Some(P { n: 0 });
+    match o {
+        Some(ref p) => { p.n = 5; }
+        None => {}
+    }
+    println(f"{o.is_some()}");
+}

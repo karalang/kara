@@ -1,0 +1,7 @@
+// cs.210 §3.7: moving a non-Copy value out of a `sync` value is an error.
+sync struct S { payload: Vec[i64] }
+fn main() {
+    let s = S { payload: [1, 2] };
+    let v = s.payload;
+    println(v.len());
+}

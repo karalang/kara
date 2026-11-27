@@ -1,0 +1,17 @@
+// cs.175 §3.1 (with design.md "an impl may borrow where the trait takes
+// ownership"): this `add` borrows both operands (bare `self`, bare `rhs`), so
+// `a + b` moves neither; both stay usable and each drops once, in reverse
+// declaration order c, b, a at main's end.
+// Expected: "3 1 2", then d3 d2 d1.
+struct V { n: i64 }
+impl Drop for V { fn drop(mut ref self) { println(f"d{self.n}"); } }
+impl Add for V {
+    type Output = V;
+    fn add(self, rhs: V) -> V { V { n: self.n + rhs.n } }
+}
+fn main() {
+    let a = V { n: 1 };
+    let b = V { n: 2 };
+    let c = a + b;
+    println(f"{c.n} {a.n} {b.n}");
+}

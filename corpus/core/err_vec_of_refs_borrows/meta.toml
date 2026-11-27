@@ -1,0 +1,11 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "error:E0516"
+exit = 1
+tags = ["references", "views"]
+class = "a"
+expected_from = "spec"
+rules = ["5.2", "5.3"]
+backends = []
+env = {}
+note = "core-semantics §5.2, §5.3: cs.320, cs.322, cs.329, cs.330: `Vec[ref T]` is a view; `rs.push(r)` stores the reference `r` into `rs`, so `rs` borrows `s` after `r`'s last use, and `s` may not be written while `rs` is live. Refused at the `push_str` (line 10). (Sentence map 2026-11-27, cell c5/r_vec_of_refs_borrows.) The expected.out wording of an error pin is guidance, not a byte oracle."

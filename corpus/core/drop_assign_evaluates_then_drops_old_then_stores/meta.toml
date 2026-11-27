@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+expected_from = "spec"
+rules = ["7.5"]
+backends = []
+env = {}
+note = "core-semantics §7.5: cs.568 (p's operands are evaluated, then v), cs.570 (the old value is then dropped), cs.572 (the new value is stored), cs.573 (the same holds for a field or element place). `mk` prints when it makes the value, `idx` when the index operand is evaluated. So: mk2 then d1; mk5 then d3 (old p.a); idx1, mk8, then d7 (old v[1]). At main's end the LIFO pops v (elements first index to last: d6 d8), p (fields in reverse declaration order: b=d4, a=d5), then x (d2). (Sentence map 2026-11-27, cell c7/d_assign_evaluates_then_drops_old_then_stores.)"

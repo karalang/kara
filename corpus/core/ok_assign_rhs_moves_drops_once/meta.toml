@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["ownership", "moves"]
+expected_from = "spec"
+rules = ["3.1"]
+backends = []
+env = {}
+note = "core-semantics §3.1: cs.166 §3.1: `b = a;` moves `a` into `b`. The old value of `b` (2) drops at the assignment (pin drop_assign), and `a` is moved, so it does not drop at scope end; only `b`, now holding 1, does. Expected: d2, after, d1 (exactly one d1). (Sentence map 2026-11-27, cell c3_c9/m_assign_rhs_moves_drops_once.)"

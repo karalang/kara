@@ -1,0 +1,8 @@
+// cs.714 §9.6: a shared borrow of a MutFn (a bare parameter) cannot call it.
+fn call(bump_fn: MutFn()) { bump_fn(); }
+fn main() {
+    let mut n = 0;
+    let mut bump = || { n += 1; };
+    call(bump);
+    println(n);
+}

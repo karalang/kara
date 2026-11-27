@@ -1,0 +1,11 @@
+// cs.329 (contrast), cs.358: a `mut ref` pointee that cannot hold a
+// reference (`Vec[i64]`) takes no origins from the other arguments, so `t`
+// may be written while `lens` is live. lens = [1]; t = "tu". Prints "[1] tu".
+fn note(h: mut ref Vec[i64], s: String) { h.push(s.len()); }
+fn main() {
+    let mut t = "t".to_string();
+    let mut lens: Vec[i64] = Vec.new();
+    note(mut lens, t);
+    t.push_str("u");
+    println(f"{lens} {t}");
+}

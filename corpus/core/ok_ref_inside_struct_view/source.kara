@@ -1,0 +1,9 @@
+// cs.305, cs.318: a reference may appear inside a view; a struct with a
+// `ref` field is a borrowed struct. `Pair` holds two references into `v`;
+// reading through them prints "p q".
+struct Pair { a: ref String, b: ref String }
+fn main() {
+    let v = ["p".to_string(), "q".to_string()];
+    let pr = Pair { a: ref v[0], b: ref v[1] };
+    println(f"{pr.a} {pr.b}");
+}

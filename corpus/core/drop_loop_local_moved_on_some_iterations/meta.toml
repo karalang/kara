@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+expected_from = "spec"
+rules = ["7.2"]
+backends = []
+env = {}
+note = "core-semantics §7.2: cs.534 (a place moved during an iteration and initialized again in the next one is tracked per iteration; its drop at the end of each iteration runs only if it is initialized then), cs.533. `x` is initialized afresh each iteration; on even iterations it moves into `take` (which drops it, §4.2), so the iteration's end drops nothing; on odd ones it drops at the iteration's end, after the `end` line. (Sentence map 2026-11-27, cell c7/d_loop_local_moved_on_some_iterations.)"

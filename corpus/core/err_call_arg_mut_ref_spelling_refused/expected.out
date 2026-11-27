@@ -1,0 +1,1 @@
+error[E0001]: main.kara:7:10: `mut ref` is not written at call sites. Use `mut <expr>` instead — the `ref` is implied by the callee's signature.

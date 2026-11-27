@@ -1,0 +1,10 @@
+// cs.647 §9.1: a body that only reads `s` captures it by `ref`, so `s` stays
+// readable while the closure is live and after it.
+// Expected: abc, 3, abc.
+fn main() {
+    let s = "abc".to_string();
+    let f = || s.len();
+    println(s);
+    println(f());
+    println(s);
+}

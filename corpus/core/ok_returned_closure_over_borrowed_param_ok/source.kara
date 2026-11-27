@@ -1,0 +1,12 @@
+// §9.3 (borrowed parameter sentence, between cs.675 and cs.676) with §5.7: a
+// borrowed parameter holds a reference; the returned closure moves that
+// reference in and is a view, which a RETURNED closure may be. `mk(name)`
+// then borrows `name`, which stays readable.
+// Expected: abcd, ab.
+fn mk(p: String) -> Fn(String) -> String { |s| f"{p}{s}" }
+fn main() {
+    let name = "ab".to_string();
+    let f = mk(name);
+    println(f("cd".to_string()));
+    println(name);
+}

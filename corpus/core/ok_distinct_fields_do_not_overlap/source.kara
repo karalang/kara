@@ -1,0 +1,12 @@
+// cs.401: distinct fields do not overlap, so `mut ref w.a` and
+// `mut ref w.b` may be live together. a.n = 10, b.n = 20. Prints "10 20".
+struct A { n: i64 }
+struct W { a: A, b: A }
+fn main() {
+    let mut w = W { a: A { n: 1 }, b: A { n: 2 } };
+    let x = mut ref w.a;
+    let y = mut ref w.b;
+    x.n = 10;
+    y.n = 20;
+    println(f"{w.a.n} {w.b.n}");
+}

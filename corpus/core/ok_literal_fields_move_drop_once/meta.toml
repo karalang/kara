@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["ownership", "moves"]
+expected_from = "spec"
+rules = ["3.1"]
+backends = []
+env = {}
+note = "core-semantics §3.1: cs.170 §3.1: struct, tuple, array and enum literals move the places put in them: each R drops exactly once, as a part of its new owner, never as the moved local. Locals drop in reverse declaration order (§7), each aggregate last part first except Vec elements first to last (cs.18-20); the moved locals a..e drop nothing. Live at the end, in declaration order: p {x: a=1}, t (b=2, 9), v [c=3], en Two(d=4, e=5). Reverse: en -> d5 d4 ; v -> d3 ; t -> d9 d2 ; p -> d1. (Sentence map 2026-11-27, cell c3_c9/m_literal_fields_move_drop_once.)"

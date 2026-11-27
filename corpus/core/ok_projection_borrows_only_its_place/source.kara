@@ -1,0 +1,9 @@
+// cs.325, cs.401: `ref w.a` borrows `w.a` only; `w.b` is a distinct field,
+// so writing it while `r` is live is accepted. Prints "a y".
+struct W { a: String, b: String }
+fn main() {
+    let mut w = W { a: "a".to_string(), b: "b".to_string() };
+    let r = ref w.a;
+    w.b = "y".to_string();
+    println(f"{r} {w.b}");
+}

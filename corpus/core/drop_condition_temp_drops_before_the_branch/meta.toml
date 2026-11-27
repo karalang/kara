@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+expected_from = "spec"
+rules = ["7.4"]
+backends = []
+env = {}
+note = "core-semantics §7.4: cs.552 (an `if` / `while` condition's temporary drops after the condition is evaluated, before the branch), cs.561 (an argument to a borrowed parameter inside an `if` or `while` condition drops where the condition's row says). Every dN precedes the branch it selects, and each `while` test drops its temp before the body (or before \"done\" on the last test). (Sentence map 2026-11-27, cell c7/d_condition_temp_drops_before_the_branch.)"

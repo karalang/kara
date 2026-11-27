@@ -1,0 +1,14 @@
+// cs.331: a closure argument adds its captures' origins to a `mut ref`
+// pointee only when the pointee's type can hold the closure. `Vec[i64]`
+// mentions no function type, so after `apply` the captured `t` may be
+// written while `v` is live. v = [1+10, 2+10, 3+10]; t = 5.
+fn apply(v: mut ref Vec[i64], f: Fn(i64) -> i64) {
+    for x in v.iter_mut() { *x = f(*x); }
+}
+fn main() {
+    let mut v: Vec[i64] = [1, 2, 3];
+    let mut t = 10;
+    apply(mut v, |x| x + t);
+    t = 5;
+    println(f"{v} {t}");
+}

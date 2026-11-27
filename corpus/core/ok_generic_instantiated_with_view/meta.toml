@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["references", "views"]
+expected_from = "spec"
+rules = ["5.8"]
+backends = []
+env = {}
+note = "core-semantics §5.8: cs.418: a generic parameter may be instantiated with a view: `wrap` with `T = Str`. b.v = \"abc\". (Sentence map 2026-11-27, cell c5/r_generic_instantiated_with_view.)"

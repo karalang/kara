@@ -1,0 +1,11 @@
+// cs.416: a view may enter a `TaskGroup` task that joins inside the scope
+// of every origin: the task reads the view `s` of "abc" and is joined
+// before `text` drops. Prints "3".
+import std.sync.{TaskGroup};
+fn main() {
+    let text = "abc".to_string();
+    let s = text.as_str();
+    let g = TaskGroup.new();
+    let h = g.spawn(|| s.len());
+    println(f"{h.join()}");
+}

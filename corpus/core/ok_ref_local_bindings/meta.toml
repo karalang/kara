@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["references", "views"]
+expected_from = "spec"
+rules = ["5.1"]
+backends = []
+env = {}
+note = "core-semantics §5.1: cs.304: a local may have a reference type when bound to a call that returns a reference (`a`), to `ref place` (`b`), to `mut ref place` (`c`), or to another reference (`d`, a copy of `b`). a = \"x\" (first element), b = \"y\"; c writes w.n from 1 to 11; d = \"y\". (Sentence map 2026-11-27, cell c5/r_ref_local_bindings.)"

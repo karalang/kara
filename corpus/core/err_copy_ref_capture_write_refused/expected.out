@@ -1,0 +1,1 @@
+error[E0516]: main.kara:8:9: cannot write to `lim` while it is still borrowed (the borrow is taken at 7:14) (core-semantics.md §5.6) [E0516]. Finish using the borrow first, or take a copy of the value (`.clone()`, `.cloned()`, `*r` for a `Copy` value) where it is borrowed

@@ -1,0 +1,10 @@
+source = "core-semantics sentence map 2026-11-27"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["drop"]
+expected_from = "spec"
+rules = ["7.1", "7.2", "7.3"]
+backends = []
+env = {}
+note = "core-semantics §7.1, §7.2, §7.3: cs.529 (scopes: the end of a `match` arm, `if let` body or `while let` body), cs.520 (move-mode pattern bindings are holders), cs.541 (pattern bindings belong to their arm's scope, so they drop before anything outside it). Reasoning: in the arm, `r` (move binding) is pushed before `inner`, so at the arm's end `inner` (d2) then `r` (d1), before \"after match\". The `if let` binding drops at its body's end (d3) before \"after if let\". Each `while let` binding drops at the end of its iteration's body: wl5 d5 wl4 d4. `outer` is a main local: it drops last (d100); `a`, `b` were moved out by the bindings and `v` is empty by then. (Sentence map 2026-11-27, cell c7/d_arm_iflet_whilelet_binding_drops_at_body_end.)"
