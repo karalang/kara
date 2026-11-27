@@ -58,7 +58,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | class | total |
 |---|---|
-| diagnostics | 803 |
+| diagnostics | 806 |
 | false-positive | 409 |
 | missing-feature | 271 |
 | perf | 206 |
@@ -79,14 +79,14 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | typecheck | 984 |
 | mir | 356 |
 | mir-llvm | 342 |
-| cli | 326 |
+| cli | 328 |
 | parser | 170 |
 | ownership | 148 |
 | runtime | 121 |
 | interp | 119 |
 | effect | 73 |
+| resolver | 60 |
 | other | 59 |
-| resolver | 59 |
 | codegen | 22 |
 | autopar | 7 |
 | lexer | 2 |
@@ -2444,6 +2444,9 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-27-57 | parser | medium | `for P { x, y } in ps { . | 49e265ce46 |
 | B-2026-11-27-60 | parser | low | `karac fix` had no group for a Rust `thread::spawn` inside a loop: `handles.push(thread::spawn(move \|\| serve(conn, shared)))` in an accept loop kept… | 57bea61001 |
 | B-2026-11-27-62 | mir-llvm | high | A compiled extern "C" call passes zeros for a struct that goes on the stack after the registers (skb6(1, 2, 3, 4, 5, 6, B { a: 1, b: 2, c: 3 }) gives… | 7d6d3c0bb9 |
+| B-2026-11-27-63 | cli | medium | kara-lsp's quick fix made a different change from `karac fix` on the same diagnostic: the trait-locked `own` and a literal's annotation were written… | 04016a8aab |
+| B-2026-11-27-64 | cli | low | `karac fix` left a library import behind after its fix removed the import's last use: the deprecated MemoryOrdering fix kept `import std.sync.{Memory… | 04016a8aab |
+| B-2026-11-27-65 | resolver | low | `import std.random.{normal}` lost its deferred.md section after the prelude shrink: the module-of-globals refusal reads "`std.random` has no item `no… | 04016a8aab |
 
 </details>
 
