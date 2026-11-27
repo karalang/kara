@@ -1230,6 +1230,12 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   `karac build` `0 0` for `i8` lanes (LLVM leaves `sdiv` / `srem` of `MIN`
   by -1 undefined); and a lane divided by zero, with `/` or `%`, panics
   with `division by zero` as scalar division does (B-2026-11-26-87).
+- The HTTP server accepts a header value holding obs-text (a byte from
+  0x80 to 0xFF that is not UTF-8, such as a Latin-1 filename), as RFC 9110
+  §5.5 allows: the handler reads it decoded with U+FFFD for each invalid
+  sequence, as it reads a body. It answered `400 Bad Request`. Names, the
+  method and the target stay ASCII (B-2026-11-26-94, found by
+  conformance/http_server_fuzz.py against h11).
 - A `match` whose moving arm assigns the scrutinee again, beside an arm
   whose pattern is a unit variant (`None`, `E.Y`) or a constant, leaves
   the scrutinee usable after it (core-semantics §3.4, §4.6). The

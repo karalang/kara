@@ -17,6 +17,10 @@
 /// Header (or query) pairs, in the order they came.
 pub type Headers = Vec<(String, String)>;
 
+/// The exact bytes of header values that are not UTF-8, each by its index
+/// in a request's [`Headers`] (B-2026-11-26-94).
+pub type RawValues = Vec<(usize, Vec<u8>)>;
+
 /// The `Content-Type` of a response whose handler sets none: its body is
 /// a `String`, so text; a JSON API sets `application/json` itself
 /// (B-2026-11-16-275).
@@ -49,6 +53,13 @@ pub struct Request {
     /// The request target: the path, then `?` and the query if there is one.
     pub target: String,
     pub headers: Headers,
+    /// The exact bytes of each received header value that is not UTF-8,
+    /// by its index in `headers`, whose value holds it decoded with each
+    /// invalid sequence replaced by U+FFFD (obs-text, RFC 9110 §5.5;
+    /// B-2026-11-26-94). Kept so an exact-bytes accessor needs no reparse;
+    /// boxed, since almost every request has none and `Parse` carries a
+    /// `Request` by value.
+    pub raw_values: Option<Box<RawValues>>,
     pub body: Vec<u8>,
     /// Whether the connection stays open after the response.
     keep_alive: bool,
@@ -67,6 +78,7 @@ impl Request {
             method: self.method.clone(),
             target: std::mem::take(&mut self.target),
             headers: std::mem::take(&mut self.headers),
+            raw_values: std::mem::take(&mut self.raw_values),
             body: std::mem::take(&mut self.body),
             keep_alive: self.keep_alive,
             http10: self.http10,
@@ -175,9 +187,27 @@ pub const IDLE_TIMEOUT_MS: i64 = 60_000;
 /// below 0x20 but HTAB, or DEL. RFC 9110 §5.5's field-content is VCHAR,
 /// obs-text, SP and HTAB; a value with CR, LF or NUL MUST be refused, and
 /// one with another control (a vertical tab before `chunked`) reads
-/// differently to a peer that trims it (B-2026-11-21-22).
-fn bad_field_value(s: &str) -> bool {
-    s.bytes().any(|b| (b < 0x20 && b != b'\t') || b == 0x7f)
+/// differently to a peer that trims it (B-2026-11-21-22). Obs-text (0x80
+/// to 0xFF) is allowed (B-2026-11-26-94).
+fn bad_field_bytes(v: &[u8]) -> bool {
+    v.iter().any(|&b| (b < 0x20 && b != b'\t') || b == 0x7f)
+}
+
+/// A received field line, `name ":" OWS value OWS`: its name, a token,
+/// and its value trimmed of the spaces and tabs around it; `None` when it
+/// is malformed. The value is bytes: obs-text is allowed in it, though
+/// the rest of the head is ASCII (B-2026-11-26-94).
+fn field(l: &[u8]) -> Option<(&str, &[u8])> {
+    let colon = l.iter().position(|&b| b == b':')?;
+    let name = std::str::from_utf8(&l[..colon]).ok()?;
+    let mut v = &l[colon + 1..];
+    while let [b' ' | b'\t', rest @ ..] = v {
+        v = rest;
+    }
+    while let [rest @ .., b' ' | b'\t'] = v {
+        v = rest;
+    }
+    (is_token(name) && !bad_field_bytes(v)).then_some((name, v))
 }
 
 /// Whether `s` is an RFC 9110 token (a method or a header name).
@@ -471,32 +501,37 @@ impl Parser {
         }
         if matches!(self.stage, Stage::Headers) {
             loop {
-                let h = match p.line() {
-                    None => {
-                        return self.head_short(buf, eof, HEAD_TOO_LARGE, "the headers end early")
-                    }
-                    Some(Err(e)) => return Parse::Bad(400, e),
-                    Some(Ok(h)) => h,
+                let Some(h) = p.raw_line() else {
+                    return self.head_short(buf, eof, HEAD_TOO_LARGE, "the headers end early");
                 };
                 if h.is_empty() {
                     break;
                 }
-                let Some((k, v)) = h.split_once(':') else {
-                    return Parse::Bad(400, "a malformed header");
-                };
                 // No whitespace before the colon (RFC 9112 §5.1), which is
                 // also how an obs-fold continuation line is refused; a
                 // value is trimmed of the spaces and tabs around it (OWS),
                 // and may hold no control but HTAB (RFC 9110 §5.5).
-                let v = v.trim_matches([' ', '\t']);
-                if !is_token(k) || bad_field_value(v) {
+                let Some((k, v)) = field(h) else {
                     return Parse::Bad(400, "a malformed header");
-                }
+                };
+                // A value that is not UTF-8 is obs-text, which a recipient
+                // keeps as opaque data: the handler reads it decoded, each
+                // invalid sequence U+FFFD, as it reads a body, and its bytes
+                // are kept (review-thread ruling 2026-11-26, B-2026-11-26-94).
+                let value = match std::str::from_utf8(v) {
+                    Ok(v) => v.to_string(),
+                    Err(_) => {
+                        let at = self.req.headers.len();
+                        self.req
+                            .raw_values
+                            .get_or_insert_with(Default::default)
+                            .push((at, v.to_vec()));
+                        String::from_utf8_lossy(v).into_owned()
+                    }
+                };
                 // Names lowercased, as hyper gives them to legacy's
                 // handlers; a lookup by `header` ignores case either way.
-                self.req
-                    .headers
-                    .push((k.to_ascii_lowercase(), v.to_string()));
+                self.req.headers.push((k.to_ascii_lowercase(), value));
             }
             self.head_end = p.pos;
             if let Err(bad) = self.framing() {
@@ -567,7 +602,7 @@ impl Parser {
                     // Up to the blank line or the end.
                     loop {
                         let at = p.pos;
-                        match p.crlf_line() {
+                        match p.crlf_raw_line() {
                             None if eof => {
                                 p.pos = buf.len();
                                 break;
@@ -580,10 +615,10 @@ impl Parser {
                                 return Parse::More(self.body_more(buf.len() + 1));
                             }
                             Some(Err(e)) => return Parse::Bad(400, e),
-                            Some(Ok("")) => break,
+                            Some(Ok(b"")) => break,
                             // A trailer is a field line as a header is
                             // (RFC 9112 §7.1.2).
-                            Some(Ok(l)) if !field_line(l) => {
+                            Some(Ok(l)) if field(l).is_none() => {
                                 return Parse::Bad(400, "a malformed trailer")
                             }
                             Some(Ok(_)) => {
@@ -885,13 +920,6 @@ fn chunk_size(l: &str) -> Option<&str> {
     Some(&l[..digits])
 }
 
-/// Whether `l` is a field line, `name ":" OWS value OWS`, as a header's
-/// is read.
-fn field_line(l: &str) -> bool {
-    l.split_once(':')
-        .is_some_and(|(k, v)| is_token(k) && !bad_field_value(v.trim_matches([' ', '\t'])))
-}
-
 /// A cursor over the bytes [`parse_request`] reads.
 struct Lines<'a> {
     buf: &'a [u8],
@@ -905,6 +933,13 @@ impl<'a> Lines<'a> {
     /// The next line without its line end, or `None` when no whole line
     /// is left; text that is not UTF-8 is an error.
     fn line(&mut self) -> Option<Result<&'a str, &'static str>> {
+        let l = self.raw_line()?;
+        Some(std::str::from_utf8(l).map_err(|_| "a line that is not UTF-8"))
+    }
+
+    /// The next line's bytes without its line end, or `None` when no whole
+    /// line is left: a field line, whose value may hold obs-text.
+    fn raw_line(&mut self) -> Option<&'a [u8]> {
         let rest = &self.buf[self.pos..];
         let from = self.scanned.max(self.pos) - self.pos;
         let Some(i) = rest[from..]
@@ -916,18 +951,25 @@ impl<'a> Lines<'a> {
             return None;
         };
         self.pos += i + 1;
-        let l = rest[..i].strip_suffix(b"\r").unwrap_or(&rest[..i]);
-        Some(std::str::from_utf8(l).map_err(|_| "a line that is not UTF-8"))
+        Some(rest[..i].strip_suffix(b"\r").unwrap_or(&rest[..i]))
     }
 
     /// [`Lines::line`], for a chunked body's lines, which end in CRLF: a
     /// bare LF there is refused, since a peer that ends lines only at CRLF
     /// reads the chunks differently (RFC 9112 §7.1, B-2026-11-21-22).
     fn crlf_line(&mut self) -> Option<Result<&'a str, &'static str>> {
+        Some(
+            self.crlf_raw_line()?
+                .and_then(|l| std::str::from_utf8(l).map_err(|_| "a line that is not UTF-8")),
+        )
+    }
+
+    /// [`Lines::crlf_line`]'s bytes, for a trailer, a field line.
+    fn crlf_raw_line(&mut self) -> Option<Result<&'a [u8], &'static str>> {
         let from = self.pos;
-        let l = self.line()?;
+        let l = self.raw_line()?;
         if self.buf[from..self.pos].ends_with(b"\r\n") {
-            Some(l)
+            Some(Ok(l))
         } else {
             Some(Err("a chunked body's line not ended by CRLF"))
         }
@@ -1117,6 +1159,36 @@ mod tests {
             Parse::More(_) => 1,
             Parse::Closed => 2,
         }
+    }
+
+    /// Obs-text in a header or trailer value is accepted, read decoded with
+    /// U+FFFD for each invalid sequence, its bytes kept; a name, method or
+    /// target with a byte outside ASCII is still refused (review-thread
+    /// ruling 2026-11-26, B-2026-11-26-94).
+    #[test]
+    fn obs_text_in_a_field_value_is_accepted_and_kept() {
+        let raw = b"GET / HTTP/1.1\r\nHost: h\r\nX-L: caf\xe9 \r\nX-U: caf\xc3\xa9\r\n\r\n";
+        let Parse::Done(r, _) = parse_request(raw, false) else {
+            panic!("refused")
+        };
+        assert_eq!(r.header("x-l"), Some("caf\u{fffd}"));
+        assert_eq!(r.header("x-u"), Some("café"));
+        assert_eq!(
+            r.raw_values.as_deref(),
+            Some(&vec![(1, b"caf\xe9".to_vec())])
+        );
+        let trailer = b"POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nx\r\n0\r\nX-T: \xff\r\n\r\n";
+        assert_eq!(refused(trailer), 0);
+        assert_eq!(
+            refused(b"GET / HTTP/1.1\r\nHost: h\r\nX-\xe9: 1\r\n\r\n"),
+            400
+        );
+        assert_eq!(refused(b"G\xc3\xa9T / HTTP/1.1\r\nHost: h\r\n\r\n"), 400);
+        assert_eq!(refused(b"GET /caf\xe9 HTTP/1.1\r\nHost: h\r\n\r\n"), 400);
+        assert_eq!(
+            refused(b"GET / HTTP/1.1\r\nHost: h\r\nX: a\x7f\r\n\r\n"),
+            400
+        );
     }
 
     /// The 2026-11-21 conformance pass's cells (B-2026-11-21-22): a control

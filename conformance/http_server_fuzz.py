@@ -6,7 +6,8 @@ malformed `Content-Length`, `Transfer-Encoding` codings, chunked bodies with
 extensions, trailers and bad framing, a body longer than declared, and
 pipelined requests. The server's handler echoes each request it is given
 (method, target, every header, the body's bytes), so an accepted request is
-compared field by field with h11's parse.
+compared field by field with h11's parse (a value's obs-text as the page
+says the handler reads it, decoded with U+FFFD).
 
 The verdicts:
   - both accept: the echoes must equal h11's requests, in order, the same
@@ -414,16 +415,17 @@ def seen_by_handler(want):
         t = a.group(1) or "/"
         if t.startswith("?"):
             t = "/" + t
-    return m, t, [(k.lower(), v.lower() if k.lower() == "transfer-encoding" else v) for k, v in hs], b
+    # A value's obs-text reaches the handler decoded, each invalid UTF-8
+    # sequence U+FFFD (io.md, B-2026-11-26-94); the echo is its UTF-8.
+    lossy = lambda v: v.encode("latin-1").decode("utf-8", "replace").encode("utf-8").decode("latin-1")
+    return m, t, [(k.lower(), lossy(v.lower() if k.lower() == "transfer-encoding" else v)) for k, v in hs], b
 
 
 # Differences filed in docs/bugs-v2.jsonl and still open: reported as known,
 # not failed, so the instrument stays usable while the row is open. A fix
-# flips the row's cases to "same" and the entry is removed here.
-KNOWN = {
-    "B-2026-11-26-94": (rb"\r\n[^\r\n:]*:[^\r\n]*[\x80-\xff]",
-                        "a header value byte that is not UTF-8 (obs-text) is refused 400"),
-}
+# flips the row's cases to "same" and the entry is removed here (as
+# B-2026-11-26-94's, obs-text in a header value, was).
+KNOWN = {}
 
 
 def judge(label, data, server, rep):
