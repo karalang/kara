@@ -1,0 +1,10 @@
+source = "B-2026-11-27-47"
+dedup_of = []
+expect = "error:E0200"
+exit = 1
+tags = ["closure"]
+expected_from = "spec"
+rules = ["9.1"]
+backends = []
+env = {}
+note = "core-semantics cs.657-658: cs.658 §9.1: a Copy place copied into a closure that outlives it still counts as borrowed until it dies, so writing it afterwards is an error. The expected.out wording of an error pin is guidance, not a byte oracle."

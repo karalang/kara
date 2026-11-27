@@ -1,0 +1,25 @@
+// core-semantics §9.5 (cs.703, B-2026-11-27-46): a task spawned from inside another task takes that task's own
+// locals by move. Here the outer task returns the inner task's handle without
+// joining it, so the inner task may run after the outer body ended; it owns
+// `inner_label` (moved in), so it still reads all 36 bytes.
+// Expected: 36.
+import std.sync.{TaskGroup, TaskHandle};
+fn slow(s: ref String) -> i64 {
+    let mut i = 0;
+    let mut acc = 0;
+    while i < 3000000 {
+        acc = acc + 1;
+        i = i + 1;
+    }
+    s.len() + acc - acc
+}
+fn main() {
+    let g = TaskGroup.new();
+    let outer = g.spawn(|| {
+        let inner_label = "abcdefghijklmnopqrstuvwxyz0123456789".to_string();
+        let h = g.spawn(|| slow(inner_label));
+        h
+    });
+    let h = outer.join();
+    println(h.join());
+}

@@ -1,0 +1,10 @@
+source = "B-2026-11-27-48"
+dedup_of = []
+expect = "error:E0514"
+exit = 1
+tags = ["closure", "moves"]
+expected_from = "spec"
+rules = ["9.1"]
+backends = []
+env = {}
+note = "core-semantics cs.656: cs.656 §9.1 (B-2026-11-27-48): `r` is declared after `f`, so it drops first and the closure assigned to `f` takes it by move; reading `r.id` afterwards is refused (E0514: R has a Drop body). cs.656 §9.1: the non-Copy place `r` dies before `f`, so it is moved into the closure (§3), and a later use of `r` is E0500. (`val(r)` captures `r` whole.) The expected.out wording of an error pin is guidance, not a byte oracle."

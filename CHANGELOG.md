@@ -20,6 +20,19 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
 
 ### Programs 0.8.1 accepted that are now refused
 
+- A task spawned from inside another `TaskGroup` task takes that task's own
+  locals by move (core-semantics §9.5): it captured them by `ref`, so an
+  inner task the outer one handed back unjoined read a freed local
+  (AddressSanitizer heap-use-after-free). The inner task now owns them
+  (B-2026-11-27-46).
+- A closure assigned to a binding declared earlier (`f = || ..`) takes the
+  places declared after that binding by move, as §9.1 says for a place that
+  dies first: writing a `Copy` place it reads, using a `Copy` place it
+  writes, or using a moved non-`Copy` place afterwards is refused where
+  `karac check` accepted it (the first printed a stale copy; the last stopped
+  in the MIR move check with no span). A closure sent through a channel's
+  `send` / `try_send` / `send_timeout` escapes (§9.3), so a later use of a
+  place it captured is E0500 (B-2026-11-27-47, B-2026-11-27-48).
 - `p.read_volatile()` and `p.write_volatile(v)` on a raw pointer carry
   `reads(Hardware)` and `writes(Hardware)`, as the `volatile_read` /
   `volatile_write` intrinsics and `VolatileCell` already did (review

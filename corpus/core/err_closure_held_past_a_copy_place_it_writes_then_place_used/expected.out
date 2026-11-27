@@ -1,0 +1,1 @@
+error[E0200]: main.kara:9:17: `tally` is used after the closure assigned to `g` captured it by `mut ref` (at line 8). It drops before `g`, so the closure holds a copy whose writes this use would not see. Declare `tally` before `g` to let the closure borrow it (core-semantics.md §9.1)

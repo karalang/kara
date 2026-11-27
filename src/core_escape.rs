@@ -88,6 +88,20 @@ const CLOSURE_RESULT: &str = "returned from a closure";
 
 const STORE_METHODS: &[&str] = &["push", "push_back", "push_front", "insert", "set", "append"];
 
+/// `Sender` methods that move their value into the channel
+/// (docs/library/concurrency.md).
+const SEND_METHODS: &[&str] = &["send", "try_send", "send_timeout"];
+
+/// Whether a receiver of this type is a channel's `Sender`.
+fn sender_ty(ty: &crate::typechecker::types::Type) -> bool {
+    use crate::typechecker::types::Type;
+    match ty {
+        Type::Ref(inner) | Type::MutRef(inner) => sender_ty(inner),
+        Type::Named { name, .. } => name == "Sender",
+        _ => false,
+    }
+}
+
 /// The node types a typed caller has, so a method named like a lazy
 /// adaptor on an `Option` or `Result` is seen to run its closure at once.
 pub type NodeTypes = FxHashMap<crate::ids::NodeId, (crate::typechecker::types::Type, u32)>;
@@ -708,8 +722,17 @@ impl Walker<'_> {
                 // `TaskGroup.spawn` is not here: a task that joins inside the
                 // scope of every origin may hold views (§5.7), so its closure
                 // borrows. Only an unstructured `spawn` escapes.
+                let sender = SEND_METHODS.contains(&method.as_str())
+                    && self
+                        .types
+                        .and_then(|t| t.get(&object.id))
+                        .is_some_and(|(t, _)| sender_ty(t));
                 if STORE_METHODS.contains(&method.as_str()) {
                     self.walk_args(args, None, Some("stored in a collection"));
+                } else if sender {
+                    // A value sent through a channel goes to whoever receives
+                    // it, so a closure sent escapes (§9.3, B-2026-11-27-48).
+                    self.walk_args(args, None, Some("sent through a channel"));
                 } else {
                     let suffix = format!(".{method}");
                     let escaping: Vec<bool> = (0..args.len())

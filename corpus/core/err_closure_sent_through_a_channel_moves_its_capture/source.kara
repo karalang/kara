@@ -1,0 +1,13 @@
+// cs.672 §9.3: a closure sent through a channel escapes and captures by move,
+// so `s` is moved and reading it afterwards is E0500.
+import std.sync.{Sender, Receiver};
+fn main() {
+    let (tx, rx): (Sender[Fn() -> i64 + CrossTask], Receiver[Fn() -> i64 + CrossTask]) = channel(1);
+    let s = "abc".to_string();
+    let sent = tx.send(|| s.len());
+    println(s);
+    match rx.recv() {
+        Some(f) => println(f()),
+        None => println("none"),
+    }
+}

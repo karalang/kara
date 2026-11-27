@@ -1,0 +1,10 @@
+source = "B-2026-11-27-48"
+dedup_of = []
+expect = "error:E0500"
+exit = 1
+tags = ["closure", "concurrency"]
+expected_from = "spec"
+rules = ["9.3"]
+backends = []
+env = {}
+note = "core-semantics cs.672: cs.672 §9.3: a closure sent through a channel escapes and captures by move, so `s` is moved and reading it afterwards is E0500. The expected.out wording of an error pin is guidance, not a byte oracle."

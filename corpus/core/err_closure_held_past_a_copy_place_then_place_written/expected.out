@@ -1,0 +1,1 @@
+error[E0200]: main.kara:8:9: `tally` is written while the closure assigned to `f` borrows it (at line 7; the closure reads `tally`, and the borrow lasts until `tally` drops, core-semantics.md §9.1)

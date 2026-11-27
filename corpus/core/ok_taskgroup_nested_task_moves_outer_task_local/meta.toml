@@ -1,0 +1,10 @@
+source = "B-2026-11-27-46"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "concurrency", "post-m1:par"]
+expected_from = "spec"
+rules = ["9.5"]
+backends = []
+env = {}
+note = "core-semantics §9.5 (cs.703): a task spawned from inside another task takes that task's own locals by move. The outer task returns the inner handle unjoined, so the inner task can run after the outer body ends; it owns inner_label and reads all 36 bytes. Before B-2026-11-27-46 the inner task captured inner_label by ref: ASan reported heap-use-after-free and the interpreter stopped 'use of a1 after it was freed'. (Sentence map 2026-11-27, cell c3_c9/k_nested_task_local_outlives_outer_task.)"

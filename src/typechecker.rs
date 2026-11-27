@@ -2286,9 +2286,11 @@ pub struct TypeCheckResult {
     pub core_closure_result_only: FxHashSet<SpanKey>,
     /// v2 core §9.1/§9.5: places a `TaskGroup.spawn` closure takes by move
     /// because they drop before the group, keyed by the closure's span, each
-    /// with the group's name and whether the group is a parameter. Empty
-    /// outside the strict commands.
-    pub core_task_moved_captures: FxHashMap<SpanKey, Vec<(String, String, bool)>>,
+    /// with the group's name, whether the group is a parameter, and whether
+    /// the "group" is a binding a plain closure is assigned to (`f = || ..`,
+    /// which outlives the places declared after it, §9.1). Empty outside the
+    /// strict commands.
+    pub core_task_moved_captures: FxHashMap<SpanKey, Vec<(String, String, bool, bool)>>,
     /// Receiver `Vector[T, N]` type for each vector **instance**-method call
     /// (`reduce_*` / `dot` / `cross` / `select`), keyed by the method-call
     /// span, recorded as `(element, lane_count)`. A `MethodCall`'s span equals

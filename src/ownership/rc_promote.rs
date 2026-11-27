@@ -221,12 +221,14 @@ impl<'a> super::OwnershipChecker<'a> {
                         .task_moved_group(&entry.consume_span, &binding)
                         .is_some() =>
                 {
-                    let (group, param) = self
+                    let (group, param, holder) = self
                         .task_moved_group(&entry.consume_span, &binding)
                         .unwrap_or_default();
                     // A parameter group outlives every local, so no local
                     // can be declared before it (B-2026-10-15-72).
-                    let repair = if param {
+                    let repair = if holder {
+                        format!("Declare '{binding}' before `{group}`, or give the closure a clone")
+                    } else if param {
                         format!(
                             "`{group}` is a parameter, so every local drops before it: take \
                              '{binding}' as a parameter too to let the task borrow it, or give \
@@ -235,11 +237,22 @@ impl<'a> super::OwnershipChecker<'a> {
                     } else {
                         format!("Declare '{binding}' before `{group}` to let the task borrow it")
                     };
-                    format!(
-                        "value '{binding}' was moved into a task of `{group}` (captured at line \
-                         {line}:{col}), used again here: it drops before `{group}`, so the task \
-                         takes it by move (core-semantics.md §9.1, §9.5). {repair}"
-                    )
+                    if holder {
+                        // A closure assigned to a binding that outlives the
+                        // place (B-2026-11-27-48).
+                        format!(
+                            "value '{binding}' was moved into the closure assigned to `{group}` \
+                             (captured at line {line}:{col}), used again here: it drops before \
+                             `{group}`, so the closure takes it by move (core-semantics.md \
+                             §9.1). {repair}"
+                        )
+                    } else {
+                        format!(
+                            "value '{binding}' was moved into a task of `{group}` (captured at \
+                             line {line}:{col}), used again here: it drops before `{group}`, so \
+                             the task takes it by move (core-semantics.md §9.1, §9.5). {repair}"
+                        )
+                    }
                 }
                 RcTrigger::ClosureCaptureWithOuterUse
                     if self.in_escaping_closure(&entry.consume_span) =>

@@ -1,0 +1,1 @@
+error[E0514]: main.kara:14:17: 'r' is moved at line 13:20 and used again at line 14:17 on a path the move does not cover; a moved `R` cannot be used again: a `Drop` body runs for it (its own or a part's), and there is no shared copy to keep it alive

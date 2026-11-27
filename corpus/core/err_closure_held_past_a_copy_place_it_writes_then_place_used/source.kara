@@ -1,0 +1,12 @@
+// cs.658 §9.1: after a `mut ref` capture of a Copy place that dies first, any
+// use of the place is an error (it counts as mutably borrowed until it
+// dies), so the read of `tally` is refused.
+fn main() {
+    let mut g: MutFn() -> i64 = || 0;
+    {
+        let mut tally = 0;
+        g = || { tally += 1; tally };
+        println(tally);
+    }
+    println(g());
+}

@@ -56,6 +56,7 @@ struct Decl {
     offset: usize,
 }
 
+#[derive(Clone)]
 struct Group {
     name: String,
     decl: Decl,
@@ -65,6 +66,11 @@ struct Group {
     /// be declared before it, so the repair is to take the place as a
     /// parameter too (B-2026-10-15-72).
     param: bool,
+    /// Not a group: a binding a closure literal is assigned to
+    /// (`f = || ..`). It outlives the places declared after it, so the
+    /// closure takes those by move exactly as a task does (§9.1,
+    /// B-2026-11-27-47, -48); only that half of the group rules applies.
+    holder: bool,
 }
 
 /// A spawn's capture of an outer place.
@@ -115,7 +121,7 @@ struct Walk<'t, 'a> {
     errors: Vec<(Span, String)>,
     /// Captures taken by move because the place drops before the group:
     /// the closure's span, the place and the group.
-    moved: Vec<(Span, String, String, bool)>,
+    moved: Vec<(Span, String, String, bool, bool)>,
     loop_depth: usize,
 }
 
@@ -126,7 +132,7 @@ impl<'a> TypeChecker<'a> {
         &mut self,
         node_types: &FxHashMap<crate::ids::NodeId, (Type, u32)>,
         emit: bool,
-    ) -> FxHashMap<SpanKey, Vec<(String, String, bool)>> {
+    ) -> FxHashMap<SpanKey, Vec<(String, String, bool, bool)>> {
         let mut self_modes: FxHashMap<String, SelfParam> = FxHashMap::default();
         let mut fns: Vec<&Function> = Vec::new();
         for item in &self.program.items {
@@ -150,7 +156,7 @@ impl<'a> TypeChecker<'a> {
             }
         }
         let mut errors = Vec::new();
-        let mut moved: FxHashMap<SpanKey, Vec<(String, String, bool)>> = FxHashMap::default();
+        let mut moved: FxHashMap<SpanKey, Vec<(String, String, bool, bool)>> = FxHashMap::default();
         for f in fns.into_iter().filter(|f| !f.stdlib_origin) {
             let mut w = Walk {
                 tc: self,
@@ -175,11 +181,11 @@ impl<'a> TypeChecker<'a> {
             w.block(&f.body);
             w.finish();
             errors.extend(w.errors);
-            for (closure, name, group, param) in w.moved {
+            for (closure, name, group, param, holder) in w.moved {
                 moved
                     .entry(SpanKey::from_span(&closure))
                     .or_default()
-                    .push((name, group, param));
+                    .push((name, group, param, holder));
             }
         }
         if emit {
@@ -282,6 +288,7 @@ impl Walk<'_, '_> {
                             },
                             end: usize::MAX,
                             param: false,
+                            holder: false,
                         });
                         self.open_groups.push((g, self.scopes.len()));
                     }
@@ -303,6 +310,7 @@ impl Walk<'_, '_> {
                 }
             }
             StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => self.block(body),
+            StmtKind::Assign { target, value } if self.holder_assign(target, value) => {}
             StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
                 self.expr(value);
                 self.expr(target);
@@ -317,6 +325,35 @@ impl Walk<'_, '_> {
             }
             StmtKind::Expr(e) => self.expr(e),
         }
+    }
+
+    /// `f = || ..`: a closure literal assigned to a binding declared
+    /// earlier. The places it captures that are declared after `f` drop
+    /// before it, so it takes them as a task of a group declared where `f`
+    /// is would (§9.1). Walks the closure as a spawn into that holder.
+    fn holder_assign(&mut self, target: &Expr, value: &Expr) -> bool {
+        let (ExprKind::Identifier(name), ExprKind::Closure { params, body, .. }) =
+            (&target.kind, &value.kind)
+        else {
+            return false;
+        };
+        let Some(decl) = self.lookup(name) else {
+            return false;
+        };
+        if decl.offset == usize::MAX {
+            return false;
+        }
+        let g = self.groups.len();
+        self.groups.push(Group {
+            name: name.clone(),
+            decl,
+            end: usize::MAX,
+            param: decl.offset == 0,
+            holder: true,
+        });
+        self.spawn(g, target.span, value.span, params, body);
+        self.write(name, Vec::new(), target.span, "written");
+        true
     }
 
     fn write(&mut self, name: &str, path: Vec<String>, span: Span, what: &'static str) {
@@ -510,6 +547,7 @@ impl Walk<'_, '_> {
             decl: Decl { offset: 0 },
             end: usize::MAX,
             param: true,
+            holder: false,
         });
         self.open_groups.push((g, 1));
         Some(g)
@@ -556,8 +594,13 @@ impl Walk<'_, '_> {
                 sc
             },
             decl_spans: FxHashMap::default(),
-            open_groups: Vec::new(),
-            groups: Vec::new(),
+            // The groups open here stay open for the whole task body, so a
+            // task spawned from inside this one into the same group is
+            // checked against them: the outer task's own locals drop before
+            // the group and are moved in (§9.5, B-2026-11-27-46). Depth 0
+            // keeps the body's blocks from closing them.
+            open_groups: self.open_groups.iter().map(|&(g, _)| (g, 0)).collect(),
+            groups: self.groups.clone(),
             captures: Vec::new(),
             writes: Vec::new(),
             uses: Vec::new(),
@@ -566,6 +609,9 @@ impl Walk<'_, '_> {
             loop_depth: 0,
         };
         inner.expr(body);
+        inner.finish();
+        self.errors.append(&mut inner.errors);
+        self.moved.append(&mut inner.moved);
         let mut written: FxHashMap<String, Vec<Vec<String>>> = FxHashMap::default();
         for w in inner.writes.iter().filter(|w| w.decl.offset != usize::MAX) {
             written
@@ -717,22 +763,29 @@ impl Walk<'_, '_> {
                             .iter()
                             .find(|w| w.decl == c.decl && w.span.offset > c.spawn.offset)
                         {
-                            self.errors.push((
-                                w.span,
+                            let message = if g.holder {
+                                format!(
+                                    "`{}` is {} while the closure assigned to `{}` borrows it \
+                                     (at line {}; the closure reads `{}`, and the borrow lasts \
+                                     until `{}` drops, core-semantics.md §9.1)",
+                                    w.name, w.what, g.name, c.spawn.line, w.name, c.name
+                                )
+                            } else {
                                 format!(
                                     "`{}` is {} while a task of `{}` borrows it (spawned at \
                                      line {}; the task reads `{}`, and the borrow lasts until \
                                      `{}` drops, core-semantics.md §9.1, §9.5)",
                                     w.name, w.what, g.name, c.spawn.line, w.name, c.name
-                                ),
-                            ));
+                                )
+                            };
+                            self.errors.push((w.span, message));
                         }
                     }
                     continue;
                 }
                 if !c.copy {
                     self.moved
-                        .push((c.closure, c.name.clone(), g.name.clone(), g.param));
+                        .push((c.closure, c.name.clone(), g.name.clone(), g.param, g.holder));
                     continue;
                 }
                 if seen.insert((c.decl.offset, c.group)) {
@@ -741,7 +794,9 @@ impl Walk<'_, '_> {
                         .iter()
                         .find(|u| u.decl == c.decl && u.span.offset > c.spawn.offset)
                     {
-                        let repair = if g.param {
+                        let repair = if g.holder {
+                            format!("Declare `{}` before `{}`", c.name, g.name)
+                        } else if g.param {
                             format!(
                                 "`{}` is a parameter, so every local drops before it; take \
                                  `{}` as a parameter too",
@@ -750,18 +805,31 @@ impl Walk<'_, '_> {
                         } else {
                             format!("Declare `{}` before `{}`", c.name, g.name)
                         };
+                        let (holder, it) = if g.holder {
+                            (
+                                format!("the closure assigned to `{}`", g.name),
+                                "the closure",
+                            )
+                        } else {
+                            (format!("a task of `{}`", g.name), "the task")
+                        };
                         self.errors.push((
                             u.span,
                             format!(
-                                "`{}` is used after a task of `{}` captured it by `mut ref` \
-                                 (spawned at line {}). It drops before `{}`, so the task holds \
-                                 a copy whose writes this use would not see. {repair} to let \
-                                 the task borrow it (core-semantics.md §9.1)",
-                                c.name, g.name, c.spawn.line, g.name
+                                "`{}` is used after {holder} captured it by `mut ref` (at line \
+                                 {}). It drops before `{}`, so {it} holds a copy whose writes \
+                                 this use would not see. {repair} to let {it} borrow it \
+                                 (core-semantics.md §9.1)",
+                                c.name, c.spawn.line, g.name
                             ),
                         ));
                     }
                 }
+                continue;
+            }
+            // A closure held by a binding borrows a place that outlives it
+            // as any closure does; liveness is the ref-write pass's.
+            if g.holder {
                 continue;
             }
             for w in &self.writes {
@@ -780,7 +848,7 @@ impl Walk<'_, '_> {
         // A `mut ref` capture is exclusive: no other task of the group may
         // capture the same place, and a spawn in a loop makes many tasks.
         for (i, c) in self.captures.iter().enumerate() {
-            if !c.mutable {
+            if !c.mutable || self.groups[c.group].holder {
                 continue;
             }
             let other = self.captures.iter().enumerate().any(|(j, d)| {

@@ -4955,15 +4955,15 @@ impl<'a> OwnershipChecker<'a> {
     /// The group whose task took `binding` by move at `span`, because the
     /// place drops before the group (v2 core §9.1, §9.5), and whether that
     /// group is a parameter.
-    fn task_moved_group(&self, span: &Span, binding: &str) -> Option<(String, bool)> {
+    fn task_moved_group(&self, span: &Span, binding: &str) -> Option<(String, bool, bool)> {
         self.typecheck_result
             .core_task_moved_captures
             .iter()
             .filter(|(k, _)| k.0 <= span.offset && span.offset < k.0 + k.1)
             .find_map(|(_, v)| {
                 v.iter()
-                    .find(|(n, _, _)| n == binding)
-                    .map(|(_, g, p)| (g.clone(), *p))
+                    .find(|(n, ..)| n == binding)
+                    .map(|(_, g, p, h)| (g.clone(), *p, *h))
             })
     }
 

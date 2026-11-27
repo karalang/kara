@@ -1,0 +1,11 @@
+// cs.658 §9.1: a Copy place copied into a closure that outlives it still
+// counts as borrowed until it dies, so writing it afterwards is an error.
+fn main() {
+    let mut f: Fn() -> i64 = || 0;
+    {
+        let mut tally = 1;
+        f = || tally * 10;
+        tally = 2;
+    }
+    println(f());
+}
