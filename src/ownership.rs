@@ -2710,7 +2710,7 @@ impl<'a> OwnershipChecker<'a> {
 
     /// The error for a write to `name`, a `let` without `mut`, with the fix
     /// that adds it. Nothing when `name` is no such binding.
-    fn report_immutable_binding_error(
+    pub(crate) fn report_immutable_binding_error(
         &mut self,
         name: &str,
         write_span: &Span,
@@ -3867,7 +3867,7 @@ impl<'a> OwnershipChecker<'a> {
     /// `let m = Mutex.new(0); lock m { m = m + 1; }` is the sanctioned idiom
     /// and a write to one must not be flagged. Requiring `let mut m` there
     /// would contradict the section that recommends the pattern.
-    fn type_is_shared_handle(&self, ty: &Type) -> bool {
+    pub(crate) fn type_is_shared_handle(&self, ty: &Type) -> bool {
         matches!(
             ty,
             Type::Shared(_)

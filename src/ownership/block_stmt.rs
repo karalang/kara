@@ -516,13 +516,34 @@ impl<'a> super::OwnershipChecker<'a> {
                     // double-report against the `Uninit`/`InitOnce` arms
                     // below: `LetUninit` never enters `immutable_lets`.
                     // A rebind uses the `mut` whatever the binding holds.
+                    // A reference handle given a value of its referent's
+                    // type is written through (`old = r` on a `get_mut`
+                    // result, `m = m + 1` in `lock m`), but given another
+                    // handle it is rebound: `up = mut ref b`, `r = ref b`,
+                    // `s = t` on a `shared` value need `let mut` as any
+                    // rebind does (core-semantics §5.1: "`let mut` would
+                    // only let it be rebound"; B-2026-11-27-50).
                     self.mark_mut_let_written(name);
-                    self.report_write_to_immutable_binding(
-                        name,
-                        &target.span,
-                        OwnershipErrorKind::ReassignToImmutable,
-                        format!("cannot reassign `{}`", name),
-                    );
+                    let rebinds_handle = self.typecheck_result.expr_type(value).is_some_and(|t| {
+                        self.type_is_shared_handle(t)
+                            || matches!(t, Type::Slice { mutable: true, .. })
+                    });
+                    if rebinds_handle {
+                        self.mark_mut_let_written_through(name, false);
+                        self.report_immutable_binding_error(
+                            name,
+                            &target.span,
+                            OwnershipErrorKind::ReassignToImmutable,
+                            format!("cannot reassign `{}`", name),
+                        );
+                    } else {
+                        self.report_write_to_immutable_binding(
+                            name,
+                            &target.span,
+                            OwnershipErrorKind::ReassignToImmutable,
+                            format!("cannot reassign `{}`", name),
+                        );
+                    }
                     let pre = states.get(name).cloned();
                     match pre {
                         // First assignment to a `let mut x: T;` — promote.
