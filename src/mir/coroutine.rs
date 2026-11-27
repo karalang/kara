@@ -54,7 +54,7 @@ pub fn suspends_native(name: &str) -> bool {
             | ("TcpListener" | "TlsListener", "accept")
             | ("TcpStream", "read" | "write" | "connect")
             | ("TlsStream", "read" | "write")
-            | ("UdpSocket", "recv" | "recv_from")
+            | ("UdpSocket", "recv" | "recv_from" | "send" | "send_to")
             | ("Child", "wait")
             | (
                 "ChildStdout" | "ChildStderr",
@@ -735,7 +735,7 @@ fn may_be_not_ready(name: &str) -> bool {
         (ty.split('[').next().unwrap_or(ty), method),
         ("TcpListener", "accept")
             | ("TcpStream", "read" | "write" | "connect")
-            | ("UdpSocket", "recv" | "recv_from")
+            | ("UdpSocket", "recv" | "recv_from" | "send" | "send_to")
             | ("Child", "wait")
             | ("Sender" | "Channel", "send")
             | ("Receiver" | "Channel", "recv" | "recv_blocking")

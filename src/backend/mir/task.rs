@@ -135,6 +135,13 @@ impl<'ctx> Cx<'ctx, '_> {
                 let fd = self.load_i64(at)?;
                 self.rt_flag("ready_fd", &[fd.into(), i8t.const_zero().into()])?
             }
+            // A datagram waits for room in the send buffer, as a stream's
+            // write does.
+            ("UdpSocket", "send" | "send_to", [s, ..]) => {
+                let (at, _) = self.behind_refs(s)?;
+                let fd = self.load_i64(at)?;
+                self.rt_flag("ready_fd", &[fd.into(), i8t.const_int(1, false).into()])?
+            }
             // The child's exit makes its wait descriptor readable.
             ("Child", "wait", [c, ..]) => {
                 let (at, _) = self.behind_refs(c)?;

@@ -62,7 +62,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | false-positive | 412 |
 | missing-feature | 271 |
 | perf | 207 |
-| other | 165 |
+| other | 166 |
 | soundness | 145 |
 | miscompile | 114 |
 | run-vs-build | 80 |
@@ -82,7 +82,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | cli | 328 |
 | parser | 170 |
 | ownership | 148 |
-| runtime | 121 |
+| runtime | 122 |
 | interp | 119 |
 | effect | 74 |
 | resolver | 60 |
@@ -124,6 +124,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-27-68 | 2026-11-27 | typecheck | medium | A closure handed to a generic parameter that its callee stores into the call's own result (`fn hold[F](f: own F) -> Hold[F] { Hold { f: f } }`) is treated as escaping, so its captures move: `let h = hold(|| s.len() + t); println((h.f)()); println(s);` is refused E0500, where the cs.670 ruling makes `h` borrow `s` | — |
 | B-2026-11-27-69 | 2026-11-27 | typecheck | low | Passing an `OnceFn` closure to an `own MutFn()` slot is refused with "cannot pass once-callable closure where 'Fn()' is expected": the message names the slot `Fn()` because the resolved function type carries no `MutFn` kind | — |
 | B-2026-11-27-71 | 2026-11-27 | mir | medium | `karac check` time grows as the cube of the number of borrowing loops in one function: 200 blocks of `for (i, m) in s.match_indices(",") { out.push_str(m); }` check in 0.9 s, 400 in 5.4 s, 800 in 43 s, all in borrowck's origins_dataflow / LoanSet.union | — |
+| B-2026-11-27-73 | 2026-11-27 | runtime | medium | A `UdpSocket.send` / `send_to` whose socket send buffer is full holds the worker: they are `suspends` since 03b4875c83 (design.md §11.8), but nothing parks on them, so with one worker no other task runs until a burst is out | — |
 
 ### Relocated
 

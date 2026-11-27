@@ -8865,12 +8865,20 @@ impl<'a> Interp<'a> {
                         }
                     }
                     ("UdpSocket", "send_to" | "send", [buf, ..]) => {
-                        let bytes = self.bytes_of_view(buf, name)?;
                         let to = match rest.get(1) {
                             Some(addr) => Some(self.spent_string(addr, arg_tys.get(2))?),
                             None => None,
                         };
+                        // The datagram its `__ready` already sent, under
+                        // the executor; the bytes are read only when it
+                        // did not.
+                        let made = self.sockets.written.remove(&fd);
+                        let bytes = match made {
+                            Some(_) => Vec::new(),
+                            None => self.bytes_of_view(buf, name)?,
+                        };
                         match (self.sockets.udp.get(&fd), to) {
+                            _ if made.is_some() => count(made.expect("checked")),
                             (None, _) => Err(not_open()),
                             (Some(u), None) => count(u.send(&bytes)),
                             (Some(u), Some(to)) => match to.parse::<std::net::SocketAddr>() {
@@ -14660,6 +14668,7 @@ impl<'a> Interp<'a> {
                     | Wait::Read(fd, _)
                     | Wait::Write(fd, _)
                     | Wait::Datagram(fd, _)
+                    | Wait::DatagramOut(fd, _, _)
                     | Wait::Tls(fd, _, _),
                 ) => Value::Variant(2, vec![Value::Int(i128::from(fd))]),
                 Some(_) => Value::Variant(1, vec![Value::Int(0)]),
@@ -19072,6 +19081,7 @@ impl<'a> Interp<'a> {
                 | Wait::Read(..)
                 | Wait::Write(..)
                 | Wait::Datagram(..)
+                | Wait::DatagramOut(..)
                 | Wait::Tls(..)
                 | Wait::Buffered(..)
                 | Wait::Child(_)
@@ -19245,8 +19255,17 @@ impl<'a> Interp<'a> {
                     .and_then(|u| u.read_timeout().ok());
                 Some(Wait::Datagram(fd, self.read_deadline(timeout.flatten())))
             }
-            // A datagram goes out whole or fails; it does not wait.
-            ("UdpSocket", "send" | "send_to", _) => None,
+            // A datagram waits for room in the socket's send buffer, as a
+            // stream's write does, and goes out whole or fails.
+            ("UdpSocket", "send" | "send_to", [u, buf, rest @ ..]) => {
+                let fd = self.socket_of(u, &callee)?;
+                let bytes = self.bytes_of_view(buf, &callee)?;
+                let to = match rest.first() {
+                    Some(a) => Some(self.string_at(a)?),
+                    None => None,
+                };
+                Some(Wait::DatagramOut(fd, bytes, to))
+            }
             ("Child", "wait", [c, ..]) => match self.struct_value(c, &callee)?.as_slice() {
                 [Value::Agg(p)] => match p.as_slice() {
                     [Value::Int(id)] => Some(Wait::Child(*id)),
@@ -19603,6 +19622,35 @@ impl<'a> Interp<'a> {
                 let _ = s.set_nonblocking(true);
                 let got = s.write(bytes);
                 let _ = s.set_nonblocking(false);
+                match got {
+                    Err(e) if e.kind() == WouldBlock => false,
+                    got => {
+                        self.sockets.written.insert(*fd, got);
+                        true
+                    }
+                }
+            }
+            // A datagram is tried without blocking, and what it came to
+            // kept for the `send` that follows, as a stream's write is.
+            Wait::DatagramOut(fd, bytes, to) => {
+                if self.sockets.written.contains_key(fd) {
+                    return Ok(true);
+                }
+                let Some(u) = self.sockets.udp.get(fd) else {
+                    return Ok(true);
+                };
+                let at = match to.as_deref().map(str::parse::<std::net::SocketAddr>) {
+                    None => None,
+                    Some(Ok(at)) => Some(at),
+                    // The `send_to` reports the address.
+                    Some(Err(_)) => return Ok(true),
+                };
+                let _ = u.set_nonblocking(true);
+                let got = match at {
+                    None => u.send(bytes),
+                    Some(at) => u.send_to(bytes, at),
+                };
+                let _ = u.set_nonblocking(false);
                 match got {
                     Err(e) if e.kind() == WouldBlock => false,
                     got => {
@@ -22406,6 +22454,10 @@ enum Wait {
     Write(i64, Vec<u8>),
     /// A datagram to receive, or the read timeout's deadline to pass.
     Datagram(i64, Option<crate::clock::Instant>),
+    /// Room in a datagram socket's send buffer for the bytes, sent to the
+    /// address (`send_to`) or the connected peer, which `__ready` then
+    /// sends.
+    DatagramOut(i64, Vec<u8>, Option<String>),
     /// A TLS stream's read (`false`) or write to be able to complete, as
     /// `TlsConn::ready` says, or a read's timeout deadline to pass.
     Tls(i64, bool, Option<crate::clock::Instant>),
@@ -22446,8 +22498,8 @@ struct Sockets {
     /// A connection `__ready` accepted for a listener, which its `accept`
     /// takes next.
     accepted: rustc_hash::FxHashMap<i64, std::net::TcpStream>,
-    /// What a write `__ready` made for a stream came to, which its `write`
-    /// reports next.
+    /// What a write `__ready` made for a stream, or a datagram it sent,
+    /// came to, which its `write` or `send` reports next.
     written: rustc_hash::FxHashMap<i64, std::io::Result<usize>>,
     /// Sockets whose suspended read reached its read timeout's deadline
     /// with nothing to read, so the read that follows fails `TimedOut`.
