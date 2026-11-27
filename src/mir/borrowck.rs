@@ -4322,6 +4322,31 @@ fn main() -> () {
             "err_let_does_not_convert_to_slice",
             // A `mut ref self` method on a constant (B-2026-11-06-21).
             "err_const_mut_method",
+            // The core-semantics §3/§5/§7/§9 sentence map's refusals that come
+            // from front-end passes this harness skips (capture kinds, the
+            // `shared`/`sync`/`frozen` move rule, the annotated-let and
+            // call-site borrow rules, assignability); `karac check` refuses
+            // each, and the corpus runs hold them to it.
+            "err_assign_captured_handle_is_mutfn_refused",
+            "err_capture_prefix_mut_ref_removed",
+            "err_capture_prefix_own_removed",
+            "err_capture_prefix_ref_removed",
+            "err_field_assign_after_whole_move_refused",
+            "err_for_item_not_compound_assignable",
+            "err_free_spawn_absent",
+            "err_frozen_capture_closure_stored_refused",
+            "err_let_mut_ref_annotation_fix_inserts_mut_ref",
+            "err_let_ref_annotation_fix_inserts_ref",
+            "err_literal_in_mut_ref_slot_is_temporary",
+            "err_move_out_of_frozen_field_refused",
+            "err_move_out_of_mut_ref_param_refused",
+            "err_move_out_of_shared_field_refused",
+            "err_move_out_of_sync_field_refused",
+            "err_mutfn_bare_param_call_refused",
+            "err_mutfn_closure_to_fn_slot_names_capture",
+            "err_mutfn_immutable_binding_call_refused",
+            "err_mutfn_own_param_call_needs_rebind_refused",
+            "err_nonescaping_param_to_escaping_param_refused",
         ];
         // Pins that call Kāra library functions, which `check_built` does
         // not append (a `select` desugars to calls into sync.kara;
@@ -4477,6 +4502,33 @@ fn main() -> () {
             // (`Lowered::escaping_args`; B-2026-11-23-76).
             "err_view_into_escaping_fn_param",
             "err_view_param_into_escaping_fn_param",
+            // The sentence map's runnable pins that type-check, lower or
+            // borrow-check only with the library and the full front end
+            // (the `mut ref`/`ref` place operators, iterators, callable
+            // references, channel `recv`, task capture moves); each passes
+            // on every lane under `karac` and the corpus runs.
+            "ok_borrow_ends_at_last_use",
+            "ok_channel_sent_closure_owns_capture",
+            "ok_closure_param_takes_copy_item",
+            "ok_copy_read_through_ref_everywhere",
+            "ok_copy_snapshot_binding",
+            "ok_dies_first_spawn_examples_compile",
+            "ok_distinct_fields_do_not_overlap",
+            "ok_find_last_nth_return_items",
+            "ok_fn_called_through_ref_many_times",
+            "ok_group_passed_borrowed_to_spawner",
+            "ok_loop_local_string_moved_into_task",
+            "ok_mut_ref_binding_rebinds_with_let_mut",
+            "ok_mutfn_via_mut_ref_param",
+            "ok_operator_borrowing_impl_keeps_operands",
+            "ok_projection_borrows_only_its_place",
+            "ok_ref_borrow_allows_reads",
+            "ok_ref_item_closure_deref_optional",
+            "ok_ref_local_bindings",
+            "ok_sync_handle_capture_is_counted",
+            "ok_two_next_results_live_together",
+            "ok_views_coexist_with_reads",
+            "ok_write_through_ref_fixes",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus/core");
         let mut pins: Vec<_> = std::fs::read_dir(&root)
