@@ -63,11 +63,11 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | missing-feature | 268 |
 | perf | 206 |
 | other | 159 |
-| soundness | 137 |
-| miscompile | 111 |
+| soundness | 139 |
+| miscompile | 112 |
 | run-vs-build | 80 |
 | crash | 71 |
-| codegen-gap | 47 |
+| codegen-gap | 48 |
 | use-after-free | 13 |
 | leak | 5 |
 | double-free | 2 |
@@ -76,15 +76,15 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 
 | surface | total |
 |---|---|
-| typecheck | 963 |
-| mir | 348 |
-| mir-llvm | 339 |
+| typecheck | 965 |
+| mir | 350 |
+| mir-llvm | 340 |
 | cli | 323 |
 | parser | 165 |
 | ownership | 146 |
 | interp | 117 |
 | runtime | 117 |
-| effect | 70 |
+| effect | 71 |
 | resolver | 59 |
 | other | 56 |
 | codegen | 22 |
@@ -125,6 +125,10 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-92 | 2026-11-26 | cli | low | `karac query affected-by` never lists a test: its `tests` array is empty for every seed, because it counts only `test_*`-named functions in a `_test.kara` file and v1 tests are `test "name" { }` blocks | — |
 | B-2026-11-26-93 | 2026-11-26 | interp | low | `std.runtime.list_tasks()` lists no suspended task under `karac run --interp`, where `karac run` and `karac build` list the task suspended on its `recv` | — |
 | B-2026-11-26-94 | 2026-11-26 | interp+mir-llvm+runtime | low | The HTTP server answers 400 to a request whose header value holds a byte that is not UTF-8 (obs-text such as Latin-1 `caf\xe9`), which RFC 9110 §5.5 allows and io.md does not list among its refusals | — |
+| B-2026-11-26-95 | 2026-11-26 | typecheck | high | A write through a `*const T` is accepted and writes: `*p = v`, `*p += v`, `(*p).f = v` and `p.write(v)` / `write_unaligned` / `write_volatile`, even into an immutable `let` through `ptr.const(x)` | — |
+| B-2026-11-26-96 | 2026-11-26 | typecheck+mir | medium | `VolatileCell[T]` (prelude) checks but runs on neither lane: `VolatileCell.new(1)` is `native VolatileCell[i64].new is not lowered yet` on the LLVM lane and `call of unknown function` under --interp | — |
+| B-2026-11-26-97 | 2026-11-26 | mir+mir-llvm | medium | `p.read_volatile()` / `p.write_volatile(v)` (and the stdlib's volatile_read/write intrinsics) lower to plain loads and stores: three volatile writes to one pointer emit no `store volatile`, so LLVM may merge or drop them | — |
+| B-2026-11-26-98 | 2026-11-26 | effect | low | `p.read_volatile()` / `p.write_volatile(v)` carry no effect: a `pub fn` doing one declares nothing, and `karac query effects` shows none, where VolatileCell's read/write declare reads/writes(Hardware) | — |
 
 ### Relocated
 
