@@ -1,0 +1,6 @@
+fn main() {
+    let x: i64 = 3;
+    let p = ptr.const(x);
+    // Safety: p points at x.
+    unsafe { *p = 4; }
+}

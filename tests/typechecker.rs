@@ -41272,6 +41272,8 @@ fn test_copy_bound_rejects_non_copy_type() {
 fn test_volatile_cell_copy_bound_accepts_primitive_rejects_string() {
     // The baked prelude `VolatileCell[T: Copy]` — `.read()` is callable on a
     // primitive element (`i32`) and rejected on a non-Copy element (`String`).
+    // This is the type layer alone: `karac check`'s later pass refuses the
+    // `VolatileCell.new` call as deferred (B-2026-11-26-96).
     typecheck_ok(
         "fn main() {\n\
              let mut r: VolatileCell[i32] = VolatileCell.new(1);\n\

@@ -139,3 +139,18 @@ fn a_wrong_count_call_without_spread_keeps_its_plain_message() {
     assert!(out.contains("expected 2 argument(s), found 1"), "{out}");
     assert!(!out.contains("Call-Site Spread"), "{out}");
 }
+
+#[test]
+fn volatile_cell_refusal_names_its_section() {
+    // A `####` heading, under § Systems, so not `assert_names`' `###` probe.
+    assert!(DEFERRED_MD.contains("\n#### Volatile Memory Access (MMIO)\n"));
+    let out = check(
+        "volatile_cell",
+        "fn main() {\n    let mut r: VolatileCell[i64] = VolatileCell.new(1);\n    r.write(2);\n    println(f\"{r.read()}\");\n}\n",
+    );
+    assert!(out.contains("error[E0520]"), "{out}");
+    assert!(
+        out.contains("docs/deferred.md § Volatile Memory Access (MMIO)"),
+        "{out}"
+    );
+}

@@ -8017,6 +8017,49 @@ impl<'a> super::TypeChecker<'a> {
     /// recorded. A range subscript makes a fresh view of its object, so it
     /// passes the question on to that object; a handle (`shared`, `Rc`,
     /// `Arc`) or a reference decides for itself and other checks own it.
+    /// A `*const T` has no write capability (design.md § Raw pointers): only
+    /// `*mut T` writes, and adding the capability is the `unsafe` cast
+    /// `*const T as *mut T`. `*p = v`, `*p += v` and `(*p).f = v` through a
+    /// `*const T` were accepted and wrote, even into an immutable `let`
+    /// (B-2026-11-26-95).
+    fn check_const_pointer_write(&mut self, target: &Expr) {
+        let mut cur = target;
+        loop {
+            match &cur.kind {
+                ExprKind::FieldAccess { object, .. }
+                | ExprKind::TupleIndex { object, .. }
+                | ExprKind::Index { object, .. } => cur = object,
+                ExprKind::Unary {
+                    op: UnaryOp::Deref,
+                    operand,
+                } => {
+                    if matches!(
+                        self.expr_types.get(&SpanKey::from_span(&operand.span)),
+                        Some(Type::Pointer { is_mut: false, .. })
+                    ) {
+                        self.type_error(
+                            Self::const_pointer_write_message("this assignment"),
+                            target.span,
+                            TypeErrorKind::InvalidUnaryOp,
+                        );
+                        return;
+                    }
+                    cur = operand;
+                }
+                _ => return,
+            }
+        }
+    }
+
+    pub(super) fn const_pointer_write_message(what: &str) -> String {
+        format!(
+            "error[E_PTR_WRITE_THROUGH_CONST]: {what} writes through a `*const T`, which has \
+             no write capability: only a `*mut T` writes. Take the pointer with `ptr.mut(place)`, or, when \
+             the memory really is writable, cast it with `p as *mut T` inside `unsafe` \
+             (design.md § Raw pointers)"
+        )
+    }
+
     fn check_read_only_slice_write(&mut self, target: &Expr) {
         // The core check reports the same write, naming the binding and
         // carrying its fix; reporting it here too printed it twice
@@ -14465,6 +14508,7 @@ impl<'a> super::TypeChecker<'a> {
                 self.assigning_lhs = saved;
                 self.check_assignment_target_is_place(target, Some(value));
                 self.check_read_only_slice_write(target);
+                self.check_const_pointer_write(target);
                 // B-2026-09-23-11 — the RHS is walked twice, once by the
                 // value-position checks above and once here against the
                 // target's type, so a fault INSIDE it (`s = s + y` with
@@ -14719,6 +14763,7 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 self.check_assignment_target_is_place(target, None);
                 self.check_read_only_slice_write(target);
+                self.check_const_pointer_write(target);
             }
             // Handled by the early return above; kept for exhaustiveness.
             StmtKind::Expr(_) => {}

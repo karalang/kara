@@ -1678,6 +1678,10 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
         "E_PTR_MUT_REQUIRES_MUTABLE_PLACE",
         ty("InvalidUnaryOp", Some(DiagnosticClass::InvalidUnaryOp)),
     ),
+    (
+        "E_PTR_WRITE_THROUGH_CONST",
+        ty("InvalidUnaryOp", Some(DiagnosticClass::InvalidUnaryOp)),
+    ),
     ("E_RANGE_PATTERN_BOUND_NOT_SIMPLE", parse("Syntax")),
     (
         "E_RAW_POINTER_UNRESOLVED_POINTEE",
@@ -3245,8 +3249,9 @@ const CODE_PROSE: &[(&str, &str)] = &[
          (design.md § Intrinsics). A program uses the documented surface \
          instead: `a.ref_eq(b)` on a `shared`, `sync` or `frozen` handle \
          (`karac fix` rewrites the free call), `Atomic`, whose every \
-         operation is sequentially consistent, for ordering, and \
-         `VolatileCell[T]` for a memory-mapped register. Skipping a drop \
+         operation is sequentially consistent, for ordering. Volatile \
+         memory access, `VolatileCell[T]` included, is deferred \
+         (docs/deferred.md § Volatile Memory Access (MMIO)). Skipping a drop \
          (`forget`) is deferred with the exported C ABI.",
 
     ),
@@ -3698,6 +3703,15 @@ const CODE_PROSE: &[(&str, &str)] = &[
         "`ptr.mut(...)` takes the address of a place, and the argument is a \
          value (design.md § Construction: `ptr.const` and `ptr.mut`). Bind \
          the value to a `let mut` local first and take the address of that.",
+    ),
+    (
+        "E_PTR_WRITE_THROUGH_CONST",
+        "A write goes through a `*const T`: an assignment `*p = v`, a \
+         compound assignment, a field write `(*p).f = v`, or the pointer's \
+         `write`, `write_unaligned` or `write_volatile` (design.md § Raw \
+         pointers). Only a `*mut T` writes. Take the pointer with \
+         `ptr.mut(place)`, which needs a mutable place, or, when the memory \
+         really is writable, cast it with `p as *mut T` inside `unsafe`.",
     ),
     (
         "E_PTR_TO_INT_CAST_FORBIDDEN",

@@ -117,6 +117,8 @@ pub const PRELUDE_TYPES: &[&str] = &[
     // register (`runtime/stdlib/volatile_cell.kara`). Prelude-visible like its
     // sibling hardware/concurrency primitives; its `.read()` / `.write(v)`
     // lower to the `volatile_read` / `volatile_write` prelude intrinsics.
+    // Deferred in 0.8: a call of `VolatileCell.new` is refused, naming
+    // deferred.md § Volatile Memory Access (MMIO) (review ruling 2026-11-26).
     "VolatileCell",
     // `CriticalSectionGuard` — RAII guard returned by `critical_section.acquire()`
     // (`runtime/stdlib/critical_section.kara`); its Drop re-enables interrupts.

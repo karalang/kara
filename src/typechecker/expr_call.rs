@@ -1295,9 +1295,9 @@ impl<'a> super::TypeChecker<'a> {
                  weaker orderings (docs/deferred.md § Atomic Operations and Memory Ordering)"
             }
             "volatile_read" | "volatile_write" => {
-                "; through a raw pointer, call its own methods, `p.read_volatile()` and \
-                 `p.write_volatile(v)`, and for a memory-mapped register use a \
-                 `VolatileCell[T]` (docs/deferred.md § Volatile Memory Access (MMIO))"
+                "; a raw pointer's own `p.read_volatile()` and `p.write_volatile(v)` check, \
+                 but 0.8 does not yet emit them as volatile accesses: volatile memory access \
+                 is deferred (docs/deferred.md § Volatile Memory Access (MMIO))"
             }
             "ref_eq" => {
                 "; compare two handles' identity with the method every `shared`, `sync` and \

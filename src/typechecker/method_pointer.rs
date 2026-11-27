@@ -179,6 +179,13 @@ impl<'a> super::TypeChecker<'a> {
                 // `p.write(v) / write_unaligned(v) / write_volatile(v) -> Unit`,
                 // with `v: T`.
                 "write" | "write_unaligned" | "write_volatile" => {
+                    if !is_mut {
+                        self.type_error(
+                            Self::const_pointer_write_message(&format!("`{method}`")),
+                            *span,
+                            TypeErrorKind::InvalidUnaryOp,
+                        );
+                    }
                     if arg_count_ok(self, 1) {
                         self.check_expr(&args[0].value, &inner_ty);
                     }
