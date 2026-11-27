@@ -260,9 +260,9 @@ A view borrows exactly like a reference.
 - branches take the union of their arms;
 - a call with a `mut ref` argument (a `mut ref self` receiver included) whose pointee can hold a reference may store the other reference and view arguments into it, so the pointee's origins grow by theirs. `v.push(r)` on a `Vec[ref T]` is the common case.
 
-**An argument contributes only where its type can go.** A closure or function-typed argument adds its origins (its captures') to a `mut ref` pointee only when that pointee's type can hold a value of the argument's type: a generic `F` that the pointee's type mentions (`Map[I, F]`), or a function type that appears in it (`Vec[Fn() -> i64]`). It adds them to a call result under §5.4 only when the result's type can hold it the same way. So a lazy adaptor's result holds its closure's loans (`it.map(|x| x + t)` borrows `t` while the adaptor lives), while `it.find(|z| *z == t)` and `p.next_if(|y| y > x)` take none: `find`'s result borrows only what the receiver's items borrow, and `p`'s type mentions no closure type for `next_if` to store into. The test reads the signature alone, after substitution, so no body changes a caller's borrows (review-thread ruling 2026-11-16, extending B-2026-11-10-24 and B-2026-11-15-154 past the `Fn -> bool` case). A closure whose own signature can hand a borrow back (its result type can hold a reference, or it takes a `mut ref` to a value that can hold one) keeps the general flow, so `it.find_map(|x| w.first())` still borrows `w`; a closure's signature is the one its body gives it in the caller, so this reads nothing outside the caller (B-2026-11-16-42).
+**An argument contributes only where its type can go.** A closure or function-typed argument adds its origins (its captures') to a `mut ref` pointee only when that pointee's type can hold a value of the argument's type: a generic `F` that the pointee's type mentions (`Map[I, F]`), or a function type that appears in it (`Vec[Fn() -> i64]`) when the argument goes to an `escaping` parameter. A non-escaping function-typed parameter (§9.3) cannot be stored, so it adds nothing to any pointee (review-thread ruling 2026-11-27, cs.331). It adds them to a call result under §5.4 only when the result's type can hold it the same way. So a lazy adaptor's result holds its closure's loans (`it.map(|x| x + t)` borrows `t` while the adaptor lives), while `it.find(|z| *z == t)` and `p.next_if(|y| y > x)` take none: `find`'s result borrows only what the receiver's items borrow, and `p`'s type mentions no closure type for `next_if` to store into. The test reads the signature alone, after substitution, so no body changes a caller's borrows (review-thread ruling 2026-11-16, extending B-2026-11-10-24 and B-2026-11-15-154 past the `Fn -> bool` case). A closure whose own signature can hand a borrow back (its result type can hold a reference, or it takes a `mut ref` to a value that can hold one) keeps the general flow, so `it.find_map(|x| w.first())` still borrows `w`; a closure's signature is the one its body gives it in the caller, so this reads nothing outside the caller (B-2026-11-16-42).
 
-**A borrow through a reference is not a borrow of the reference.** A borrow of a place reached by dereferencing a reference local `r` borrows what `r`'s value borrows (`r`'s origins), at the projected path, and not the local `r`. That covers `mut ref r.f`, `ref r.f`, and a pattern binding or call result reached through `*r`. So `r` may be reassigned while that borrow is live. Reassigning `r` changes only which value `r` holds, and the earlier referent stays borrowed until the borrow's last use, under §5.6. Until `r` is reassigned, using `*r`, or a place through it, while such a borrow is live is still a §5.6 conflict, and a reborrow from a `mut ref` stays exclusive. So a cursor can walk to a list's tail: `let mut tail = mut ref list; while let Some(n) = tail { tail = mut ref n.next; } *tail = rest;`. This is the case Rust's non-lexical lifetimes accept. A reborrow returned on one branch and the reference used again on the other (NLL "problem case #4") stays refused. (Decided 2026-11-10 by the review thread, on the drop schedule's proposal. B-2026-11-09-45. Pins: `ok_mut_ref_cursor_walks_to_tail`, `ok_ref_cursor_rebinds`, `err_cursor_used_while_reborrow_live`.)
+**A borrow through a reference is not a borrow of the reference.** A borrow of a place reached by dereferencing a reference local `r` borrows what `r`'s value borrows (`r`'s origins), at the projected path, and not the local `r`. That covers `mut ref r.f`, `ref r.f`, and a pattern binding or call result reached through `*r`. So `r` may be reassigned while that borrow is live. Reassigning `r` changes only which value `r` holds, and the earlier referent stays borrowed until the borrow's last use, under §5.6. Until `r` is reassigned, using `*r`, or a place through it, while such a borrow is live is still a §5.6 conflict, and a reborrow from a `mut ref` stays exclusive. So a cursor can walk to a list's tail: `let mut tail = mut ref list; while let Some(n) = tail { tail = mut ref n.next; } *tail = rest;`. This is the case Rust's non-lexical lifetimes accept. A reborrow returned on one branch and the reference used again on the other (NLL "problem case #3"; #4 is the cursor case above) stays refused. (Decided 2026-11-10 by the review thread, on the drop schedule's proposal. B-2026-11-09-45. Pins: `ok_mut_ref_cursor_walks_to_tail`, `ok_ref_cursor_rebinds`, `err_cursor_used_while_reborrow_live`.)
 
 **Static data has no origins.** A view of data that lives for the whole program, such as a string literal typed `Str` or a `Slice` of a constant, borrows nothing, so none of §5.5–§5.7 limits it.
 
@@ -273,7 +273,7 @@ Only a value whose type can hold a reference has origins: a reference, a view, a
 **5.4 The signature rule.** For a function that returns a reference or a view:
 - if it has a `self` or `mut ref self` receiver, the result borrows from `self` only;
 - otherwise, the result borrows from every borrowed parameter of a non-`Copy` type, every `mut ref` parameter and every view parameter;
-- with no such parameter, returning a reference or view is an error.
+- with no such parameter, the result borrows nothing, so the body may return only a value with no origins: static data (§5.3) or a collection that holds no reference. Returning a reference or view of anything else is an error. So `fn unit(metric: bool) -> Str { if metric { "km" } else { "mi" } }` is accepted (review-thread ruling 2026-11-27, cs.364).
 
 The body is checked against the rule. A function that needs a different relation must be restructured or return an owned value.
 
@@ -290,7 +290,7 @@ Pins:
 **5.5 Borrows root at named places.**
 - A reference or view whose origin is a temporary must not outlive the statement that created the temporary.
 - There is no temporary lifetime extension. Bind the temporary to a variable first.
-- Pin: `err_ref_from_temp`; today it compiles.
+- Pin: `err_ref_from_temp`.
 
 **5.6 Exclusivity inside a body.**
 - While a `mut ref` borrow of place `p` is live, no place overlapping `p` may be used except through that borrow.
@@ -303,7 +303,7 @@ Pins:
 - a field of a `shared`, `sync` or `frozen` type;
 - a global;
 - a channel;
-- an escaping closure (§9.3), except one that is the function's result: a returned closure that captures a view is a view result, which §5.4 allows and which carries the view's origins, so `fn mk(s: Str) -> Fn() -> i64 { || s.len() }` is accepted and `mk(t.as_str())` may not outlive `t` (ruled 2026-11-13, probe). A borrowed parameter (a bare non-`Copy` parameter or a `mut ref` one) counts as a view here: the returned closure captures the reference the parameter holds, so `fn mk(p: String) -> Fn(String) -> String { |s| f"{p}{s}" }` is accepted and `mk(name)` may not outlive `name`, exactly as when the capture reaches `p` through an inner closure. To return a closure that owns the value, take `own p` or clone it into a local first (review-thread ruling 2026-11-26, probe H14);
+- an escaping closure (§9.3), except one that is the function's result: a returned closure that captures a view is a view result, which §5.4 allows and which carries the view's origins, so `fn mk(s: Str) -> Fn() -> i64 { || s.len() }` is accepted and `mk(t.as_str())` may not outlive `t` (ruled 2026-11-13, probe). A borrowed parameter (a bare non-`Copy` parameter or a `mut ref` one) counts as a view here: the returned closure captures the reference the parameter holds, so `fn mk(p: String) -> Fn(String) -> String { |s| f"{p}{s}" }` is accepted and `mk(name)` may not outlive `name`, exactly as when the capture reaches `p` through an inner closure. To return a closure that may outlive the argument, take `own p` (review-thread ruling 2026-11-26, probe H14). Cloning `p` into a local inside the body makes the closure own its copy, but the caller reads the signature alone (§5.4, §9.4), so `mk(name)` still may not outlive `name` (review-thread ruling 2026-11-27, cs.414b);
 - the function's result, except as §5.4 allows.
 
 A view **may** enter a branch of `par {}` or `par for`, or a `TaskGroup` task that joins inside the scope of every origin (§9.5).
@@ -420,7 +420,7 @@ Pins: `drop_defer`, `drop_callee_owns`, `drop_shadowing`.
 | `return e` | after `e` is computed, before the function's locals and defers |
 | `for` iterator | at loop exit |
 
-When a temporary matches two rows, the row for the narrower construct wins: an argument to a borrowed parameter inside an `if` or `while` condition, a `match` guard, a `let … else` initializer or a brace-less arm drops where that construct's row says, not at the end of the enclosing statement. (Clarified 2026-10-19, B-2026-10-19-64.) Several temporaries that drop at the same point drop in reverse order of creation. Literal fields are not temporaries: they move into the literal.
+When a temporary matches two rows, the row for the narrower construct wins: an argument to a borrowed parameter inside an `if` or `while` condition, a `match` guard, a `let … else` initializer or a brace-less arm drops where that construct's row says, not at the end of the enclosing statement. (Clarified 2026-10-19, B-2026-10-19-64.) The list is not exhaustive: the rule holds for every row, so the same argument inside a `match` / `if let` scrutinee, a block tail or a `return e` nested in a larger statement drops where that row says (review-thread ruling 2026-11-27, cs.561). Several temporaries that drop at the same point drop in reverse order of creation. Literal fields are not temporaries: they move into the literal.
 
 Pins: `drop_temp_stmt`, `drop_match_scrutinee`.
 
@@ -436,6 +436,7 @@ The same holds for a field or element place. Pin: `drop_assign`.
 **7.7 `defer` and `errdefer`.**
 - A `defer` block runs when its scope ends, in its LIFO position.
 - An `errdefer` block runs in its LIFO position only when the function returns the failure variant of its `Result` or `Option` return type, however that value was produced: `?`, `return Err(...)`, `return None`, or a tail `Err(...)`. Otherwise it is skipped.
+- An `errdefer` belongs to its scope, like a `defer`. When that scope ends without a failure return leaving it (the block ends normally, or `break` or `continue` leaves it), the `errdefer` is discarded, and a later failure return of the function does not run it (review-thread ruling 2026-11-27, cs.581).
 - Neither runs on a panic (§10).
 
 Pin: `errdefer_only_on_error`. Today it prints `rollback` before `defer`.
@@ -449,9 +450,9 @@ Pin: `errdefer_only_on_error`. Today it prints `rollback` before `defer`.
    - **`Vec`, `Array`, and slices that own elements:** first index to last.
    - **`Option` / `Result`:** the payload, if present.
    - **`Map` / `Set`:** element order is unspecified (it follows iteration order); within an entry, the key drops before the value.
-   - **`SortedMap` / `SortedSet`:** key order.
+   - **`SortedMap` / `SortedSet`:** key order; within an entry, the key drops before the value (review-thread ruling 2026-11-27, cs.599).
 
-The asymmetry is deliberate, and it is Rust's choice too. Fixed-shape parts (fields, tuple elements, payloads) mirror construction order, like locals. Collection elements drop in index order, because a collection has no construction order to mirror once elements are pushed, inserted and removed.
+The asymmetry is deliberate, and it is Rust's choice too. Fixed-shape parts (fields, tuple elements, payloads) drop in reverse of the order the type declares them, as locals drop in reverse of the order they are introduced; a literal that lists fields in another order changes nothing, as in Rust. Collection elements drop in index order, because a collection has no construction order to mirror once elements are pushed, inserted and removed.
 
 Pins: `drop_aggregates`, `drop_user_body_first`.
 
@@ -463,7 +464,7 @@ Pins: `drop_aggregates`, `drop_user_body_first`.
 - An optimiser may remove a matched increment/decrement pair on a shared handle, but only if no count reaches zero at a different point as a result.
 
 **7.11 `Drop` bodies.**
-- Form: `fn drop(mut ref self)`.
+- Form: `fn drop(mut ref self)`. Any other receiver (`self`, `ref self`, `own self`) is refused with E_DROP_SIGNATURE_INVALID (review-thread ruling 2026-11-27, cs.613).
 - A `Drop` body may panic. The panic ends the process like any other (§10.2); `panics` is default-permitted (§12).
 - Its effects are charged to the scope that performs the drop (§12).
 
@@ -517,13 +518,13 @@ A by-move capture of a `Copy` place copies it. A read-only capture of a `Copy` p
 - This applies to the captured place only. A captured view still borrows its origins, and they must outlive the closure.
 - A place that outlives the closure keeps the capture inferred above.
 
-(Decided by Gowtham, 2026-10-10.) `shared` and `sync` handles are counted. A `frozen` handle is never counted, so a closure that captures one is a view (§5.2, §5.7).
+(Decided by Gowtham, 2026-10-10.) `shared` and `sync` handles are counted. A `frozen` handle is never counted, so a closure that captures one is a view (§5.2, §5.7). Unlike the view result §5.7 allows, such a closure may not be returned: a frozen handle has no origin §5.4 can name, just as `return n` of the handle itself is refused (design.md § Frozen handles, property 3). Copy out the scalars the closure needs first (review-thread ruling 2026-11-27, cs.665).
 
 **9.2 Closures as views.** A closure with any `ref` or `mut ref` capture is a view (§5). It can be called and passed down, but not stored where §5.7 forbids it.
 
 **9.3 Escaping closures.** A closure **escapes** when it, or a value containing it, is:
 - returned;
-- stored in a struct field, a collection or a global that is not a local view;
+- stored in a struct field, a collection element or a global whose type is a function type (below). A closure held through a generic parameter, such as a lazy adaptor's `F`, does not escape: its holder borrows the closure's origins (§5.3) (review-thread ruling 2026-11-27, cs.670);
 - passed to an `escaping` function parameter;
 - sent through a channel.
 
@@ -536,7 +537,7 @@ A field or a collection element of function type is escaping by nature (`design.
 - storing or returning it requires the declaration `f: escaping Fn(A) -> R`;
 - there is no free `spawn`. Tasks start only in `par {}`, `par for` and `TaskGroup.spawn`, and none of them takes an escaping closure (§9.5, §11.1).
 
-Pins: `err_escaping_capture_reused` (today it compiles and prints both lines), `err_store_nonescaping_param`.
+Pins: `err_escaping_capture_reused`, `err_store_nonescaping_param`.
 
 **9.4 When captures drop.**
 - A by-move capture moves the captured value into the closure when the closure is created.

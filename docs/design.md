@@ -2794,7 +2794,7 @@ struct User { name: String, age: i64, history: Vec[Event] }
 
 fn split_capture(user: own User) {
     let greet = || println(f"hi, {user.name}");   // captures `user.name` by `ref`
-    let next_age = || user.age + 1;                // copies `user.age`
+    let next_age = || user.age + 1;                // reads `user.age`: a `ref` capture, though `i64` is `Copy`
     archive(user.history);                         // moves `user.history` to an `own` parameter: a disjoint place
     greet();
     println(next_age());
