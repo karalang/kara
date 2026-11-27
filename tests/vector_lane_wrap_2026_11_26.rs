@@ -110,3 +110,26 @@ fn scalar_overflow_still_traps_beside_a_wrapping_vector() {
     assert!(out.starts_with("144\n"), "{out}");
     assert!(out.contains("overflow"), "{out}");
 }
+
+// A lane divided by zero, `/` or `%`, panics `div_by_zero` as scalar
+// division does (deferred.md § Portable SIMD, review-thread ruling
+// 2026-11-26, B-2026-11-26-87); the compiled twin is
+// `a_vector_lane_divided_by_zero_panics_compiled` above.
+#[test]
+fn vector_lane_division_by_zero_panics_interpreted() {
+    for op in ["/", "%"] {
+        let file = program(
+            if op == "/" { "dz-div" } else { "dz-rem" },
+            &format!(
+                "fn main() {{\n    let a: Vector[i32, 4] = Vector[i32, 4].splat(7);\n    let z: Vector[i32, 4] = Vector[i32, 4].splat(0);\n    println(\"before\");\n    let d = a {op} z;\n    println(d[0] as i64);\n}}\n"
+            ),
+        );
+        let (ok, out) = karac(&["__mir-run", file.to_str().unwrap()]);
+        assert!(!ok, "{op}: {out}");
+        assert!(out.starts_with("before\n"), "{op}: {out}");
+        assert!(
+            out.contains("runtime error: division by zero"),
+            "{op}: {out}"
+        );
+    }
+}

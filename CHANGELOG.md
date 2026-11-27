@@ -710,6 +710,10 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   (`val * (base as i128)` over `let base = 10`) fires again: both
   regressed with B-2026-11-26-1 (B-2026-11-27-1).
 
+- In the interpreter, a `Vector[T, N]` lane divided by zero (`/` or `%`)
+  panics `div_by_zero`, as scalar division does, where it stopped on an
+  internal error (B-2026-11-26-87, the interpreter's side).
+
 - `karac explain <file>.<fn>` on a function in a recursive group, or one
   that calls itself, adds a `Fixpoint:` section: the group, then the
   chain `φ0 = ∅`, `φ1`, … up to `φ*`, each step with the atoms it added

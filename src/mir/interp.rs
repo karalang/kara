@@ -16492,7 +16492,7 @@ impl<'a> Interp<'a> {
                     Rvalue::CheckedBinaryOp(op, a, b) if p.projection.is_empty() => {
                         let (x, ty) = self.operand(body, a)?;
                         let (y, _) = self.operand(body, b)?;
-                        let (v, overflow) = self.binop(*op, x, y, ty)?;
+                        let (v, overflow) = self.binop_traced(*op, x, y, ty)?;
                         // A loop's checked step overwrites the pair it made
                         // last time round, which holds only scalars: reuse it.
                         let slot =
@@ -16517,7 +16517,7 @@ impl<'a> Interp<'a> {
                     Rvalue::BinaryOp(op, a, b) => {
                         let (x, ty) = self.operand(body, a)?;
                         let (y, _) = self.operand(body, b)?;
-                        let (v, overflow) = self.binop(*op, x, y, ty)?;
+                        let (v, overflow) = self.binop_traced(*op, x, y, ty)?;
                         if overflow {
                             return err(format!(
                                 "unchecked {} overflowed; the builder must use CheckedBinaryOp",
@@ -16944,7 +16944,7 @@ impl<'a> Interp<'a> {
             Rvalue::BinaryOp(op, a, b) => {
                 let (x, ty) = self.operand(body, a)?;
                 let (y, _) = self.operand(body, b)?;
-                let (v, overflow) = self.binop(*op, x, y, ty)?;
+                let (v, overflow) = self.binop_traced(*op, x, y, ty)?;
                 if overflow {
                     return err(format!(
                         "unchecked {} overflowed; the builder must use CheckedBinaryOp",
@@ -16956,7 +16956,7 @@ impl<'a> Interp<'a> {
             Rvalue::CheckedBinaryOp(op, a, b) => {
                 let (x, ty) = self.operand(body, a)?;
                 let (y, _) = self.operand(body, b)?;
-                let (v, overflow) = self.binop(*op, x, y, ty)?;
+                let (v, overflow) = self.binop_traced(*op, x, y, ty)?;
                 Ok(Value::Agg(vec![v, Value::Bool(overflow)]))
             }
             Rvalue::UnaryOp(op, a) => {
@@ -17195,6 +17195,17 @@ impl<'a> Interp<'a> {
             (UnOp::Neg, Value::Float(f), _) => Ok(Value::Float(-f)),
             (op, x, _) => err(format!("cannot apply {op:?} to {x:?}")),
         }
+    }
+
+    /// [`Self::binop`] for a statement's operator, with the abort a lane
+    /// division by zero raises recorded in the trace as every other
+    /// abort is.
+    fn binop_traced(&mut self, op: BinOp, x: Value, y: Value, ty: Ty) -> R<(Value, bool)> {
+        let r = self.binop(op, x, y, ty);
+        if let (true, Err(Stop::Abort(reason))) = (self.trace, &r) {
+            self.events.push(Event::Abort(reason.clone()));
+        }
+        r
     }
 
     fn binop(&self, op: BinOp, x: Value, y: Value, ty: Ty) -> R<(Value, bool)> {
@@ -17609,6 +17620,11 @@ impl<'a> Interp<'a> {
                 // vector op wraps.
                 let mut lanes = Vec::with_capacity(a.len());
                 for (p, q) in a.iter().zip(b) {
+                    // A lane divided by zero panics `div_by_zero`, as scalar
+                    // division does (deferred.md § Portable SIMD, B-2026-11-26-87).
+                    if matches!(op, Div | Rem) && matches!(q, Value::Int(0)) {
+                        return Err(Stop::Abort(AbortReason::DivByZero));
+                    }
                     let (v, _wrapped) = self.binop(op, p.clone(), q.clone(), et)?;
                     lanes.push(v);
                 }
