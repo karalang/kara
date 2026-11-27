@@ -59,7 +59,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | class | total |
 |---|---|
 | diagnostics | 795 |
-| false-positive | 405 |
+| false-positive | 406 |
 | missing-feature | 268 |
 | perf | 206 |
 | other | 164 |
@@ -81,7 +81,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | mir-llvm | 341 |
 | cli | 326 |
 | parser | 166 |
-| ownership | 147 |
+| ownership | 148 |
 | runtime | 120 |
 | interp | 118 |
 | effect | 73 |
@@ -116,16 +116,13 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-6 | 2026-11-26 | typecheck | low | `v.push([1, 2].to_vec())` with `v: Vec[Vec[i32]]` is refused as a `Vec[i64]`, with no fix, though the same literal through `.to_vec()` takes `i32` from a `let` annotation or a function's parameter | — |
 | B-2026-11-26-9 | 2026-11-26 | typecheck | low | `v.push(((0..3).map(|_| 1).collect(), 5))` with `v: Vec[(Vec[i32], i32)]` is refused, "expected '(Vec[i32], i32)', found '(C, i64)'", with no fix: the element type does not reach a `collect` inside a tuple argument, though it reaches a bare `v.push(it.collect())` and a `let p: (Vec[i32], i32) = (it.collect(), 5)` | — |
 | B-2026-11-26-79 | 2026-11-26 | mir-llvm | low | A hand-written element shift down a slice (`while i > 0 { p[i] = p[i - 1]; i -= 1; }`) compiles to a scalar copy with a bounds check per element, where rustc and clang turn the same loop into one `memmove` | — |
-| B-2026-11-26-81 | 2026-11-26 | typecheck | low | After "no method 'fold' on type 'Slice'" (`s.bytes().fold(0, |c, b| c * 31 + b as i64)`, the `.iter()` left out), the closure's parameter stays an open type and its cast adds a second error naming an internal variable, "cannot cast '?T1' to 'i64'" | — |
-| B-2026-11-26-82 | 2026-11-26 | typecheck | low | The fix for `a + b.as_str()` (a `String` plus a `Str`, as Rust writes it) appends `.to_string()`, giving `a + b.as_str().to_string()`, a view copied back into a new `String`, where `a + ref b` checks with no copy and is what `karac fix` makes of Rust's `a + &b` | — |
 | B-2026-11-27-2 | 2026-11-27 | typecheck | medium | `f([][..])`, with `f` taking a `Slice[T]` of a concrete `T`, is refused: a range of an empty list literal does not take the slot's element type (E0516 "a type that failed to check is not lowered yet" at 83c1fcea2c; at e723cc81b8 E_EMPTY_PREFIX_LITERAL_NEEDS_ANNOTATION, which says nothing gives the type), where a bare `[]` into a `Vec[T]` slot passes | — |
-| B-2026-11-27-3 | 2026-11-27 | parser | high | `karac fix` of a Rust `BinaryHeap<..>` struct field filled by `.collect()` in a struct literal writes the plain `PriorityQueue[..]` collect, which flips the pop order: B-2026-11-15-80/-86 keep Rust's order for a `let`-typed collect only | — |
 | B-2026-11-27-4 | 2026-11-27 | typecheck | low | `a.min(b)` / `a.max(b)` on a tuple is refused E0236 "no method 'min' on type '(i64, i64)'" with no hint and no fix, where a tuple compares and takes the free `min(a, b)` / `max(a, b)` | — |
-| B-2026-11-27-5 | 2026-11-27 | ownership | medium | `let mut sorted = costs; sorted.sort();` with `costs` a bare parameter: `karac fix` declares `costs: mut ref` and marks every call site `mut`, sorting the caller's list (and writing `mut [1, 3, 2, 4, 1]` on literals), where E0517 also offers `own` or `.clone()` for a copy of the function's own; the same-name `let mut s = s;` is given `own` (B-2026-11-17-146) | — |
 | B-2026-11-27-6 | 2026-11-27 | typecheck | medium | a `fold` closure with its accumulator pattern annotated, `|(prev, total): (i64, i64), x| (x, total + x.max(prev))` over `nums.iter()`, is refused "expected 'i64', found 'ref i64'" at the tuple's `x`, where the same closure unannotated and `let p: (i64, i64) = (x, 1)` pass | — |
 | B-2026-11-27-10 | 2026-11-27 | effect | medium | §11.8 says `send`, `recv`, a join and a `Mutex` lock carry `suspends`, but the checker (and docs/library/concurrency.md) give them `blocks` only, so a public `fn take(rx: ref Receiver[i64]) -> Option[i64] with suspends receives(rx) { rx.recv() }` is refused E0400 "performs blocks": §11.8's `suspends`-alone promise (cs.843, cs.851) cannot be written | — |
 | B-2026-11-27-16 | 2026-11-27 | cli | low | In a package, the E0520 import fix-it for a library name used only in a test file (src/main_test.kara) is labelled src/main.kara at offset 0, so `karac fix` applies nothing and the error stays | — |
 | B-2026-11-27-21 | 2026-11-27 | effect | low | cs.951 says a call through an escaping function value with no effect clause has every effect, but a direct call through an `escaping Fn` PARAMETER is charged its argument's effects at the call site (as cs.948 does for a non-escaping one): sound, but not the sentence; needs a ruling on which is meant | — |
+| B-2026-11-27-22 | 2026-11-27 | ownership | medium | A closure returned over a local closure that captures an owned value (`fn mk(pre: own String) -> Fn(String) -> String { let c = || pre.clone(); |s| f"{c()}{s}" }`, or a Copy local `let n = 1; let c = || n + 1; || c()`) is refused E0509 "the result borrows `pre`, which this function owns": the local closure captures by reference though it moves into the escaping one | — |
 
 ### Relocated
 
@@ -2391,6 +2388,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-77 | typecheck+mir | low | Three programs printed an internal E0516 instead of a user diagnostic: a `ref` binding of a `Vec[Vector[..]]` element as a receiver and a let-bound c… | 41639e5e46 |
 | B-2026-11-26-78 | typecheck | low | `let w: (Vec[i32], i64) = ([1, 2].to_vec(), 3)` is refused as a `(Vec[i64], i64)`, with advice to annotate the binding that already is and no fix, th… | a648c7a471 |
 | B-2026-11-26-80 | ownership+cli | low | E0516 on a temporary argument that a view result borrows (`let f = make("abc".to_string(), 1);` with `make` returning a closure over its bare paramet… | cab05d25c8 |
+| B-2026-11-26-81 | typecheck | low | After "no method 'fold' on type 'Slice'" (`s.bytes().fold(0, \|c, b\| c * 31 + b as i64)`, the `.iter()` left out), the closure's parameter stays an op… | 3dffe7197a |
+| B-2026-11-26-82 | typecheck | low | The fix for `a + b.as_str()` (a `String` plus a `Str`, as Rust writes it) appends `.to_string()`, giving `a + b.as_str().to_string()`, a view copied… | 64a1cb858c |
 | B-2026-11-26-83 | typecheck | low | `Ok(Array.from_fn(n, f))` (or `Some(..)`) where the expected type is `Result[Array[T, N], E]` is refused "Array.from_fn needs the array's length": th… | afb988da49 |
 | B-2026-11-26-84 | typecheck | low | E0208 "'+' on 'String' requires a 'String' right operand, found 'Str'" puts its caret under the LEFT operand: `a + s[1..]` underlines `a`, and `s[..k… | 95bb5be7d1 |
 | B-2026-11-26-85 | typecheck | high | A table lookup by a tuple needle narrowed unchecked: `given.contains((city, next))` with `city: i64` on a `Set[(i32, i32)]` passed check, and the com… | 4777a670cf |
@@ -2407,6 +2406,8 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-26-97 | mir+mir-llvm | medium | `p.read_volatile()` / `p.write_volatile(v)` (and the stdlib's volatile_read/write intrinsics) lower to plain loads and stores: three volatile writes… | fcfdc8ca59 |
 | B-2026-11-26-98 | effect | low | `p.read_volatile()` / `p.write_volatile(v)` carry no effect: a `pub fn` doing one declares nothing, and `karac query effects` shows none, where Volat… | 3d128180f7 |
 | B-2026-11-27-1 | typecheck | medium | Regression from the B-2026-11-26-1 fix (293934a062): a literal left open past an `as` cast is refused as a tensor index (`t[i, j] = (i * 3 + j) as f3… | 1a7d6a29e6 |
+| B-2026-11-27-3 | parser | high | `karac fix` of a Rust `BinaryHeap<..>` struct field filled by `.collect()` in a struct literal writes the plain `PriorityQueue[..]` collect, which fl… | c67c1a06be |
+| B-2026-11-27-5 | ownership | medium | `let mut sorted = costs; sorted.sort();` with `costs` a bare parameter: `karac fix` declares `costs: mut ref` and marks every call site `mut`, sortin… | c67c1a06be |
 | B-2026-11-27-7 | typecheck | medium | A collection's `.clone()` and `to_vec` of an unbounded type parameter pass `karac check`: `fn f[T](v: Vec[T]) -> Vec[T] { v.clone() }` clones a `Vec[… | b7e16eae6c |
 | B-2026-11-27-8 | runtime | low | The HTTP server skips a whitespace-only line before the request line (` \r\n`, `\t\r\n`, `\r \n` with its bare CR) as if it were an empty line, and s… | 9e5a434399 |
 | B-2026-11-27-9 | typecheck | medium | A type-qualified call on a type with `const` parameters drops the const argument: `Buf[i64, 3].fill(7)` over `impl[T, const N: i64] Buf[T, N] { fn fi… | afb988da49 |
