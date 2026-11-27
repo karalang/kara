@@ -1,0 +1,4 @@
+INFO  plain message, spaces = fine n=1
+INFO  "first\nERROR forged admin=true"
+WARN  "tab\there" k=v
+ERROR "bell\u0007"

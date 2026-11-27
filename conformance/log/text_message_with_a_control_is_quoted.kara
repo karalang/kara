@@ -1,0 +1,13 @@
+// log.md § The text format: a message is its text, spaces and all, unless
+// it holds a control character; then it is quoted as a field value is, so
+// a line end cannot split the record or forge a second one
+// (B-2026-11-27-14).
+import std.log;
+
+fn main() {
+    log.init(log.text_backend(log.Stream.Stdout));
+    log.info("plain message, spaces = fine", n: 1);
+    log.info("first\nERROR forged admin=true");
+    log.warn("tab\there", k: "v");
+    log.error("bell\u{7}");
+}

@@ -1231,6 +1231,11 @@ Fixes only. Threads add entries here; 0.8.1 was tagged at 95de259351.
   is an `Array[i64, 3]`, and `Buf[i64, M]` inside `impl[const M: i64]`
   resolves. The const argument was dropped, so the first was refused as
   `Array[i64, N]` and the second as "no method" (B-2026-11-27-9).
+- `log.text_backend` quotes a message that holds a control character, as
+  it quotes such a field value, so each record stays one line: a message
+  with a line end in it was written raw, splitting the record and letting
+  user text forge a second one (`INFO  first` then `ERROR forged ...`).
+  Messages without one are written as before (B-2026-11-27-14).
 - A `ref` binding of a `Vector` (`let g = ref v[0];` on a
   `Vec[Vector[i64, 4]]`, `let r = ref w;`) works as a method receiver:
   `g.reduce_sum()` runs as `v[0].reduce_sum()` does. It checked with

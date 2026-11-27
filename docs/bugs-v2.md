@@ -62,7 +62,7 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 | false-positive | 404 |
 | missing-feature | 268 |
 | perf | 206 |
-| other | 162 |
+| other | 163 |
 | soundness | 140 |
 | miscompile | 112 |
 | run-vs-build | 80 |
@@ -78,12 +78,12 @@ grep 'B-2026-10-22-33' docs/bugs-v2.jsonl docs/legacy/bug-ledger.jsonl
 |---|---|
 | typecheck | 971 |
 | mir | 350 |
-| mir-llvm | 340 |
+| mir-llvm | 341 |
 | cli | 323 |
 | parser | 166 |
 | ownership | 147 |
 | runtime | 120 |
-| interp | 117 |
+| interp | 118 |
 | effect | 72 |
 | resolver | 59 |
 | other | 56 |
@@ -131,6 +131,7 @@ _Generated from `bugs-v2.jsonl` by `scripts/bug-curve.py` (2026-09-26 → 2026-1
 | B-2026-11-27-11 | 2026-11-27 | typecheck | low | A binding of a diverging block, `let a = { return 7; }; a + 1`, is refused E0208 "type 'Never' does not implement trait Add": code after a diverging `let` is unreachable, and `Never` should coerce to any operand type (or the diagnostic should say the code is unreachable) | — |
 | B-2026-11-27-12 | 2026-11-27 | runtime | low | The HTTP client refuses a response whose header block uses obs-fold (a header line continued on the next line that starts with a space or tab): `Client.get` returns Err 'request failed: invalid HTTP header parsed', where RFC 9112 §5.2 requires a user agent that receives obs-fold in a response to replace each fold with SP and read the value | — |
 | B-2026-11-27-13 | 2026-11-27 | runtime | low | The HTTP client refuses any response with more than 100 header fields, or a head over about 400 KiB, with Err 'request failed: message head is too large'; neither limit is documented, and 100 fields is low for real responses (many Set-Cookie, CDN and tracing headers) | — |
+| B-2026-11-27-14 | 2026-11-27 | interp+mir-llvm | medium | `text_backend` wrote a record's message as it was, so a message holding a line end split one record over two lines (and a crafted one could forge a second record), though log.md says each record is one line | — |
 
 ### Relocated
 

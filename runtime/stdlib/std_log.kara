@@ -286,7 +286,21 @@ fn __log_text_line(level: i64, msg: String, fields: Vec[(String, Json)], trace_i
     let mut line = String.new();
     line.push_str(names[level]);
     line.push(' ');
-    line.push_str(msg);
+    // A message with a control character in it is quoted, as a field value
+    // is, so a line end in it cannot split the record over two lines or
+    // forge a second record (B-2026-11-27-14).
+    let mut plain = true;
+    for c in msg.chars() {
+        let n = c as u32;
+        if n < 32 or (n >= 127 and n < 160) {
+            plain = false;
+        }
+    }
+    if plain {
+        line.push_str(msg);
+    } else {
+        line.push_str(__log_quote(msg));
+    }
     for f in fields.iter() {
         line.push(' ');
         line.push_str(f.0);

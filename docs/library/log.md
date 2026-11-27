@@ -104,7 +104,7 @@ If `log.init` is never called, records at `Info` and above go to `log.json_backe
 
 `text_backend` writes each record as one line: the level in upper case padded to five characters (`DEBUG`, `INFO `, `WARN `, `ERROR`), a space, the message, then ` key=value` for each field in call order, then ` trace_id=…` and ` span_id=…` when they are set and ` task_id=n` inside a task.
 
-A field value that is a `Json.String` is written as its text when the text is not empty and holds no space, `"`, `=` or control character; otherwise it is written quoted, as `Json.stringify` quotes it. Any other value is written as `Json.stringify` writes it.
+A field value that is a `Json.String` is written as its text when the text is not empty and holds no space, `"`, `=` or control character; otherwise it is written quoted, as `Json.stringify` quotes it. Any other value is written as `Json.stringify` writes it. The message is written as its text, spaces and all, unless it holds a control character (C0, DEL or C1): then it is quoted the same way, so a line end in a message cannot split its record or forge a second one (B-2026-11-27-14).
 
 ```
 INFO  request received method=GET path=/users/42
